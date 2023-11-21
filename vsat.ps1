@@ -1,5 +1,78 @@
 #region Common
-Function Get-SerialPort {
+
+function Write-MessageWithLogging {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$message,
+
+        [Parameter(Mandatory=$false)]
+        [ValidateSet('Black','DarkBlue','DarkGreen','DarkCyan','DarkRed','DarkMagenta','DarkYellow','Gray','DarkGray','Blue','Green','Cyan','Red','Magenta','Yellow','White')]
+        [string]$color = 'Black'
+    )
+
+    Write-Host $message -ForegroundColor $color
+    $message | Out-File -FilePath "$PSScriptRoot\vsat.log" -Append
+}
+
+function Test-Case {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$case,
+
+        [Parameter(Mandatory=$false)]
+        [ValidateSet('Black','DarkBlue','DarkGreen','DarkCyan','DarkRed','DarkMagenta','DarkYellow','Gray','DarkGray','Blue','Green','Cyan','Red','Magenta','Yellow','White')]
+        [string]$color = 'Black'
+    )
+
+    # CIS 7.4 (L1) Ensure port groups are not configured to the value of the native VLAN
+    Write-MessageWithLogging -message $case -color Blue
+
+    # Results summary
+    $passed = 0
+    $failed = 0
+    $unknown = 0
+
+    # Get the vSwitches
+    $vSwitches = Get-VirtualPortGroup -Standard | Select  virtualSwitch, Name, VlanID
+
+    # Checking for native VLAN ID 1
+    $defaultNativeVLAN = 1
+    Write-MessageWithLogging -message "Checking for native VLAN ID 1, if you have a different native VLAN ID, please change the value of the variable nativeVLANID in the script." -color Yellow
+
+    # Check the vSwitches for port groups with the same VLAN ID as the native VLAN
+    foreach ($vSwitch in $vSwitches) {
+        if ($vSwitch.VlanID -eq $defaultNativeVLAN) {
+            Write-MessageWithLogging -message "- Check Failed" -color Red
+            Write-MessageWithLogging -message "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -color Red
+            $failed++
+        }
+        Else {
+            Write-MessageWithLogging -message "- Check Passed" -color Green
+            Write-MessageWithLogging -message "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -color Green
+            $passed++
+        }
+    }
+
+    # Print the results
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
+
+    # Return true if all checks passed
+    if ($failed -ne 0) {
+        return -1
+    }
+    elseif ($unknown -ne 0) {
+        return 0
+    }
+    else {
+        return 1
+    }
+
+}
+
+function Get-SerialPort {
     Param (
         [Parameter(Mandatory=$True,ValueFromPipeline=$True,ValueFromPipelinebyPropertyName=$True)]
         $VM
@@ -23,7 +96,7 @@ Function Get-SerialPort {
     }
 }
 
-Function Get-ParallelPort {
+function Get-ParallelPort {
     Param (
         [Parameter(Mandatory=$True,ValueFromPipeline=$True,ValueFromPipelinebyPropertyName=$True)]
         $VM
@@ -59,7 +132,7 @@ Function Get-ParallelPort {
 
 function Ensure-ESXiIsProperlyPatched {
     # CIS 1.1 Ensure ESXi is properly patched
-    Write-Host "`n* CIS control 1.1 Ensure ESXi is properly patched" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 1.1 Ensure ESXi is properly patched" -color Blue
 
     # Read patches from a json file
     $patches = Get-Content -Path $PSScriptRoot\vmware\patches.json | ConvertFrom-Json
@@ -79,22 +152,22 @@ function Ensure-ESXiIsProperlyPatched {
             Foreach ($patch in $patches) {
                 if ($hostpatch.Name -eq $patch.Name) {
                     if ($hostpatch.Version -ne $patch.Version) {
-                        Write-Host "- $($hostpatch.Name): Fail" -ForegroundColor Red
-                        Write-Host "  Expected version: $($patch.Version)" -ForegroundColor Red
-                        Write-Host "  Actual version: $($hostpatch.Version)" -ForegroundColor Red
+                        Write-MessageWithLogging -message "- $($hostpatch.Name): Fail" -color Red
+                        Write-MessageWithLogging -message "  Expected version: $($patch.Version)" -color Red
+                        Write-MessageWithLogging -message "  Actual version: $($hostpatch.Version)" -color Red
                         $failed++
                         break
                     }
                     else {
-                        Write-Host "- $($hostpatch.Name): Pass" -ForegroundColor Green
+                        Write-MessageWithLogging -message "- $($hostpatch.Name): Pass" -color Green
                         $passed++
                         break
                     }
                 }
                 else {
                     if ($patch -eq $patches[-1]) {
-                        Write-Host "- $($hostpatch.Name): Unknown" -ForegroundColor Yellow
-                        Write-Host "  Patch not found in the json file" -ForegroundColor Yellow
+                        Write-MessageWithLogging -message "- $($hostpatch.Name): Unknown" -color Yellow
+                        Write-MessageWithLogging -message "  Patch not found in the json file" -color Yellow
                         $unknown++
                     }
                 }
@@ -102,10 +175,10 @@ function Ensure-ESXiIsProperlyPatched {
         }
     }
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -121,7 +194,7 @@ function Ensure-ESXiIsProperlyPatched {
 
 function Ensure-VIBAcceptanceLevelIsConfiguredProperly {
     # CIS 1.2 Ensure the Image Profile VIB acceptance level is configured properly
-    Write-Host "`n* CIS control 1.2 Ensure the Image Profile VIB acceptance level is configured properly" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 1.2 Ensure the Image Profile VIB acceptance level is configured properly" -color Blue
 
     $passed = 0
     $failed = 0
@@ -133,22 +206,22 @@ function Ensure-VIBAcceptanceLevelIsConfiguredProperly {
         # Compare the acceptance level to the expected value
         Foreach ($vib in $vibs) {
             if ($vib.AcceptanceLevel -ne "CommunitySupported" -and $vib.AcceptanceLevel -ne "PartnerSupported" -and $vib.AcceptanceLevel -ne "VMwareCertified") {
-                Write-Host "- $($vib.Name): Fail" -ForegroundColor Red
-                Write-Host "  Expected acceptance level: communitySupported" -ForegroundColor Red
-                Write-Host "  Actual acceptance level: $($vib.AcceptanceLevel)" -ForegroundColor Red
+                Write-MessageWithLogging -message "- $($vib.Name): Fail" -color Red
+                Write-MessageWithLogging -message "  Expected acceptance level: communitySupported" -color Red
+                Write-MessageWithLogging -message "  Actual acceptance level: $($vib.AcceptanceLevel)" -color Red
                 $failed++
             }
             else {
-                Write-Host "- $($vib.Name): Pass" -ForegroundColor Green
-                Write-Host "  Acceptance level: $($vib.AcceptanceLevel)" -ForegroundColor Green
+                Write-MessageWithLogging -message "- $($vib.Name): Pass" -color Green
+                Write-MessageWithLogging -message "  Acceptance level: $($vib.AcceptanceLevel)" -color Green
                 $passed++
             }
         }
     }
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -164,7 +237,7 @@ function Ensure-VIBAcceptanceLevelIsConfiguredProperly {
 
 function Ensure-UnauthorizedModulesNotLoaded {
     # CIS 1.3 Ensure no unauthorized kernel modules are loaded on the host
-    Write-Host "`n* CIS control 1.3 Ensure no unauthorized kernel modules are loaded on the host" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 1.3 Ensure no unauthorized kernel modules are loaded on the host" -color Blue
 
     # Get the list of loaded kernel modules and check if they are authorized
     $passed = 0
@@ -180,24 +253,24 @@ function Ensure-UnauthorizedModulesNotLoaded {
         Foreach ($module in $systemModules) {
             if ($module.Module -ne "vmkernel") {
                 if ($module.VIBAcceptanceLevel -ne "certified") {
-                Write-Host "- $($module.Module): Fail" -ForegroundColor Red
-                Write-Host "  Containing VIB: $($module.ContainingVIB)" -ForegroundColor Red
-                Write-Host "  VIB acceptance level: $($module.VIBAcceptanceLevel)" -ForegroundColor Red
+                Write-MessageWithLogging -message "- $($module.Module): Fail" -color Red
+                Write-MessageWithLogging -message "  Containing VIB: $($module.ContainingVIB)" -color Red
+                Write-MessageWithLogging -message "  VIB acceptance level: $($module.VIBAcceptanceLevel)" -color Red
                 $failed++
                 }
                 else {
-                    Write-Host "- $($module.Module): Pass" -ForegroundColor Green
-                    Write-Host "  Containing VIB: $($module.ContainingVIB)" -ForegroundColor Green
-                    Write-Host "  VIB acceptance level: $($module.VIBAcceptanceLevel)" -ForegroundColor Green
+                    Write-MessageWithLogging -message "- $($module.Module): Pass" -color Green
+                    Write-MessageWithLogging -message "  Containing VIB: $($module.ContainingVIB)" -color Green
+                    Write-MessageWithLogging -message "  VIB acceptance level: $($module.VIBAcceptanceLevel)" -color Green
                     $passed++
                 }
             }
         }
     }
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -213,7 +286,7 @@ function Ensure-UnauthorizedModulesNotLoaded {
 
 function Ensure-DefaultSaultIsConfiguredProperly {
     # CIS 1.4 Ensure the default value of individual salt per vm is configured
-    Write-Host "`n* CIS control 1.4 Ensure the default value of individual salt per vm is configured" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 1.4 Ensure the default value of individual salt per vm is configured" -color Blue
 
     $passed = 0
     $failed = 0
@@ -224,21 +297,21 @@ function Ensure-DefaultSaultIsConfiguredProperly {
 
     # Compare the value to the expected value
     if ($actualSaltValue -ne $expectedSaltValue) {
-        Write-Host "- Default value of individual salt per vm: Fail" -ForegroundColor Red
-        Write-Host "  Expected value: $expectedSaltValue" -ForegroundColor Red
-        Write-Host "  Actual value: $actualSaltValue" -ForegroundColor Red
+        Write-MessageWithLogging -message "- Default value of individual salt per vm: Fail" -color Red
+        Write-MessageWithLogging -message "  Expected value: $expectedSaltValue" -color Red
+        Write-MessageWithLogging -message "  Actual value: $actualSaltValue" -color Red
         $failed++
     }
     else {
-        Write-Host "- Default value of individual salt per vm: Pass" -ForegroundColor Green
-        Write-Host "  Expected Value: $actualSaltValue" -ForegroundColor Green
-        Write-Host "  Actual Value: $actualSaltValue" -ForegroundColor Green
+        Write-MessageWithLogging -message "- Default value of individual salt per vm: Pass" -color Green
+        Write-MessageWithLogging -message "  Expected Value: $actualSaltValue" -color Green
+        Write-MessageWithLogging -message "  Actual Value: $actualSaltValue" -color Green
         $passed++
     }
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -268,7 +341,7 @@ function Ensure-DefaultSaultIsConfiguredProperly {
 
 function Ensure-NonRootExistsForLocalAdmin {
     # CIS 4.1 (L1) Ensure a non-root user account exists for local admin access
-    Write-Host "`n* CIS control 4.1 (L1) Ensure a non-root user account exists for local admin access" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 4.1 (L1) Ensure a non-root user account exists for local admin access" -color Blue
 
     # Results summary
     $passed = 0
@@ -276,15 +349,15 @@ function Ensure-NonRootExistsForLocalAdmin {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -300,7 +373,7 @@ function Ensure-NonRootExistsForLocalAdmin {
 
 function Ensure-PasswordsAreRequiredToBeComplex {
     # CIS 4.2 (L1) Ensure passwords are required to be complex
-    Write-Host "`n* CIS control 4.2 (L1) Ensure passwords are required to be complex" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 4.2 (L1) Ensure passwords are required to be complex" -color Blue
 
     # Results summary
     $passed = 0
@@ -308,15 +381,15 @@ function Ensure-PasswordsAreRequiredToBeComplex {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -333,7 +406,7 @@ function Ensure-PasswordsAreRequiredToBeComplex {
 
 function Ensure-LoginAttemptsIsSetTo5 {
     # CIS 4.3 (L1) Ensure the maximum failed login attempts is set to 5
-    Write-Host "`n* CIS control 4.3 (L1) Ensure the maximum failed login attempts is set to 5" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 4.3 (L1) Ensure the maximum failed login attempts is set to 5" -color Blue
 
 
     # Results summary
@@ -346,22 +419,22 @@ function Ensure-LoginAttemptsIsSetTo5 {
 
     Foreach ($VMHost in $VMHosts) {
         if ($VMHost.MaxFailedLogin -eq 5) {
-            Write-Host "- $($VMHost.Name): Passed" -ForegroundColor Green
-            Write-Host "  The maximum failed login attempts is set to 5. " -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMHost.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  The maximum failed login attempts is set to 5. " -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMHost.Name): Failed" -ForegroundColor Red
-            Write-Host "  The maximum failed login attempts is not set to 5. " -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMHost.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  The maximum failed login attempts is not set to 5. " -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -373,13 +446,11 @@ function Ensure-LoginAttemptsIsSetTo5 {
     else {
         return 1
     }
-
 }
 
 function Ensure-AccountLockoutIsSetTo15Minutes {
     # CIS 4.4 (L1) Ensure account lockout is set to 15 minutes
-    Write-Host "`n* CIS control 4.4 (L1) Ensure account lockout is set to 15 minutes" -ForegroundColor Blue
-
+    Write-MessageWithLogging -message "`n* CIS control 4.4 (L1) Ensure account lockout is set to 15 minutes" -color Blue
 
     # Results summary
     $passed = 0
@@ -391,22 +462,22 @@ function Ensure-AccountLockoutIsSetTo15Minutes {
 
     Foreach ($VMHost in $VMHosts) {
         if ($VMHost.AccountLockoutDuration -eq 900) {
-            Write-Host "- $($VMHost.Name): Passed" -ForegroundColor Green
-            Write-Host "  The account lockout is set to 15 minutes. " -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMHost.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  The account lockout is set to 15 minutes. " -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMHost.Name): Failed" -ForegroundColor Red
-            Write-Host "  The account lockout is not set to 15 minutes. " -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMHost.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  The account lockout is not set to 15 minutes. " -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -418,13 +489,11 @@ function Ensure-AccountLockoutIsSetTo15Minutes {
     else {
         return 1
     }
-
 }
 
 function Ensure-Previous5PasswordsAreProhibited {
     # CIS 4.5 (L1) Ensure previous 5 passwords are prohibited
-    Write-Host "`n* CIS control 4.5 (L1) Ensure previous 5 passwords are prohibited" -ForegroundColor Blue
-
+    Write-MessageWithLogging -message "`n* CIS control 4.5 (L1) Ensure previous 5 passwords are prohibited" -color Blue
 
     # Results summary
     $passed = 0
@@ -435,22 +504,22 @@ function Ensure-Previous5PasswordsAreProhibited {
 
     Foreach ($VMHost in $VMHosts) {
         if ($VMHost.PasswordHistory -eq 5) {
-            Write-Host "- $($VMHost.Name): Passed" -ForegroundColor Green
-            Write-Host "  The previous 5 passwords are prohibited. " -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMHost.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  The previous 5 passwords are prohibited. " -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMHost.Name): Failed" -ForegroundColor Red
-            Write-Host "  The previous 5 passwords are not prohibited. " -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMHost.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  The previous 5 passwords are not prohibited. " -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -467,7 +536,7 @@ function Ensure-Previous5PasswordsAreProhibited {
 
 function Ensure-ADIsUsedForAuthentication {
     # CIS 4.6 (L1) Ensure AD is used for authentication
-    Write-Host "`n* CIS control 4.6 (L1) Ensure AD is used for authentication" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 4.6 (L1) Ensure AD is used for authentication" -color Blue
 
 
     # Results summary
@@ -479,22 +548,22 @@ function Ensure-ADIsUsedForAuthentication {
 
     Foreach ($VMHost in $VMHosts) {
         if ($VMHost.DomainMembershipStatus -ne $null) {
-            Write-Host "- $($VMHost.VmHost): Passed" -ForegroundColor Green
-            Write-Host "  AD is used for authentication. " -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMHost.VmHost): Passed" -color Green
+            Write-MessageWithLogging -message "  AD is used for authentication. " -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMHost.VmHost): Failed" -ForegroundColor Red
-            Write-Host "  AD is not used for authentication. " -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMHost.VmHost): Failed" -color Red
+            Write-MessageWithLogging -message "  AD is not used for authentication. " -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -511,8 +580,7 @@ function Ensure-ADIsUsedForAuthentication {
 
 function Ensure-OnlyAuthorizedUsersBelongToEsxAdminsGroup {
     # CIS 4.7 (L1) Ensure only authorized users belong to the ESX Admins group
-    Write-Host "`n* CIS control 4.7 (L1) Ensure only authorized users belong to the ESX Admins group" -ForegroundColor Blue
-
+    Write-MessageWithLogging -message "`n* CIS control 4.7 (L1) Ensure only authorized users belong to the ESX Admins group" -color Blue
 
     # Results summary
     $passed = 0
@@ -520,15 +588,15 @@ function Ensure-OnlyAuthorizedUsersBelongToEsxAdminsGroup {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -545,7 +613,7 @@ function Ensure-OnlyAuthorizedUsersBelongToEsxAdminsGroup {
 
 function Ensure-ExceptionUsersIsConfiguredManually {
     # CIS 4.8 (L1) Ensure exception users is configured manually
-    Write-Host "`n* CIS control 4.8 (L1) Ensure exception users is configured manually" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 4.8 (L1) Ensure exception users is configured manually" -color Blue
 
 
     # Results summary
@@ -554,15 +622,15 @@ function Ensure-ExceptionUsersIsConfiguredManually {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -592,7 +660,7 @@ function Ensure-ExceptionUsersIsConfiguredManually {
 
 function Ensure-NTPTimeSynchronizationIsConfiguredProperly {
     # CIS 2.1 Ensure NTP time synchronization is configured properly
-    Write-Host "`n* CIS control 2.1 Ensure NTP time synchronization is configured properly" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 2.1 Ensure NTP time synchronization is configured properly" -color Blue
 
     # Results summary
     $passed = 0
@@ -605,22 +673,22 @@ function Ensure-NTPTimeSynchronizationIsConfiguredProperly {
     # Check if the NTP servers are configured properly
     Foreach ($VMHost in $VMHosts) {
         if ($VMHost.NTPSetting -eq $null) {
-            Write-Host "- $($VMHost.Name): Fail" -ForegroundColor Red
-            Write-Host "  NTP servers are not configured" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMHost.Name): Fail" -color Red
+            Write-MessageWithLogging -message "  NTP servers are not configured" -color Red
             $failed++
         }
         else {
-            Write-Host "- $($VMHost.Name): Pass" -ForegroundColor Green
-            Write-Host "  NtpServers: $($VMHost.NTPSetting)" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMHost.Name): Pass" -color Green
+            Write-MessageWithLogging -message "  NtpServers: $($VMHost.NTPSetting)" -color Green
             $passed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -636,7 +704,7 @@ function Ensure-NTPTimeSynchronizationIsConfiguredProperly {
 
 function Ensure-ESXiHostFirewallIsProperlyConfigured {
     # CIS 2.2 Ensure the ESXi host firewall is configured to restrict access to services running on the host
-    Write-Host "`n* CIS control 2.2 Ensure the ESXi host firewall is configured to restrict access to services running on the host" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 2.2 Ensure the ESXi host firewall is configured to restrict access to services running on the host" -color Blue
 
     # Results summary
     $passed = 0
@@ -651,13 +719,13 @@ function Ensure-ESXiHostFirewallIsProperlyConfigured {
 
         Foreach ($Rule in $FirewallExceptions) {
             if ($Rule.Enabled -eq $true -and ($Rule.ExtensionData.AllowedHosts.AllIP) -eq $true) {
-                Write-Host "- $($VMHost.Name): Fail" -ForegroundColor Red
-                Write-Host "  Rule $($Rule.Name) is enabled and allows all hosts" -ForegroundColor Red
+                Write-MessageWithLogging -message "- $($VMHost.Name): Fail" -color Red
+                Write-MessageWithLogging -message "  Rule $($Rule.Name) is enabled and allows all hosts" -color Red
                 $failed++
             }
             else {
-                Write-Host "- $($VMHost.Name): Pass" -ForegroundColor Green
-                Write-Host "  Rule $($Rule.Name) is disabled or allows specific hosts" -ForegroundColor Green
+                Write-MessageWithLogging -message "- $($VMHost.Name): Pass" -color Green
+                Write-MessageWithLogging -message "  Rule $($Rule.Name) is disabled or allows specific hosts" -color Green
                 $passed++
             }
         }
@@ -665,10 +733,10 @@ function Ensure-ESXiHostFirewallIsProperlyConfigured {
 
     }
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -684,7 +752,7 @@ function Ensure-ESXiHostFirewallIsProperlyConfigured {
 
 function Ensure-MOBIsDisabled {
     # CIS 2.3 Ensure Managed Object Browser (MOB) is disabled
-    Write-Host "`n* CIS control 2.3 Ensure Managed Object Browser (MOB) is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 2.3 Ensure Managed Object Browser (MOB) is disabled" -color Blue
 
 
     # Results summary
@@ -698,22 +766,22 @@ function Ensure-MOBIsDisabled {
     # Check if the MOB is disabled
     Foreach ($VMHost in $VMHosts) {
         if ($VMHost.MOBStatus -eq $true) {
-            Write-Host "- $($VMHost.Name): Fail" -ForegroundColor Red
-            Write-Host "  MOB is enabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMHost.Name): Fail" -color Red
+            Write-MessageWithLogging -message "  MOB is enabled" -color Red
             $failed++
         }
         else {
-            Write-Host "- $($VMHost.Name): Pass" -ForegroundColor Green
-            Write-Host "  MOB is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMHost.Name): Pass" -color Green
+            Write-MessageWithLogging -message "  MOB is disabled" -color Green
             $passed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -730,7 +798,7 @@ function Ensure-MOBIsDisabled {
 
 function Ensure-DefaultSelfSignedCertificateIsNotUsed {
     # CIS 2.4 (L2) Ensure default self-signed certificate for ESXi communication is not used
-    Write-Host "`n* CIS control 2.4 (L2) Ensure default self-signed certificate for ESXi communication is not used" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 2.4 (L2) Ensure default self-signed certificate for ESXi communication is not used" -color Blue
 
     # Results summary
     $passed = 0
@@ -738,15 +806,15 @@ function Ensure-DefaultSelfSignedCertificateIsNotUsed {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -762,7 +830,7 @@ function Ensure-DefaultSelfSignedCertificateIsNotUsed {
 
 function Ensure-SNMPIsConfiguredProperly {
     # CIS 2.5 Ensure SNMP is configured properly
-    Write-Host "`n* CIS control 2.5 Ensure SNMP is configured properly" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 2.5 Ensure SNMP is configured properly" -color Blue
 
 
     # Results summary
@@ -775,21 +843,21 @@ function Ensure-SNMPIsConfiguredProperly {
 
     # Check if any SNMP server is configured and notify the user that they need to invistigate the issue
     if ($VMHostSnmp -ne $null) {
-        Write-Host "- SNMP: Unknown" -ForegroundColor Yellow
-        Write-Host "  SNMP is enabled, please refer to the vSphere Monitoring and Performance guide, chapter 8 for steps to verify the parameters." -ForegroundColor Yellow
+        Write-MessageWithLogging -message "- SNMP: Unknown" -color Yellow
+        Write-MessageWithLogging -message "  SNMP is enabled, please refer to the vSphere Monitoring and Performance guide, chapter 8 for steps to verify the parameters." -color Yellow
         $unknown++
     }
     else {
-        Write-Host "- SNMP: Pass" -ForegroundColor Green
-        Write-Host "  SNMP is not enabled" -ForegroundColor Green
+        Write-MessageWithLogging -message "- SNMP: Pass" -color Green
+        Write-MessageWithLogging -message "  SNMP is not enabled" -color Green
         $passed++
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
-    Write-Host "Failed: $failed" -ForegroundColor Red
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -805,7 +873,7 @@ function Ensure-SNMPIsConfiguredProperly {
 
 function Ensure-dvfilterIsDisabled {
     # CIS 2.6 Ensure dvfilter is disabled
-    Write-Host "`n* CIS control 2.6 Ensure dvfilter is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 2.6 Ensure dvfilter is disabled" -color Blue
 
 
     # Results summary
@@ -819,22 +887,22 @@ function Ensure-dvfilterIsDisabled {
     # Check if the dvfilter is disabled
     Foreach ($VMHost in $VMHosts) {
         if ($VMHost.Net.DVFilterBindIpAddress -eq $null) {
-            Write-Host "- $($VMHost.Name): Pass" -ForegroundColor Green
-            Write-Host "  dvfilter is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMHost.Name): Pass" -color Green
+            Write-MessageWithLogging -message "  dvfilter is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMHost.Name): Fail" -ForegroundColor Red
-            Write-Host "  dvfilter is enabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMHost.Name): Fail" -color Red
+            Write-MessageWithLogging -message "  dvfilter is enabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -850,7 +918,7 @@ function Ensure-dvfilterIsDisabled {
 
 function Ensure-DefaultExpiredOrRevokedCertificateIsNotUsed {
     # CIS 2.7 (L1) Ensure expired and revoked SSL certificates are removed from the ESXi server
-    Write-Host "`n* CIS control 2.7	(L1) Ensure expired and revoked SSL certificates are removed from the ESXi server" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 2.7	(L1) Ensure expired and revoked SSL certificates are removed from the ESXi server" -color Blue
 
     # Results summary
     $passed = 0
@@ -858,15 +926,15 @@ function Ensure-DefaultExpiredOrRevokedCertificateIsNotUsed {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -882,7 +950,7 @@ function Ensure-DefaultExpiredOrRevokedCertificateIsNotUsed {
 
 function Ensure-vSphereAuthenticationProxyIsUsedWithAD {
     # CIS 2.8 (L1) Ensure vSphere Authentication Proxy is used with Active Directory
-    Write-Host "`n* CIS control 2.8 (L1) Ensure vSphere Authentication Proxy is used with Active Directory" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 2.8 (L1) Ensure vSphere Authentication Proxy is used with Active Directory" -color Blue
 
 
     # Results summary
@@ -896,22 +964,22 @@ function Ensure-vSphereAuthenticationProxyIsUsedWithAD {
     # Check if the hosts are joined to a domain or not
     Foreach ($VMHost in $VMHostsAuth) {
         if ($VMHost.DomainMembershipStatus -eq $null) {
-            Write-Host "- $($VMHost.VmHost): Fail" -ForegroundColor Red
-            Write-Host "  Host is not joined to a domain" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMHost.VmHost): Fail" -color Red
+            Write-MessageWithLogging -message "  Host is not joined to a domain" -color Red
             $failed++
         }
         else {
-            Write-Host "- $($VMHost.VmHost): Pass" -ForegroundColor Green
-            Write-Host "  Host is joined to a domain" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMHost.VmHost): Pass" -color Green
+            Write-MessageWithLogging -message "  Host is joined to a domain" -color Green
             $passed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -928,7 +996,7 @@ function Ensure-vSphereAuthenticationProxyIsUsedWithAD {
 
 function Ensure-VDSHealthCheckIsDisabled {
     # CIS 2.9 (L2) Ensure VDS Health Check is disabled
-    Write-Host "`n* CIS control 2.9 (L2) Ensure VDS Health Check is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 2.9 (L2) Ensure VDS Health Check is disabled" -color Blue
 
 
     # Results summary
@@ -941,35 +1009,35 @@ function Ensure-VDSHealthCheckIsDisabled {
     $HealthCheckConfig = $vds.ExtensionData.Config.HealthCheckConfig
 
     if ($HealthCheckConfig -ne $null) {
-        Write-Host "- VDS Health Check: Fail" -ForegroundColor Red
-        Write-Host "  VDS Health Check is enabled" -ForegroundColor Red
+        Write-MessageWithLogging -message "- VDS Health Check: Fail" -color Red
+        Write-MessageWithLogging -message "  VDS Health Check is enabled" -color Red
         $failed++
     }
     else {
-        Write-Host "- VDS Health Check: Pass" -ForegroundColor Green
-        Write-Host "  VDS Health Check is disabled" -ForegroundColor Green
+        Write-MessageWithLogging -message "- VDS Health Check: Pass" -color Green
+        Write-MessageWithLogging -message "  VDS Health Check is disabled" -color Green
         $passed++
     }
 
     # Check if the VDS Health Check is disabled
     Foreach ($VMHost in $VMHosts) {
         if ($VMHost.Net.VDSHealthCheckEnabled -eq $false) {
-            Write-Host "- $($VMHost.Name): Pass" -ForegroundColor Green
-            Write-Host "  VDS Health Check is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMHost.Name): Pass" -color Green
+            Write-MessageWithLogging -message "  VDS Health Check is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMHost.Name): Fail" -ForegroundColor Red
-            Write-Host "  VDS Health Check is enabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMHost.Name): Fail" -color Red
+            Write-MessageWithLogging -message "  VDS Health Check is enabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1024,7 +1092,7 @@ function Ensure-VDSHealthCheckIsDisabled {
 
 function Ensure-InformationalMessagesFromVMToVMXLimited {
     # CIS 8.1.1 (L1) Ensure informational messages from the VM to the VMX file are limited
-    Write-Host "`n* CIS control 8.1.1 (L1) Ensure informational messages from the VM to the VMX file are limited" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.1.1 (L1) Ensure informational messages from the VM to the VMX file are limited" -color Blue
 
     # Results summary
     $passed = 0
@@ -1040,23 +1108,23 @@ function Ensure-InformationalMessagesFromVMToVMXLimited {
     # Check if the size limit is set to the recommended value
     Foreach ($sizeLimit in $sizeLimitByVM) {
         if ($sizeLimit.SizeLimit -eq $recommendedsizeLimit) {
-            Write-Host "- $($sizeLimit.Name): Passed" -ForegroundColor Green
-            Write-Host "  Size limit is set to the recommended value of $recommendedsizeLimit" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($sizeLimit.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Size limit is set to the recommended value of $recommendedsizeLimit" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($sizeLimit.Name): Failed" -ForegroundColor Red
-            Write-Host "  Size limit : $($sizeLimit.SizeLimit)" -ForegroundColor Red
-            Write-Host "  Recommended size limit: $recommendedsizeLimit" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($sizeLimit.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Size limit : $($sizeLimit.SizeLimit)" -color Red
+            Write-MessageWithLogging -message "  Recommended size limit: $recommendedsizeLimit" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1074,7 +1142,7 @@ function Ensure-InformationalMessagesFromVMToVMXLimited {
 
 function Ensure-OnlyOneRemoteConnectionIsPermittedToVMAtAnyTime {
     # CIS 8.1.2 (L2) Ensure only one remote console connection is permitted to a VM at any time
-    Write-Host "`n* CIS control 8.1.2 (L2) Ensure only one remote console connection is permitted to a VM at any time" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.1.2 (L2) Ensure only one remote console connection is permitted to a VM at any time" -color Blue
 
     # Results summary
     $passed = 0
@@ -1090,23 +1158,23 @@ function Ensure-OnlyOneRemoteConnectionIsPermittedToVMAtAnyTime {
     # Check if the max connections is set to the recommended value
     Foreach ($maxConnections in $maxConnectionsByVM) {
         if ($maxConnections.MaxConnections -eq $recommendedMaxConnections) {
-            Write-Host "- $($maxConnections.Name): Passed" -ForegroundColor Green
-            Write-Host "  Max connections is set to the recommended value of $recommendedMaxConnections" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($maxConnections.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Max connections is set to the recommended value of $recommendedMaxConnections" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($maxConnections.Name): Failed" -ForegroundColor Red
-            Write-Host "  Max connections : $($maxConnections.MaxConnections)" -ForegroundColor Red
-            Write-Host "  Recommended max connections: $recommendedMaxConnections" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($maxConnections.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Max connections : $($maxConnections.MaxConnections)" -color Red
+            Write-MessageWithLogging -message "  Recommended max connections: $recommendedMaxConnections" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1123,7 +1191,7 @@ function Ensure-OnlyOneRemoteConnectionIsPermittedToVMAtAnyTime {
 
 function Ensure-UnnecessaryFloppyDevicesAreDisconnected {
     # CIS 8.2.1 (L1) Ensure unnecessary floppy devices are disconnected
-    Write-Host "`n* CIS control 8.2.1 (L1) Ensure unnecessary floppy devices are disconnected" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.2.1 (L1) Ensure unnecessary floppy devices are disconnected" -color Blue
 
     # Results summary
     $passed = 0
@@ -1136,22 +1204,22 @@ function Ensure-UnnecessaryFloppyDevicesAreDisconnected {
     # Check if the ConnectionState.Connected is set to false
     Foreach ($floppyDevice in $floppyDevicesByVM) {
         if ($floppyDevice.ConnectionState.Connected -eq $false) {
-            Write-Host "- $($floppyDevice.VM): Passed" -ForegroundColor Green
-            Write-Host "  Floppy device $($floppyDevice.Name) is disconnected" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($floppyDevice.VM): Passed" -color Green
+            Write-MessageWithLogging -message "  Floppy device $($floppyDevice.Name) is disconnected" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($floppyDevice.VM): Failed" -ForegroundColor Red
-            Write-Host "  Floppy device $($floppyDevice.Name) is connected" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($floppyDevice.VM): Failed" -color Red
+            Write-MessageWithLogging -message "  Floppy device $($floppyDevice.Name) is connected" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1169,7 +1237,7 @@ function Ensure-UnnecessaryFloppyDevicesAreDisconnected {
 
 function Ensure-UnnecessaryCdDvdDevicesAreDisconnected {
     # CIS 8.2.2 (L1) Ensure unnecessary CD/DVD devices are disconnected
-    Write-Host "`n* CIS control 8.2.2 (L1) Ensure unnecessary CD/DVD devices are disconnected" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.2.2 (L1) Ensure unnecessary CD/DVD devices are disconnected" -color Blue
 
     # Results summary
     $passed = 0
@@ -1182,22 +1250,22 @@ function Ensure-UnnecessaryCdDvdDevicesAreDisconnected {
     # Check if the ConnectionState.Connected is set to false
     Foreach ($cdDvdDevice in $cdDvdDevicesByVM) {
         if ($cdDvdDevice.ConnectionState.Connected -eq $false) {
-            Write-Host "- $($cdDvdDevice.VM): Passed" -ForegroundColor Green
-            Write-Host "  CD/DVD device $($cdDvdDevice.Name) is disconnected" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($cdDvdDevice.VM): Passed" -color Green
+            Write-MessageWithLogging -message "  CD/DVD device $($cdDvdDevice.Name) is disconnected" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($cdDvdDevice.VM): Failed" -ForegroundColor Red
-            Write-Host "  CD/DVD device $($cdDvdDevice.Name) is connected" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($cdDvdDevice.VM): Failed" -color Red
+            Write-MessageWithLogging -message "  CD/DVD device $($cdDvdDevice.Name) is connected" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1214,7 +1282,7 @@ function Ensure-UnnecessaryCdDvdDevicesAreDisconnected {
 
 function Ensure-UnnecessaryParallelPortsAreDisconnected {
     # CIS 8.2.3 (L1) Ensure unnecessary parallel ports are disconnected
-    Write-Host "`n* CIS control 8.2.3 (L1) Ensure unnecessary parallel ports are disconnected" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.2.3 (L1) Ensure unnecessary parallel ports are disconnected" -color Blue
 
     # Results summary
     $passed = 0
@@ -1227,29 +1295,29 @@ function Ensure-UnnecessaryParallelPortsAreDisconnected {
     # Check if the Connected is set to false, if none is found, the test is passed
     Foreach ($parallelPort in $parallelPortsByVM) {
         if ($parallelPort.Connected -eq $false) {
-            Write-Host "- $($parallelPort.VM): Passed" -ForegroundColor Green
-            Write-Host "  Parallel port $($parallelPort.Name) is disconnected" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($parallelPort.VM): Passed" -color Green
+            Write-MessageWithLogging -message "  Parallel port $($parallelPort.Name) is disconnected" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($parallelPort.VM): Failed" -ForegroundColor Red
-            Write-Host "  Parallel port $($parallelPort.Name) is connected" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($parallelPort.VM): Failed" -color Red
+            Write-MessageWithLogging -message "  Parallel port $($parallelPort.Name) is connected" -color Red
             $failed++
         }
     }
 
     # if none is found, the test is passed
     if ($parallelPortsByVM.Count -eq 0) {
-        Write-Host "- Passed" -ForegroundColor Green
-        Write-Host "  No parallel ports found" -ForegroundColor Green
+        Write-MessageWithLogging -message "- Passed" -color Green
+        Write-MessageWithLogging -message "  No parallel ports found" -color Green
         $passed++
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1266,7 +1334,7 @@ function Ensure-UnnecessaryParallelPortsAreDisconnected {
 
 function Ensure-UnnecessarySerialPortsAreDisabled {
     # CIS 8.2.4 (L1) Ensure unnecessary serial ports are disabled
-    Write-Host "`n* CIS control 8.2.4 (L1) Ensure unnecessary serial ports are disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.2.4 (L1) Ensure unnecessary serial ports are disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -1279,29 +1347,29 @@ function Ensure-UnnecessarySerialPortsAreDisabled {
     # Check if the Connected is set to false, if none is found, the test is passed
     Foreach ($serialPort in $serialPortsByVM) {
         if ($serialPort.Connected -eq $false) {
-            Write-Host "- $($serialPort.VM): Passed" -ForegroundColor Green
-            Write-Host "  Serial port $($serialPort.Name) is disconnected" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($serialPort.VM): Passed" -color Green
+            Write-MessageWithLogging -message "  Serial port $($serialPort.Name) is disconnected" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($serialPort.VM): Failed" -ForegroundColor Red
-            Write-Host "  Serial port $($serialPort.Name) is connected" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($serialPort.VM): Failed" -color Red
+            Write-MessageWithLogging -message "  Serial port $($serialPort.Name) is connected" -color Red
             $failed++
         }
     }
 
     # if none is found, the test is passed
     if ($serialPortsByVM.Count -eq 0) {
-        Write-Host "- Passed" -ForegroundColor Green
-        Write-Host "  No serial ports found" -ForegroundColor Green
+        Write-MessageWithLogging -message "- Passed" -color Green
+        Write-MessageWithLogging -message "  No serial ports found" -color Green
         $passed++
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1319,7 +1387,7 @@ function Ensure-UnnecessarySerialPortsAreDisabled {
 
 function Ensure-UnnecessaryUsbDevicesAreDisconnected {
     # CIS 8.2.5 (L1) Ensure unnecessary USB devices are disconnected
-    Write-Host "`n* CIS control 8.2.5 (L1) Ensure unnecessary USB devices are disconnected" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.2.5 (L1) Ensure unnecessary USB devices are disconnected" -color Blue
 
     # Results summary
     $passed = 0
@@ -1332,29 +1400,29 @@ function Ensure-UnnecessaryUsbDevicesAreDisconnected {
     # Check if the ConnectionState.Connected is set to false
     Foreach ($usbDevice in $usbDevicesByVM) {
         if ($usbDevice.ConnectionState.Connected -eq $false) {
-            Write-Host "- $($usbDevice.VM): Passed" -ForegroundColor Green
-            Write-Host "  USB device $($usbDevice.Name) is disconnected" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($usbDevice.VM): Passed" -color Green
+            Write-MessageWithLogging -message "  USB device $($usbDevice.Name) is disconnected" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($usbDevice.VM): Failed" -ForegroundColor Red
-            Write-Host "  USB device $($usbDevice.Name) is connected" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($usbDevice.VM): Failed" -color Red
+            Write-MessageWithLogging -message "  USB device $($usbDevice.Name) is connected" -color Red
             $failed++
         }
     }
 
     # if none is found, the test is passed
     if ($usbDevicesByVM.Count -eq 0) {
-        Write-Host "- Passed" -ForegroundColor Green
-        Write-Host "  No USB devices found" -ForegroundColor Green
+        Write-MessageWithLogging -message "- Passed" -color Green
+        Write-MessageWithLogging -message "  No USB devices found" -color Green
         $passed++
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1372,7 +1440,7 @@ function Ensure-UnnecessaryUsbDevicesAreDisconnected {
 
 function Ensure-UnauthorizedModificationOrDisconnectionOfDevicesIsDisabled {
     # CIS 8.2.6 (L1) Ensure unauthorized modification or disconnection of devices is disabled
-    Write-Host "`n* CIS control 8.2.6 (L1) Ensure unauthorized modification or disconnection of devices is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.2.6 (L1) Ensure unauthorized modification or disconnection of devices is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -1385,22 +1453,22 @@ function Ensure-UnauthorizedModificationOrDisconnectionOfDevicesIsDisabled {
     # Check if the EditDisable is set to true
     Foreach ($vm in $vms) {
         if ($vm.EditDisable -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Unauthorized modification or disconnection of devices is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Unauthorized modification or disconnection of devices is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Unauthorized modification or disconnection of devices is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Unauthorized modification or disconnection of devices is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1418,7 +1486,7 @@ function Ensure-UnauthorizedModificationOrDisconnectionOfDevicesIsDisabled {
 
 function Ensure-UnauthorizedConnectionOfDevicesIsDisabled {
     # CIS 8.2.7 (L1) Ensure unauthorized connection of devices is disabled
-    Write-Host "`n* CIS control 8.2.7 (L1) Ensure unauthorized connection of devices is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.2.7 (L1) Ensure unauthorized connection of devices is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -1431,22 +1499,22 @@ function Ensure-UnauthorizedConnectionOfDevicesIsDisabled {
     # Check if the ConnectDisable is set to true
     Foreach ($vm in $vms) {
         if ($vm.ConnectDisable -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Unauthorized connection of devices is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Unauthorized connection of devices is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Unauthorized connection of devices is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Unauthorized connection of devices is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1464,7 +1532,7 @@ function Ensure-UnauthorizedConnectionOfDevicesIsDisabled {
 
 function Ensure-PciPcieDevicePassthroughIsDisabled {
     # CIS 8.2.8 (L1) Ensure PCI/PCIe device passthrough is disabled
-    Write-Host "`n* CIS control 8.2.8 (L1) Ensure PCI/PCIe device passthrough is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.2.8 (L1) Ensure PCI/PCIe device passthrough is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -1477,22 +1545,22 @@ function Ensure-PciPcieDevicePassthroughIsDisabled {
     # Check if the PassthroughDisable is not set to true
     Foreach ($vm in $vms) {
         if ($vm.PassthroughDisable -ne $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  PCI/PCIe device passthrough is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  PCI/PCIe device passthrough is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  PCI/PCIe device passthrough is enabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  PCI/PCIe device passthrough is enabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1510,7 +1578,7 @@ function Ensure-PciPcieDevicePassthroughIsDisabled {
 
 function Ensure-UnnecessaryFunctionsInsideVMsAreDisabled {
     # CIS 8.3.1 (L1) Ensure unnecessary or superfluous functions inside VMs are disabled
-    Write-Host "`n* CIS control 8.3.1 (L1) Ensure unnecessary or superfluous functions inside VMs are disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.3.1 (L1) Ensure unnecessary or superfluous functions inside VMs are disabled" -color Blue
 
 
     # Results summary
@@ -1519,21 +1587,21 @@ function Ensure-UnnecessaryFunctionsInsideVMsAreDisabled {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
 }
 
 function Ensure-UseOfTheVMConsoleIsLimited {
     # CIS 8.3.2	(L1) Ensure use of the VM console is limited (Manual)
-    Write-Host "`n* CIS control 8.3.2 (L1) Ensure use of the VM console is limited" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.3.2 (L1) Ensure use of the VM console is limited" -color Blue
 
 
     # Results summary
@@ -1542,15 +1610,15 @@ function Ensure-UseOfTheVMConsoleIsLimited {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1568,7 +1636,7 @@ function Ensure-UseOfTheVMConsoleIsLimited {
 
 function Ensure-SecureProtocolsAreUsedForVirtualSerialPortAccess {
     # CIS 8.3.3	(L1) Ensure secure protocols are used for virtual serial port access
-    Write-Host "`n* CIS control 8.3.3 (L1) Ensure secure protocols are used for virtual serial port access" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.3.3 (L1) Ensure secure protocols are used for virtual serial port access" -color Blue
 
 
     # Results summary
@@ -1577,15 +1645,15 @@ function Ensure-SecureProtocolsAreUsedForVirtualSerialPortAccess {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1603,7 +1671,7 @@ function Ensure-SecureProtocolsAreUsedForVirtualSerialPortAccess {
 
 function Ensure-StandardProcessesAreUsedForVMDeployment {
     # CIS 8.3.4	(L1) Ensure standard processes are used for VM deployment
-    Write-Host "`n* CIS control 8.3.4 (L1) Ensure standard processes are used for VM deployment" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.3.4 (L1) Ensure standard processes are used for VM deployment" -color Blue
 
 
     # Results summary
@@ -1612,15 +1680,15 @@ function Ensure-StandardProcessesAreUsedForVMDeployment {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1638,7 +1706,7 @@ function Ensure-StandardProcessesAreUsedForVMDeployment {
 
 function Ensure-AccessToVMsThroughDvFilterNetworkAPIsIsConfiguredCorrectly {
     # CIS 8.4.1	(L1) Ensure access to VMs through the dvfilter network APIs is configured correctly
-    Write-Host "`n* CIS control 8.4.1 (L1) Ensure access to VMs through the dvfilter network APIs is configured correctly" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.1 (L1) Ensure access to VMs through the dvfilter network APIs is configured correctly" -color Blue
 
 
     # Results summary
@@ -1647,15 +1715,15 @@ function Ensure-AccessToVMsThroughDvFilterNetworkAPIsIsConfiguredCorrectly {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1673,7 +1741,7 @@ function Ensure-AccessToVMsThroughDvFilterNetworkAPIsIsConfiguredCorrectly {
 
 function Ensure-AutologonIsDisabled {
     # CIS 8.4.2 (L1) Ensure Autologon is disabled
-    Write-Host "`n* CIS control 8.4.2 (L2) Ensure Autologon is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.2 (L2) Ensure Autologon is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -1686,22 +1754,22 @@ function Ensure-AutologonIsDisabled {
     # Check if the AutoLogon is not set to true
     Foreach ($vm in $vms) {
         if ($vm.AutoLogon -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Autologon is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Autologon is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Autologon is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Autologon is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1718,7 +1786,7 @@ function Ensure-AutologonIsDisabled {
 
 function Ensure-BIOSBBSIsDisabled {
     # CIS 8.4.3 (L2) Ensure BIOS Boot Specification (BBS) is disabled
-    Write-Host "`n* CIS control 8.4.3 (L1) Ensure BIOS Boot Specification (BBS) is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.3 (L1) Ensure BIOS Boot Specification (BBS) is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -1731,22 +1799,22 @@ function Ensure-BIOSBBSIsDisabled {
     # Check if the BIOS BBS is set to true
     Foreach ($vm in $vms) {
         if ($vm.BBS -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  BIOS Boot Specification (BBS) is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  BIOS Boot Specification (BBS) is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  BIOS Boot Specification (BBS) is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  BIOS Boot Specification (BBS) is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1764,7 +1832,7 @@ function Ensure-BIOSBBSIsDisabled {
 
 function Ensure-GuestHostInteractionProtocolIsDisabled {
     # CIS 8.4.4 (L1) Ensure Guest Host Interaction Protocol Handler is set to disabled
-    Write-Host "`n* CIS control 8.4.4 (L1) Ensure Guest Host Interaction Protocol Handler is set to disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.4 (L1) Ensure Guest Host Interaction Protocol Handler is set to disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -1777,22 +1845,22 @@ function Ensure-GuestHostInteractionProtocolIsDisabled {
     # Check if the GHI is set to true
     Foreach ($vm in $vms) {
         if ($vm.GHI -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Guest Host Interaction Protocol Handler is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Guest Host Interaction Protocol Handler is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Guest Host Interaction Protocol Handler is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Guest Host Interaction Protocol Handler is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1810,7 +1878,7 @@ function Ensure-GuestHostInteractionProtocolIsDisabled {
 
 function Ensure-UnityTaskBarIsDisabled {
     # CIS 8.4.5 (L2) Ensure Unity Taskbar is disabled
-    Write-Host "`n* CIS control 8.4.5 (L2) Ensure Unity Taskbar is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.5 (L2) Ensure Unity Taskbar is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -1823,22 +1891,22 @@ function Ensure-UnityTaskBarIsDisabled {
     # Check if the Unity is set to true
     Foreach ($vm in $vms) {
         if ($vm.Unity -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Unity Taskbar is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Unity Taskbar is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Unity Taskbar is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Unity Taskbar is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1857,7 +1925,7 @@ function Ensure-UnityTaskBarIsDisabled {
 
 function Ensure-UnityActiveIsDisabled {
     # CIS 8.4.6 (L2) Ensure Unity Active is disabled
-    Write-Host "`n* CIS control 8.4.6 (L2) Ensure Unity Active is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.6 (L2) Ensure Unity Active is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -1870,22 +1938,22 @@ function Ensure-UnityActiveIsDisabled {
     # Check if the Unity is set to true
     Foreach ($vm in $vms) {
         if ($vm.Unity -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Unity Active is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Unity Active is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Unity Active is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Unity Active is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1903,7 +1971,7 @@ function Ensure-UnityActiveIsDisabled {
 
 function Ensure-UnityWindowContentsIsDisabled {
     # CIS 8.4.7 (L2) Ensure Unity Window Contents is disabled
-    Write-Host "`n* CIS control 8.4.7 (L2) Ensure Unity Window Contents is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.7 (L2) Ensure Unity Window Contents is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -1916,22 +1984,22 @@ function Ensure-UnityWindowContentsIsDisabled {
     # Check if the Unity is set to true
     Foreach ($vm in $vms) {
         if ($vm.Unity -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Unity Window Contents is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Unity Window Contents is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Unity Window Contents is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Unity Window Contents is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1949,7 +2017,7 @@ function Ensure-UnityWindowContentsIsDisabled {
 
 function Ensure-UnityPushUpdateIsDisabled {
     # CIS 8.4.8 (L2) Ensure Unity Push Update is disabled
-    Write-Host "`n* CIS control 8.4.8 (L2) Ensure Unity Push Update is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.8 (L2) Ensure Unity Push Update is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -1962,22 +2030,22 @@ function Ensure-UnityPushUpdateIsDisabled {
     # Check if the Unity is set to true
     Foreach ($vm in $vms) {
         if ($vm.Unity -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Unity Push Update is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Unity Push Update is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Unity Push Update is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Unity Push Update is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -1995,7 +2063,7 @@ function Ensure-UnityPushUpdateIsDisabled {
 
 function Ensure-DragAndDropVersionGetIsDisabled {
     # CIS 8.4.9 (L2) Ensure Drag and Drop Version Get is disabled
-    Write-Host "`n* CIS control 8.4.9 (L2) Ensure Drag and Drop Version Get is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.9 (L2) Ensure Drag and Drop Version Get is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2008,22 +2076,22 @@ function Ensure-DragAndDropVersionGetIsDisabled {
     # Check if the Unity is set to true
     Foreach ($vm in $vms) {
         if ($vm.Unity -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Drag and Drop Version Get is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Drag and Drop Version Get is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Drag and Drop Version Get is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Drag and Drop Version Get is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2042,7 +2110,7 @@ function Ensure-DragAndDropVersionGetIsDisabled {
 
 function Ensure-DragAndDropVersionSetIsDisabled {
     # CIS 8.4.10 (L2) Ensure Drag and Drop Version Set is disabled
-    Write-Host "`n* CIS control 8.4.10 (L2) Ensure Drag and Drop Version Set is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.10 (L2) Ensure Drag and Drop Version Set is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2055,22 +2123,22 @@ function Ensure-DragAndDropVersionSetIsDisabled {
     # Check if the Unity is set to true
     Foreach ($vm in $vms) {
         if ($vm.Unity -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Drag and Drop Version Set is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Drag and Drop Version Set is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Drag and Drop Version Set is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Drag and Drop Version Set is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2087,7 +2155,7 @@ function Ensure-DragAndDropVersionSetIsDisabled {
 
 function Ensure-ShellActionIsDisabled {
     # CIS 8.4.11 (L2) Ensure Shell Action is disabled
-    Write-Host "`n* CIS control 8.4.11 (L2) Ensure Shell Action is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.11 (L2) Ensure Shell Action is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2100,22 +2168,22 @@ function Ensure-ShellActionIsDisabled {
     # Check if the Unity is set to true
     Foreach ($vm in $vms) {
         if ($vm.Unity -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Shell Action is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Shell Action is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Shell Action is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Shell Action is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2132,7 +2200,7 @@ function Ensure-ShellActionIsDisabled {
 
 function Ensure-DiskRequestTopologyIsDisabled {
     # CIS 8.4.12 (L2) Ensure Request Disk Topology is disabled
-    Write-Host "`n* CIS control 8.4.12 (L2) Ensure Request Disk Topology is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.12 (L2) Ensure Request Disk Topology is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2145,22 +2213,22 @@ function Ensure-DiskRequestTopologyIsDisabled {
     # Check if the Unity is set to true
     Foreach ($vm in $vms) {
         if ($vm.Unity -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Disk Topology is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Disk Topology is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Disk Topology is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Disk Topology is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2177,7 +2245,7 @@ function Ensure-DiskRequestTopologyIsDisabled {
 
 function Ensure-TrashFolderStateIsDisabled {
     # CIS 8.4.13 (L2) Ensure Trash Folder State is disabled
-    Write-Host "`n* CIS control 8.4.13 (L2) Ensure Trash Folder State is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.13 (L2) Ensure Trash Folder State is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2190,22 +2258,22 @@ function Ensure-TrashFolderStateIsDisabled {
     # Check if the Unity is set to true
     Foreach ($vm in $vms) {
         if ($vm.Unity -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Trash Folder State is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Trash Folder State is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Trash Folder State is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Trash Folder State is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2223,7 +2291,7 @@ function Ensure-TrashFolderStateIsDisabled {
 
 function Ensure-GuestHostInterationTrayIconIsDisabled {
     # CIS 8.4.14 (L2) Ensure Guest Host Interation Tray Icon is disabled
-    Write-Host "`n* CIS control 8.4.14 (L2) Ensure Guest Host Interation Tray Icon is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.14 (L2) Ensure Guest Host Interation Tray Icon is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2236,22 +2304,22 @@ function Ensure-GuestHostInterationTrayIconIsDisabled {
     # Check if the Unity is set to true
     Foreach ($vm in $vms) {
         if ($vm.Unity -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Guest Host Interation Tray Icon is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Guest Host Interation Tray Icon is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Guest Host Interation Tray Icon is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Guest Host Interation Tray Icon is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2268,7 +2336,7 @@ function Ensure-GuestHostInterationTrayIconIsDisabled {
 
 function Ensure-UnityIsDisabled {
     # CIS 8.4.15 (L2) Ensure Unity is disabled
-    Write-Host "`n* CIS control 8.4.15 (L2) Ensure Unity is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.15 (L2) Ensure Unity is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2281,22 +2349,22 @@ function Ensure-UnityIsDisabled {
     # Check if the Unity is set to true
     Foreach ($vm in $vms) {
         if ($vm.Unity -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Unity is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Unity is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Unity is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Unity is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2313,7 +2381,7 @@ function Ensure-UnityIsDisabled {
 
 function Ensure-UnityInterlockIsDisabled {
     # CIS 8.4.16 (L2) Ensure Unity Interlock is disabled
-    Write-Host "`n* CIS control 8.4.16 (L2) Ensure Unity Interlock is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.16 (L2) Ensure Unity Interlock is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2326,22 +2394,22 @@ function Ensure-UnityInterlockIsDisabled {
     # Check if the Unity is set to true
     Foreach ($vm in $vms) {
         if ($vm.Unity -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Unity Interlock is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Unity Interlock is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Unity Interlock is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Unity Interlock is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2359,7 +2427,7 @@ function Ensure-UnityInterlockIsDisabled {
 
 function Ensure-GetCredsIsDisabled {
     # CIS 8.4.17 (L2) Ensure Get Creds is disabled
-    Write-Host "`n* CIS control 8.4.17 (L2) Ensure Get Creds is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.17 (L2) Ensure Get Creds is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2372,22 +2440,22 @@ function Ensure-GetCredsIsDisabled {
     # Check if the Unity is set to true
     Foreach ($vm in $vms) {
         if ($vm.Unity -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Get Creds is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Get Creds is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Get Creds is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Get Creds is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2405,7 +2473,7 @@ function Ensure-GetCredsIsDisabled {
 
 function Ensure-HostGuestFileSystemServerIsDisabled {
     # CIS 8.4.18 (L2) Ensure Host-Guest File System Service is disabled
-    Write-Host "`n* CIS control 8.4.18 (L2) Ensure Host-Guest File System Service is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.18 (L2) Ensure Host-Guest File System Service is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2418,22 +2486,22 @@ function Ensure-HostGuestFileSystemServerIsDisabled {
     # Check if the HostGuestFileSystemServer is set to true
     Foreach ($vm in $vms) {
         if ($vm.HostGuestFileSystemServer -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Host-Guest File System Service is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Host-Guest File System Service is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Host-Guest File System Service is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Host-Guest File System Service is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2451,7 +2519,7 @@ function Ensure-HostGuestFileSystemServerIsDisabled {
 
 function Ensure-GuestHostInteractionLaunchMenuIsDisabled {
     # CIS 8.4.19 (L2) Ensure Guest Host Interaction Service is disabled
-    Write-Host "`n* CIS control 8.4.19 (L2) Ensure Guest Host Interaction Service is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.19 (L2) Ensure Guest Host Interaction Service is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2464,22 +2532,22 @@ function Ensure-GuestHostInteractionLaunchMenuIsDisabled {
     # Check if the GuestHostInteractionLaunchMenu is set to true
     Foreach ($vm in $vms) {
         if ($vm.GuestHostInteractionLaunchMenu -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Guest Host Interaction Service is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Guest Host Interaction Service is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Guest Host Interaction Service is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Guest Host Interaction Service is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2496,7 +2564,7 @@ function Ensure-GuestHostInteractionLaunchMenuIsDisabled {
 
 function Ensure-memSchedFakeSampleStatsIsDisabled {
     # CIS 8.4.20 (L2) Ensure memSchedFakeSampleStats is disabled
-    Write-Host "`n* CIS control 8.4.20 (L2) Ensure memSchedFakeSampleStats is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.20 (L2) Ensure memSchedFakeSampleStats is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2509,22 +2577,22 @@ function Ensure-memSchedFakeSampleStatsIsDisabled {
     # Check if the memSchedFakeSampleStats is set to true
     Foreach ($vm in $vms) {
         if ($vm.memSchedFakeSampleStats -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  memSchedFakeSampleStats is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  memSchedFakeSampleStats is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  memSchedFakeSampleStats is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  memSchedFakeSampleStats is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2540,7 +2608,7 @@ function Ensure-memSchedFakeSampleStatsIsDisabled {
 
 function Ensure-VMConsoleCopyOperationsAreDisabled {
     # CIS 8.4.21 (L2) Ensure VM Console Copy Operations are disabled
-    Write-Host "`n* CIS control 8.4.21 (L2) Ensure VM Console Copy Operations are disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.21 (L2) Ensure VM Console Copy Operations are disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2553,22 +2621,22 @@ function Ensure-VMConsoleCopyOperationsAreDisabled {
     # Check if the VMConsoleCopyOperations is missing or is set to true
     Foreach ($vm in $vms) {
         if ($vm.VMConsoleCopyOperations -eq $null -or $vm.VMConsoleCopyOperations -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  VM Console Copy Operations are disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  VM Console Copy Operations are disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  VM Console Copy Operations are not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  VM Console Copy Operations are not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2584,7 +2652,7 @@ function Ensure-VMConsoleCopyOperationsAreDisabled {
 
 function Ensure-VMConsoleDragAndDropOprerationsIsDisabled {
     # CIS 8.4.22 (L2) Ensure VM Console Drag and Drop Oprerations are disabled
-    Write-Host "`n* CIS control 8.4.22 (L2) Ensure VM Console Drag and Drop Oprerations are disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.22 (L2) Ensure VM Console Drag and Drop Oprerations are disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2597,21 +2665,21 @@ function Ensure-VMConsoleDragAndDropOprerationsIsDisabled {
     # Check if the VMConsoleDragAndDropOprerations is set to true or is missing
     Foreach ($vm in $vms) {
         if ($vm.VMConsoleDragAndDropOprerations -eq $null -or $vm.VMConsoleDragAndDropOprerations -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  VM Console Drag and Drop Oprerations are disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  VM Console Drag and Drop Oprerations are disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  VM Console Drag and Drop Oprerations are not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  VM Console Drag and Drop Oprerations are not disabled" -color Red
             $failed++
         }
     }
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2628,7 +2696,7 @@ function Ensure-VMConsoleDragAndDropOprerationsIsDisabled {
 
 function Ensure-VMConsoleGUIOptionsIsDisabled {
     # CIS 8.4.23 (L2) Ensure VM Console GUI Options are disabled
-    Write-Host "`n* CIS control 8.4.23 (L2) Ensure VM Console GUI Options are disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.23 (L2) Ensure VM Console GUI Options are disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2641,22 +2709,22 @@ function Ensure-VMConsoleGUIOptionsIsDisabled {
     # Check if the VMConsoleGUIOptions is set to false or is missing
     Foreach ($vm in $vms) {
         if ($vm.VMConsoleGUIOptions -eq $null -or $vm.VMConsoleGUIOptions -eq $false) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  VM Console GUI Options are disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  VM Console GUI Options are disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  VM Console GUI Options are not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  VM Console GUI Options are not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2672,7 +2740,7 @@ function Ensure-VMConsoleGUIOptionsIsDisabled {
 
 function Ensure-VMConsolePasteOperationsAreDisabled {
     # CIS 8.4.24 (L1) Ensure VM Console Paste Operations are disabled
-    Write-Host "`n* CIS control 8.4.24 (L1) Ensure VM Console Paste Operations are disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.4.24 (L1) Ensure VM Console Paste Operations are disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2685,22 +2753,22 @@ function Ensure-VMConsolePasteOperationsAreDisabled {
     # Check if the VMConsolePasteOperations is set to true or missing
     Foreach ($vm in $vms) {
         if ($vm.VMConsolePasteOperations -eq $null -or $vm.VMConsolePasteOperations -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  VM Console Paste Operations are disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  VM Console Paste Operations are disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  VM Console Paste Operations are not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  VM Console Paste Operations are not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2717,7 +2785,7 @@ function Ensure-VMConsolePasteOperationsAreDisabled {
 
 function Ensure-VMLimitsAreConfiguredCorrectly {
     # CIS 8.5.1	(L2) Ensure VM limits are configured correctly
-    Write-Host "`n* CIS control 8.5.1 (L2) Ensure VM limits are configured correctly" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.5.1 (L2) Ensure VM limits are configured correctly" -color Blue
 
 
     # Results summary
@@ -2726,15 +2794,15 @@ function Ensure-VMLimitsAreConfiguredCorrectly {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2752,7 +2820,7 @@ function Ensure-VMLimitsAreConfiguredCorrectly {
 
 function Ensure-HardwareBased3DAccelerationIsDisabled {
     # CIS 8.5.2	(L2) Ensure hardware-based 3D acceleration is disabled
-    Write-Host "`n* CIS control 8.5.2 (L2) Ensure hardware-based 3D acceleration is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.5.2 (L2) Ensure hardware-based 3D acceleration is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2765,22 +2833,22 @@ function Ensure-HardwareBased3DAccelerationIsDisabled {
     # Check if the HardwareBased3DAcceleration is set to false
     Foreach ($vm in $vms) {
         if ($vm.HardwareBased3DAcceleration -eq $false) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Hardware-based 3D acceleration is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Hardware-based 3D acceleration is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Hardware-based 3D acceleration is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Hardware-based 3D acceleration is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2798,7 +2866,7 @@ function Ensure-HardwareBased3DAccelerationIsDisabled {
 
 function Ensure-NonPersistentDisksAreLimited {
     # CIS 8.6.1	(L2) Ensure non-persistent disks are limited
-    Write-Host "`n* CIS control 8.6.1 (L2) Ensure non-persistent disks are limited" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.6.1 (L2) Ensure non-persistent disks are limited" -color Blue
 
     # Results summary
     $passed = 0
@@ -2811,22 +2879,22 @@ function Ensure-NonPersistentDisksAreLimited {
     # Verify that persistence is absent or set to a value other than "nonpersistent"
     Foreach ($vm in $vms) {
         if ($vm.Persistence -eq $null -or $vm.Persistence -ne "nonpersistent") {
-            Write-Host "- $($vm.Parent): Passed" -ForegroundColor Green
-            Write-Host "  Persistence mode : $($vm.Persistence)" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Parent): Passed" -color Green
+            Write-MessageWithLogging -message "  Persistence mode : $($vm.Persistence)" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Parent): Failed" -ForegroundColor Red
-            Write-Host "  Non-persistent disks are not limited" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Parent): Failed" -color Red
+            Write-MessageWithLogging -message "  Non-persistent disks are not limited" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2843,7 +2911,7 @@ function Ensure-NonPersistentDisksAreLimited {
 
 function Ensure-VirtualDiskShrinkingIsDisabled {
     # CIS 8.6.2	(L2) Ensure virtual disk shrinking is disabled
-    Write-Host "`n* CIS control 8.6.2 (L2) Ensure virtual disk shrinking is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.6.2 (L2) Ensure virtual disk shrinking is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2856,21 +2924,21 @@ function Ensure-VirtualDiskShrinkingIsDisabled {
     # Check if the VirtualDiskShrinking is set to true
     Foreach ($vm in $vms) {
         if ($vm.VirtualDiskShrinking -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Virtual disk shrinking is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Virtual disk shrinking is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Virtual disk shrinking is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Virtual disk shrinking is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2889,7 +2957,7 @@ function Ensure-VirtualDiskShrinkingIsDisabled {
 
 function Ensure-VirtualDiskWipingIsDisabled {
     # CIS 8.6.3	(L1) Ensure virtual disk wiping is disabled
-    Write-Host "`n* CIS control 8.6.3 (L1) Ensure virtual disk wiping is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.6.3 (L1) Ensure virtual disk wiping is disabled" -color Blue
 
     # Results summary
     $passed = 0
@@ -2902,21 +2970,21 @@ function Ensure-VirtualDiskWipingIsDisabled {
     # Check if the VirtualDiskWiping is set to true
     Foreach ($vm in $vms) {
         if ($vm.VirtualDiskWiping -eq $true) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Virtual disk wiping is disabled" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Virtual disk wiping is disabled" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Virtual disk wiping is not disabled" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Virtual disk wiping is not disabled" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2933,7 +3001,7 @@ function Ensure-VirtualDiskWipingIsDisabled {
 
 function Ensure-TheNumberOfVMLogFilesIsConfiguredProperly {
     # CIS 8.7.1	(L1) Ensure the number of VM log files is configured properly
-    Write-Host "`n* CIS control 8.7.1 (L1) Ensure the number of VM log files is configured properly" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.7.1 (L1) Ensure the number of VM log files is configured properly" -color Blue
 
     # Results summary
     $passed = 0
@@ -2946,24 +3014,24 @@ function Ensure-TheNumberOfVMLogFilesIsConfiguredProperly {
     # Check if the NumberOfVMLogFiles is set to 10
     Foreach ($vm in $vms) {
         if ($vm.NumberOfVMLogFiles -eq 10) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Number of VM log files is configured properly" -ForegroundColor Green
-            Write-Host "  Number of VM log files: $($vm.NumberOfVMLogFiles)" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Number of VM log files is configured properly" -color Green
+            Write-MessageWithLogging -message "  Number of VM log files: $($vm.NumberOfVMLogFiles)" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Current value: $($vm.NumberOfVMLogFiles)" -ForegroundColor Red
-            Write-Host "  Expected value: 10" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Current value: $($vm.NumberOfVMLogFiles)" -color Red
+            Write-MessageWithLogging -message "  Expected value: 10" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -2980,7 +3048,7 @@ function Ensure-TheNumberOfVMLogFilesIsConfiguredProperly {
 
 function Ensure-HostInformationIsNotSentToGuests {
     # CIS 8.7.2	(L2) Ensure host information is not sent to guests
-    Write-Host "`n* CIS control 8.7.2 (L2) Ensure host information is not sent to guests" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.7.2 (L2) Ensure host information is not sent to guests" -color Blue
 
     # Results summary
     $passed = 0
@@ -2993,22 +3061,22 @@ function Ensure-HostInformationIsNotSentToGuests {
     # Check if the HostInformation is set to false
     Foreach ($vm in $vms) {
         if ($vm.HostInformation -eq $false) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  Host information is not sent to guests" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Host information is not sent to guests" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Host information is sent to guests" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Host information is sent to guests" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3025,7 +3093,7 @@ function Ensure-HostInformationIsNotSentToGuests {
 
 function Ensure-VMLogFileSizeIsLimited {
     # CIS 8.7.3	(L1) Ensure VM log file size is limited
-    Write-Host "`n* CIS control 8.7.3 (L1) Ensure VM log file size is limited" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 8.7.3 (L1) Ensure VM log file size is limited" -color Blue
 
     # Results summary
     $passed = 0
@@ -3038,24 +3106,24 @@ function Ensure-VMLogFileSizeIsLimited {
     # Check if the VMLogFileSize is set to 1024000
     Foreach ($vm in $vms) {
         if ($vm.VMLogFileSize -eq 1024000) {
-            Write-Host "- $($vm.Name): Passed" -ForegroundColor Green
-            Write-Host "  VM log file size is limited" -ForegroundColor Green
-            Write-Host "  VM log file size: $($vm.VMLogFileSize)" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($vm.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  VM log file size is limited" -color Green
+            Write-MessageWithLogging -message "  VM log file size: $($vm.VMLogFileSize)" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($vm.Name): Failed" -ForegroundColor Red
-            Write-Host "  Current value: $($vm.VMLogFileSize)" -ForegroundColor Red
-            Write-Host "  Expected value: 1024000" -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($vm.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Current value: $($vm.VMLogFileSize)" -color Red
+            Write-MessageWithLogging -message "  Expected value: 1024000" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3080,7 +3148,7 @@ function Ensure-VMLogFileSizeIsLimited {
 
 function Ensure-BidirectionalCHAPAuthIsEnabled {
     # CIS 6.1 (L1) Ensure bidirectional CHAP authentication for iSCSI traffic is enabled
-    Write-Host "`n* CIS control 6.1 (L1) Ensure bidirectional CHAP authentication for iSCSI traffic is enabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 6.1 (L1) Ensure bidirectional CHAP authentication for iSCSI traffic is enabled" -color Blue
 
 
     # Results summary
@@ -3096,31 +3164,31 @@ function Ensure-BidirectionalCHAPAuthIsEnabled {
            $iSCSIProperties = Get-VMHost $VMHostHba.VMHost | Get-VMHostHba | Where {$_.Type -eq "Iscsi"} | Select VMHost, Device, ChapType, @{N="CHAPName";E={$_.AuthenticationProperties.ChapName}}
             Foreach ($iSCSIProperty in $iSCSIProperties) {
                 if ($iSCSIProperty.ChapType -eq "Bidirectional") {
-                    Write-Host "- Check Passed" -ForegroundColor Green
-                    Write-Host "  Bidirectional CHAP authentication is enabled for $($iSCSIProperty.VMHost) on $($iSCSIProperty.Device)" -ForegroundColor Green
+                    Write-MessageWithLogging -message "- Check Passed" -color Green
+                    Write-MessageWithLogging -message "  Bidirectional CHAP authentication is enabled for $($iSCSIProperty.VMHost) on $($iSCSIProperty.Device)" -color Green
                     $passed++
                 }
                 else {
-                    Write-Host "- Check Failed" -ForegroundColor Red
-                    Write-Host "  Bidirectional CHAP authentication is not enabled for $($iSCSIProperty.VMHost) on $($iSCSIProperty.Device)" -ForegroundColor Red
+                    Write-MessageWithLogging -message "- Check Failed" -color Red
+                    Write-MessageWithLogging -message "  Bidirectional CHAP authentication is not enabled for $($iSCSIProperty.VMHost) on $($iSCSIProperty.Device)" -color Red
                     $failed++
                 }
             }
         }
         else {
             if ($VMHostHba -eq $VMhosts[-1]) {
-                Write-Host "- Check Unknown" -ForegroundColor Yellow
-                Write-Host "  No iSCSI HBAs found" -ForegroundColor Yellow
+                Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+                Write-MessageWithLogging -message "  No iSCSI HBAs found" -color Yellow
                 $unknown++
             }
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3138,7 +3206,7 @@ function Ensure-BidirectionalCHAPAuthIsEnabled {
 
 function Ensure-UniquenessOfCHAPAuthSecretsForiSCSI {
     # CIS 6.2 (L2) Ensure the uniqueness of CHAP authentication secrets for iSCSI traffic
-    Write-Host "`n* CIS control 6.2 (L2) Ensure the uniqueness of CHAP authentication secrets for iSCSI traffic" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 6.2 (L2) Ensure the uniqueness of CHAP authentication secrets for iSCSI traffic" -color Blue
 
 
     # Results summary
@@ -3147,15 +3215,15 @@ function Ensure-UniquenessOfCHAPAuthSecretsForiSCSI {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3172,7 +3240,7 @@ function Ensure-UniquenessOfCHAPAuthSecretsForiSCSI {
 
 function Ensure-SANResourcesAreSegregatedProperly {
     # CIS 6.3 (L1) Ensure storage area network (SAN) resources are segregated properly
-    Write-Host "`n* CIS control 6.3 (L1) Ensure storage area network (SAN) resources are segregated properly" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 6.3 (L1) Ensure storage area network (SAN) resources are segregated properly" -color Blue
 
 
     # Results summary
@@ -3181,15 +3249,15 @@ function Ensure-SANResourcesAreSegregatedProperly {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3221,7 +3289,7 @@ function Ensure-SANResourcesAreSegregatedProperly {
 
 function Ensure-DCUITimeOutIs600 {
     # CIS 5.1 (L1) Ensure the DCUI timeout is set to 600 seconds or less
-    Write-Host "`n* CIS control 5.1 (L1) Ensure the DCUI timeout is set to 600 seconds or less" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 5.1 (L1) Ensure the DCUI timeout is set to 600 seconds or less" -color Blue
 
 
     # Results summary
@@ -3235,22 +3303,22 @@ function Ensure-DCUITimeOutIs600 {
     # Check the DCUI timeout
     Foreach ($VMhost in $VMhosts) {
         if ($VMhost.DcuiTimeOut -le 600) {
-            Write-Host "- $($VMhost.Name): Passed" -ForegroundColor Green
-            Write-Host "  The DCUI timeout is set to 600 seconds or less. " -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMhost.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  The DCUI timeout is set to 600 seconds or less. " -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMhost.Name): Failed" -ForegroundColor Red
-            Write-Host "  The DCUI timeout is not set to 600 seconds or less. " -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMhost.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  The DCUI timeout is not set to 600 seconds or less. " -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3267,7 +3335,7 @@ function Ensure-DCUITimeOutIs600 {
 
 function Ensure-ESXiShellIsDisabled {
     # CIS 5.2 (L1) Ensure the ESXi shell is disabled
-    Write-Host "`n* CIS control 5.2 (L1) Ensure the ESXi shell is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 5.2 (L1) Ensure the ESXi shell is disabled" -color Blue
 
 
     # Results summary
@@ -3281,22 +3349,22 @@ function Ensure-ESXiShellIsDisabled {
     # Check the ESXi shell
     Foreach ($VMhost in $VMhosts) {
         if ($VMhost.Policy -eq "off") {
-            Write-Host "- $($VMhost.VMHost): Passed" -ForegroundColor Green
-            Write-Host "  The ESXi shell is disabled. " -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMhost.VMHost): Passed" -color Green
+            Write-MessageWithLogging -message "  The ESXi shell is disabled. " -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMhost.VMHost): Failed" -ForegroundColor Red
-            Write-Host "  The ESXi shell is not disabled. " -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMhost.VMHost): Failed" -color Red
+            Write-MessageWithLogging -message "  The ESXi shell is not disabled. " -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3313,7 +3381,7 @@ function Ensure-ESXiShellIsDisabled {
 
 function Ensure-SSHIsDisabled {
     # CIS 5.3 (L1) Ensure SSH is disabled
-    Write-Host "`n* CIS control 5.3 (L1) Ensure SSH is disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 5.3 (L1) Ensure SSH is disabled" -color Blue
 
 
     # Results summary
@@ -3327,22 +3395,22 @@ function Ensure-SSHIsDisabled {
     # Check SSH
     Foreach ($VMhost in $VMhosts) {
         if ($VMhost.Policy -eq "off") {
-            Write-Host "- $($VMhost.VMHost): Passed" -ForegroundColor Green
-            Write-Host "  SSH is disabled. " -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMhost.VMHost): Passed" -color Green
+            Write-MessageWithLogging -message "  SSH is disabled. " -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMhost.VMHost): Failed" -ForegroundColor Red
-            Write-Host "  SSH is not disabled. " -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMhost.VMHost): Failed" -color Red
+            Write-MessageWithLogging -message "  SSH is not disabled. " -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3359,7 +3427,7 @@ function Ensure-SSHIsDisabled {
 
 function Ensure-CIMAccessIsLimited {
     # CIS 5.4 (L1) Ensure CIM access is limited
-    Write-Host "`n* CIS control 5.4 (L1) Ensure CIM access is limited" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 5.4 (L1) Ensure CIM access is limited" -color Blue
 
 
     # Results summary
@@ -3368,16 +3436,16 @@ function Ensure-CIMAccessIsLimited {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3394,7 +3462,7 @@ function Ensure-CIMAccessIsLimited {
 
 function Ensure-NormalLockDownIsEnabled {
     # CIS 5.5 (L1) Ensure Normal Lockdown mode is enabled
-    Write-Host "`n* CIS control 5.5 (L1) Ensure Normal Lockdown mode is enabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 5.5 (L1) Ensure Normal Lockdown mode is enabled" -color Blue
 
 
     # Results summary
@@ -3408,22 +3476,22 @@ function Ensure-NormalLockDownIsEnabled {
     # Check the lockdown mode
     Foreach ($VMhost in $VMhosts) {
         if ($VMhost.Lockdown -eq "Normal") {
-            Write-Host "- $($VMhost.Name): Passed" -ForegroundColor Green
-            Write-Host "  Normal Lockdown mode is enabled. " -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMhost.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Normal Lockdown mode is enabled. " -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMhost.Name): Failed" -ForegroundColor Red
-            Write-Host "  Normal Lockdown mode is not enabled. " -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMhost.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Normal Lockdown mode is not enabled. " -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3439,7 +3507,7 @@ function Ensure-NormalLockDownIsEnabled {
 
 function Ensure-StrickLockdownIsEnabled {
     # CIS 5.6 (L2) Ensure Strict Lockdown mode is enabled
-    Write-Host "`n* CIS control 5.6 (L2) Ensure Strict Lockdown mode is enabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 5.6 (L2) Ensure Strict Lockdown mode is enabled" -color Blue
 
 
     # Results summary
@@ -3453,22 +3521,22 @@ function Ensure-StrickLockdownIsEnabled {
     # Check the lockdown mode
     Foreach ($VMhost in $VMhosts) {
         if ($VMhost.Lockdown -eq "Strict") {
-            Write-Host "- $($VMhost.Name): Passed" -ForegroundColor Green
-            Write-Host "  Strict Lockdown mode is enabled. " -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMhost.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Strict Lockdown mode is enabled. " -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMhost.Name): Failed" -ForegroundColor Red
-            Write-Host "  Strict Lockdown mode is not enabled. " -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMhost.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Strict Lockdown mode is not enabled. " -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3484,7 +3552,7 @@ function Ensure-StrickLockdownIsEnabled {
 
 function Ensure-SSHAuthorisedKeysFileIsEmpty {
     # CIS 5.7 (L2) Ensure SSH Authorized Keys file is empty
-    Write-Host "`n* CIS control 5.7 (L2) Ensure SSH Authorized Keys file is empty" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 5.7 (L2) Ensure SSH Authorized Keys file is empty" -color Blue
 
 
     # Results summary
@@ -3493,15 +3561,15 @@ function Ensure-SSHAuthorisedKeysFileIsEmpty {
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
     # Return true if all checks passed
     if ($failed -ne 0) {
         return -1
@@ -3516,7 +3584,7 @@ function Ensure-SSHAuthorisedKeysFileIsEmpty {
 
 function Ensure-IdleESXiShellAndSSHTimeout {
     # CIS 5.8 (L1) Ensure idle ESXi shell and SSH sessions time out after 300 seconds or less
-    Write-Host "`n* CIS control 5.8 (L1) Ensure idle ESXi shell and SSH sessions time out after 300 seconds or less" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 5.8 (L1) Ensure idle ESXi shell and SSH sessions time out after 300 seconds or less" -color Blue
 
 
     # Results summary
@@ -3530,22 +3598,22 @@ function Ensure-IdleESXiShellAndSSHTimeout {
     # Check the timeout
     Foreach ($VMhost in $VMhosts) {
         if ($VMhost.UserVars.ESXiShellInteractiveTimeOut -le 300 -and $VMhost.UserVars.ESXiShellInteractiveTimeOut -gt 0) {
-            Write-Host "- $($VMhost.Name): Passed" -ForegroundColor Green
-            Write-Host "  Idle ESXi shell and SSH sessions time out after 300 seconds or less. " -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMhost.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  Idle ESXi shell and SSH sessions time out after 300 seconds or less. " -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMhost.Name): Failed" -ForegroundColor Red
-            Write-Host "  Idle ESXi shell and SSH sessions time out not configured properly. " -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMhost.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  Idle ESXi shell and SSH sessions time out not configured properly. " -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3562,7 +3630,7 @@ function Ensure-IdleESXiShellAndSSHTimeout {
 
 function Ensure-ShellServicesTimeoutIsProperlyConfigured {
     # CIS 5.9 (L1) Ensure the shell services timeout is set to 1 hour or less
-    Write-Host "`n* CIS control 5.9 (L1) Ensure the shell services timeout is set to 1 hour or less" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 5.9 (L1) Ensure the shell services timeout is set to 1 hour or less" -color Blue
 
 
     # Results summary
@@ -3576,22 +3644,22 @@ function Ensure-ShellServicesTimeoutIsProperlyConfigured {
     # Check the timeout
     Foreach ($VMhost in $VMhosts) {
         if ($VMhost.UserVars.ESXiShellTimeOut -le 3600 -and $VMhost.UserVars.ESXiShellTimeOut -gt 0) {
-            Write-Host "- $($VMhost.Name): Passed" -ForegroundColor Green
-            Write-Host "  The shell services timeout is set to 1 hour or less. " -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMhost.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  The shell services timeout is set to 1 hour or less. " -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMhost.Name): Failed" -ForegroundColor Red
-            Write-Host "  The shell services timeout is not set to 1 hour or less. " -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMhost.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  The shell services timeout is not set to 1 hour or less. " -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3608,7 +3676,7 @@ function Ensure-ShellServicesTimeoutIsProperlyConfigured {
 
 function Ensure-DCUIHasTrustedUsersForLockDownMode {
     # CIS 5.10 (L1) Ensure DCUI has trusted users for Lock Down mode
-    Write-Host "`n* CIS control 5.10 (L1) Ensure DCUI has trusted users for Lock Down mode" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 5.10 (L1) Ensure DCUI has trusted users for Lock Down mode" -color Blue
 
 
     # Results summary
@@ -3622,23 +3690,23 @@ function Ensure-DCUIHasTrustedUsersForLockDownMode {
     # Check the DCUI access
     Foreach ($VMhost in $VMhosts) {
         if ($VMhost.DCUIAccess -ne $null) {
-            Write-Host "- $($VMhost.Name): Passed" -ForegroundColor Green
-            Write-Host "  DCUI has trusted users for Lock Down mode. " -ForegroundColor Green
-            Write-Host "  DCUI users: $($VMhost.DCUIAccess)" -ForegroundColor Green
+            Write-MessageWithLogging -message "- $($VMhost.Name): Passed" -color Green
+            Write-MessageWithLogging -message "  DCUI has trusted users for Lock Down mode. " -color Green
+            Write-MessageWithLogging -message "  DCUI users: $($VMhost.DCUIAccess)" -color Green
             $passed++
         }
         else {
-            Write-Host "- $($VMhost.Name): Failed" -ForegroundColor Red
-            Write-Host "  DCUI does not have trusted users for Lock Down mode. " -ForegroundColor Red
+            Write-MessageWithLogging -message "- $($VMhost.Name): Failed" -color Red
+            Write-MessageWithLogging -message "  DCUI does not have trusted users for Lock Down mode. " -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3655,7 +3723,7 @@ function Ensure-DCUIHasTrustedUsersForLockDownMode {
 
 function Ensure-ContentsOfExposedConfigurationsNotModified {
     # CIS 5.11 (L2) Ensure contents of exposed configuration files have not been modified
-    Write-Host "`n* CIS control 5.11 (L1) Ensure contents of exposed configurations are not modified" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 5.11 (L1) Ensure contents of exposed configurations are not modified" -color Blue
 
 
     # Results summary
@@ -3664,15 +3732,15 @@ function Ensure-ContentsOfExposedConfigurationsNotModified {
     $unknown = 0
 
     # This control needs to be verified manually, refer to the CIS Benchmark for details
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown++
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3697,7 +3765,7 @@ function Ensure-ContentsOfExposedConfigurationsNotModified {
 
 function Ensure-CentralizedESXiHostDumps {
     # CIS 3.1 (L1) Ensure a centralized location is configured to collect ESXi host core dumps
-    Write-Host "`n* CIS control 3.1 (L1) Ensure a centralized location is configured to collect ESXi host core dumps" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 3.1 (L1) Ensure a centralized location is configured to collect ESXi host core dumps" -color Blue
 
 
     # Results summary
@@ -3712,23 +3780,23 @@ function Ensure-CentralizedESXiHostDumps {
         $esxiCli = Get-EsxCli -VMHost $vmhost -V2
         $ESXiCoreDump = $esxiCli.system.coredump.network.get.Invoke()
         if ($ESXiCoreDump.Enabled -eq $false) {
-            Write-Host "- Check Failed" -ForegroundColor Red
-            Write-Host "  No centralized location configured for core dumps on $vmhost" -ForegroundColor Red
+            Write-MessageWithLogging -message "- Check Failed" -color Red
+            Write-MessageWithLogging -message "  No centralized location configured for core dumps on $vmhost" -color Red
             $failed++
         }
         else {
-            Write-Host "- Check Passed" -ForegroundColor Green
-            Write-Host "  Centralized location configured for core dumps on $vmhost" -ForegroundColor Green
+            Write-MessageWithLogging -message "- Check Passed" -color Green
+            Write-MessageWithLogging -message "  Centralized location configured for core dumps on $vmhost" -color Green
             $passed++
         }
     }
 
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3746,7 +3814,7 @@ function Ensure-CentralizedESXiHostDumps {
 
 function Ensure-PersistentLoggingIsConfigured {
     # CIS 3.2 (L1) Ensure persistent logging is configured for all ESXi hosts
-    Write-Host "`n* CIS control 3.2 (L1) Ensure persistent logging is configured for all ESXi hosts" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 3.2 (L1) Ensure persistent logging is configured for all ESXi hosts" -color Blue
 
 
     # Results summary
@@ -3759,22 +3827,22 @@ function Ensure-PersistentLoggingIsConfigured {
 
     Foreach ($VMHost in $VMHosts) {
         if ($VMHost.Syslog.global.logDir -ne $null) {
-            Write-Host "- Check Passed" -ForegroundColor Green
-            Write-Host "  Persistent logging is configured for $($VMHost.Name)" -ForegroundColor Green
+            Write-MessageWithLogging -message "- Check Passed" -color Green
+            Write-MessageWithLogging -message "  Persistent logging is configured for $($VMHost.Name)" -color Green
             $passed++
         }
         else {
-            Write-Host "- Check Failed" -ForegroundColor Red
-            Write-Host "  Persistent logging is not configured for $($VMHost.Name)" -ForegroundColor Red
+            Write-MessageWithLogging -message "- Check Failed" -color Red
+            Write-MessageWithLogging -message "  Persistent logging is not configured for $($VMHost.Name)" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
 
     # Return true if all checks passed
@@ -3793,7 +3861,7 @@ function Ensure-PersistentLoggingIsConfigured {
 
 function Ensure-RemoteLoggingIsConfigured {
     # CIS 3.3 (L1) Ensure remote logging is configured for ESXi hosts
-    Write-Host "`n* CIS control 3.3 (L1) Ensure remote logging is configured for ESXi hosts" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 3.3 (L1) Ensure remote logging is configured for ESXi hosts" -color Blue
 
 
     # Results summary
@@ -3806,22 +3874,22 @@ function Ensure-RemoteLoggingIsConfigured {
 
     Foreach ($VMHost in $VMHosts) {
         if ($VMHost.Syslog.global.logHost -ne $null) {
-            Write-Host "- Check Passed" -ForegroundColor Green
-            Write-Host "  Remote logging is configured for $($VMHost.Name)" -ForegroundColor Green
+            Write-MessageWithLogging -message "- Check Passed" -color Green
+            Write-MessageWithLogging -message "  Remote logging is configured for $($VMHost.Name)" -color Green
             $passed++
         }
         else {
-            Write-Host "- Check Failed" -ForegroundColor Red
-            Write-Host "  Remote logging is not configured for $($VMHost.Name)" -ForegroundColor Red
+            Write-MessageWithLogging -message "- Check Failed" -color Red
+            Write-MessageWithLogging -message "  Remote logging is not configured for $($VMHost.Name)" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3851,8 +3919,7 @@ function Ensure-RemoteLoggingIsConfigured {
 
 function Ensure-vSwitchForgedTransmitsIsReject {
     # CIS 7.1 (L1) Ensure the vSwitch Forged Transmits policy is set to reject
-    Write-Host "`n* CIS control 7.1 (L1) Ensure the vSwitch Forged Transmits policy is set to reject" -ForegroundColor Blue
-
+    Write-MessageWithLogging -message "`n* CIS control 7.1 (L1) Ensure the vSwitch Forged Transmits policy is set to reject" -color Blue
 
     # Results summary
     $passed = 0
@@ -3865,22 +3932,22 @@ function Ensure-vSwitchForgedTransmitsIsReject {
     # Check the vSwitches
     foreach ($vSwitch in $vSwitches) {
         if ($vSwitch.ForgedTransmits -eq "Reject") {
-            Write-Host "- Check Passed" -ForegroundColor Green
-            Write-Host "  $($vSwitch.VMHost) - $($vSwitch.Name)" -ForegroundColor Green
+            Write-MessageWithLogging -message "- Check Passed" -color Green
+            Write-MessageWithLogging -message "  $($vSwitch.VMHost) - $($vSwitch.Name)" -color Green
             $passed++
         }
         Else {
-            Write-Host "- Check Failed" -ForegroundColor Red
-            Write-Host "  $($vSwitch.VMHost) - $($vSwitch.Name)" -ForegroundColor Red
+            Write-MessageWithLogging -message "- Check Failed" -color Red
+            Write-MessageWithLogging -message "  $($vSwitch.VMHost) - $($vSwitch.Name)" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3892,13 +3959,11 @@ function Ensure-vSwitchForgedTransmitsIsReject {
     else {
         return 1
     }
-
 }
 
 function Ensure-vSwitchMACAdressChangeIsReject {
     # CIS 7.2 (L1) Ensure the vSwitch MAC Address Change policy is set to reject
-    Write-Host "`n* CIS control 7.2 (L1) Ensure the vSwitch MAC Address Change policy is set to reject" -ForegroundColor Blue
-
+    Write-MessageWithLogging -message "`n* CIS control 7.2 (L1) Ensure the vSwitch MAC Address Change policy is set to reject" -color Blue
 
     # Results summary
     $passed = 0
@@ -3911,22 +3976,22 @@ function Ensure-vSwitchMACAdressChangeIsReject {
     # Check the vSwitches
     foreach ($vSwitch in $vSwitches) {
         if ($vSwitch.MacChanges -eq "Reject") {
-            Write-Host "- Check Passed" -ForegroundColor Green
-            Write-Host "  $($vSwitch.VMHost) - $($vSwitch.Name)" -ForegroundColor Green
+            Write-MessageWithLogging -message "- Check Passed" -color Green
+            Write-MessageWithLogging -message "  $($vSwitch.VMHost) - $($vSwitch.Name)" -color Green
             $passed++
         }
         Else {
-            Write-Host "- Check Failed" -ForegroundColor Red
-            Write-Host "  $($vSwitch.VMHost) - $($vSwitch.Name)" -ForegroundColor Red
+            Write-MessageWithLogging -message "- Check Failed" -color Red
+            Write-MessageWithLogging -message "  $($vSwitch.VMHost) - $($vSwitch.Name)" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3938,12 +4003,11 @@ function Ensure-vSwitchMACAdressChangeIsReject {
     else {
         return 1
     }
-
 }
 
 function Ensure-vSwitchPromiscuousModeIsReject {
     # CIS 7.3 (L1) Ensure the vSwitch Promiscuous Mode policy is set to reject
-    Write-Host "`n* CIS control 7.3 (L1) Ensure the vSwitch Promiscuous Mode policy is set to reject" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 7.3 (L1) Ensure the vSwitch Promiscuous Mode policy is set to reject" -color Blue
 
 
     # Results summary
@@ -3957,22 +4021,22 @@ function Ensure-vSwitchPromiscuousModeIsReject {
     # Check the vSwitches
     foreach ($vSwitch in $vSwitches) {
         if ($vSwitch.PromiscuousMode -eq "Reject") {
-            Write-Host "- Check Passed" -ForegroundColor Green
-            Write-Host "  $($vSwitch.VMHost) - $($vSwitch.Name)" -ForegroundColor Green
+            Write-MessageWithLogging -message "- Check Passed" -color Green
+            Write-MessageWithLogging -message "  $($vSwitch.VMHost) - $($vSwitch.Name)" -color Green
             $passed++
         }
         Else {
-            Write-Host "- Check Failed" -ForegroundColor Red
-            Write-Host "  $($vSwitch.VMHost) - $($vSwitch.Name)" -ForegroundColor Red
+            Write-MessageWithLogging -message "- Check Failed" -color Red
+            Write-MessageWithLogging -message "  $($vSwitch.VMHost) - $($vSwitch.Name)" -color Red
             $failed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -3989,7 +4053,7 @@ function Ensure-vSwitchPromiscuousModeIsReject {
 
 function Ensure-PortGroupsNotNativeVLAN {
     # CIS 7.4 (L1) Ensure port groups are not configured to the value of the native VLAN
-    Write-Host "`n* CIS control 7.4 (L1) Ensure port groups are not configured to the value of the native VLAN" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 7.4 (L1) Ensure port groups are not configured to the value of the native VLAN" -color Blue
 
 
     # Results summary
@@ -4002,27 +4066,27 @@ function Ensure-PortGroupsNotNativeVLAN {
 
     # Checking for native VLAN ID 1
     $defaultNativeVLAN = 1
-    Write-Host "Checking for native VLAN ID 1, if you have a different native VLAN ID, please change the value of the variable nativeVLANID in the script." -ForegroundColor Yellow
+    Write-MessageWithLogging -message "Checking for native VLAN ID 1, if you have a different native VLAN ID, please change the value of the variable nativeVLANID in the script." -color Yellow
 
     # Check the vSwitches for port groups with the same VLAN ID as the native VLAN
     foreach ($vSwitch in $vSwitches) {
         if ($vSwitch.VlanID -eq $defaultNativeVLAN) {
-            Write-Host "- Check Failed" -ForegroundColor Red
-            Write-Host "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -ForegroundColor Red
+            Write-MessageWithLogging -message "- Check Failed" -color Red
+            Write-MessageWithLogging -message "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -color Red
             $failed++
         }
         Else {
-            Write-Host "- Check Passed" -ForegroundColor Green
-            Write-Host "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -ForegroundColor Green
+            Write-MessageWithLogging -message "- Check Passed" -color Green
+            Write-MessageWithLogging -message "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -color Green
             $passed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -4039,8 +4103,7 @@ function Ensure-PortGroupsNotNativeVLAN {
 
 function Ensure-PortGroupsNotUpstreamPhysicalSwitches {
     # CIS 7.5 (L1) Ensure port groups are not configured to VLAN values reserved by upstream physical switches
-    Write-Host "`n* CIS control 7.5 (L1) Ensure port groups are not configured to VLAN values reserved by upstream physical switches" -ForegroundColor Blue
-
+    Write-MessageWithLogging -message "`n* CIS control 7.5 (L1) Ensure port groups are not configured to VLAN values reserved by upstream physical switches" -color Blue
 
     # Results summary
     $passed = 0
@@ -4054,27 +4117,27 @@ function Ensure-PortGroupsNotUpstreamPhysicalSwitches {
     $reservedVLANs = 1001..1024
     $reservedVLANs += 3968..4047
     $reservedVLANs += 4094
-    Write-Host "Checking for Cisco reserved VLAN IDs 1001-1024 and 4094, Nexus reserved VLAN IDs 3968-4047 and 4049, if you have a different reserved VLAN ID range, please change the value of the variable reservedVLANs in the script." -ForegroundColor Yellow
+    Write-MessageWithLogging -message "Checking for Cisco reserved VLAN IDs 1001-1024 and 4094, Nexus reserved VLAN IDs 3968-4047 and 4049, if you have a different reserved VLAN ID range, please change the value of the variable reservedVLANs in the script." -color Yellow
 
     # Check the vSwitches for port groups with the VLAN IDs reserved by upstream physical switches
     foreach ($vSwitch in $vSwitches) {
         if ($reservedVLANs -contains $vSwitch.VlanID) {
-            Write-Host "- Check Failed" -ForegroundColor Red
-            Write-Host "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -ForegroundColor Red
+            Write-MessageWithLogging -message "- Check Failed" -color Red
+            Write-MessageWithLogging -message "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -color Red
             $failed++
         }
         Else {
-            Write-Host "- Check Passed" -ForegroundColor Green
-            Write-Host "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -ForegroundColor Green
+            Write-MessageWithLogging -message "- Check Passed" -color Green
+            Write-MessageWithLogging -message "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -color Green
             $passed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -4086,13 +4149,11 @@ function Ensure-PortGroupsNotUpstreamPhysicalSwitches {
     else {
         return 1
     }
-
-
 }
 
 function Ensure-PortGroupsAreNotConfiguredToVLAN0and4095 {
     # CIS 7.6 (L1) Ensure port groups are not configured to VLAN 0 and 4095
-    Write-Host "`n* CIS control 7.6 (L1) Ensure port groups are not configured to VLAN 0 and 4095" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 7.6 (L1) Ensure port groups are not configured to VLAN 0 and 4095" -color Blue
 
 
     # Results summary
@@ -4105,27 +4166,27 @@ function Ensure-PortGroupsAreNotConfiguredToVLAN0and4095 {
 
     # Checking for VLAN IDs 0 and 4095
     $reservedVLANs = 0, 4095
-    Write-Host "Checking for both VLAN IDs 0 and 4095, if you have set up Virtual Guest Tagging on your vSwitches, please change the value of the variable reservedVLANs in the script." -ForegroundColor Yellow
+    Write-MessageWithLogging -message "Checking for both VLAN IDs 0 and 4095, if you have set up Virtual Guest Tagging on your vSwitches, please change the value of the variable reservedVLANs in the script." -color Yellow
 
     # Check the vSwitches for port groups with the VLAN IDs reserved by upstream physical switches
     foreach ($vSwitch in $vSwitches) {
         if ($reservedVLANs -contains $vSwitch.VlanID) {
-            Write-Host "- Check Failed" -ForegroundColor Red
-            Write-Host "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -ForegroundColor Red
+            Write-MessageWithLogging -message "- Check Failed" -color Red
+            Write-MessageWithLogging -message "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -color Red
             $failed++
         }
         Else {
-            Write-Host "- Check Passed" -ForegroundColor Green
-            Write-Host "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -ForegroundColor Green
+            Write-MessageWithLogging -message "- Check Passed" -color Green
+            Write-MessageWithLogging -message "  $($vSwitch.virtualSwitch) - $($vSwitch.Name) - VLAN $($vSwitch.VlanID)" -color Green
             $passed++
         }
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -4142,7 +4203,7 @@ function Ensure-PortGroupsAreNotConfiguredToVLAN0and4095 {
 
 function Ensure-VirtualDistributedSwitchNetflowTrafficSentToAuthorizedCollector {
     # CIS 7.7 (L1) Ensure virtual distributed switch netflow traffic is sent to an authorized collector
-    Write-Host "`n* CIS control 7.7 (L1) Ensure virtual distributed switch netflow traffic is sent to an authorized collector" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 7.7 (L1) Ensure virtual distributed switch netflow traffic is sent to an authorized collector" -color Blue
 
 
     # Results summary
@@ -4151,15 +4212,15 @@ function Ensure-VirtualDistributedSwitchNetflowTrafficSentToAuthorizedCollector 
     $unknown = 0
 
     # This control needs to be verified manually
-    Write-Host "- Check Unknown" -ForegroundColor Yellow
-    Write-Host "  This control needs to be verified manually, refer to the CIS Benchmark for details" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "- Check Unknown" -color Yellow
+    Write-MessageWithLogging -message "  This control needs to be verified manually, refer to the CIS Benchmark for details" -color Yellow
     $unknown = 1
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -4176,7 +4237,7 @@ function Ensure-VirtualDistributedSwitchNetflowTrafficSentToAuthorizedCollector 
 
 function Ensure-PortLevelConfigurationOverridesAreDisabled {
     # CIS 7.8 (L1) Ensure port level configuration overrides are disabled
-    Write-Host "`n* CIS control 7.8 (L1) Ensure port level configuration overrides are disabled" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* CIS control 7.8 (L1) Ensure port level configuration overrides are disabled" -color Blue
 
 
     # Results summary
@@ -4189,21 +4250,21 @@ function Ensure-PortLevelConfigurationOverridesAreDisabled {
 
     # Check if the port level configuration overrides are disabled
     if ($vdPortGroupOverridePolicy -eq $null) {
-        Write-Host "- Check Passed" -ForegroundColor Green
-        Write-Host "  Port level configuration overrides are disabled" -ForegroundColor Green
+        Write-MessageWithLogging -message "- Check Passed" -color Green
+        Write-MessageWithLogging -message "  Port level configuration overrides are disabled" -color Green
         $passed++
     }
     Else {
-        Write-Host "- Check Failed" -ForegroundColor Red
-        Write-Host "  Port level configuration overrides are enabled" -ForegroundColor Red
+        Write-MessageWithLogging -message "- Check Failed" -color Red
+        Write-MessageWithLogging -message "  Port level configuration overrides are enabled" -color Red
         $failed++
     }
 
     # Print the results
-    Write-Host "`n-- Summary --"
-    Write-Host "Passed: $passed" -ForegroundColor Green
-    Write-Host "Failed: $failed" -ForegroundColor Red
-    Write-Host "Unknown: $unknown" -ForegroundColor Yellow
+    Write-MessageWithLogging -message "`n-- Summary --"
+    Write-MessageWithLogging -message "Passed: $passed" -color Green
+    Write-MessageWithLogging -message "Failed: $failed" -color Red
+    Write-MessageWithLogging -message "Unknown: $unknown" -color Yellow
 
     # Return true if all checks passed
     if ($failed -ne 0) {
@@ -4229,16 +4290,15 @@ function Connect-VCServer {
     $server = Read-Host -Prompt "Enter the vCenter/ESXi Server Hostname or IP Address"
 
     # Set InvalidCertificateAction to warn instead of stop without user interaction
-    Write-Host "Setting InvalidCertificateAction to Warn instead of Stop..."
+    Write-MessageWithLogging -message "Setting InvalidCertificateAction to Warn instead of Stop..."
     Set-PowerCLIConfiguration -Scope User -InvalidCertificateAction warn -Confirm:$false
 
     # print the connection details 
-    Write-Host "Connecting to $server" 
+    Write-MessageWithLogging -message "Connecting to $server" 
 
     # Connect to the vCenter/ESXi Server using https, stop if the connection fails
     Connect-VIServer -Server $server -Protocol https -ErrorAction Stop
-    Write-Host "Successfully connected to $server" -ForegroundColor Green
-
+    Write-MessageWithLogging -message "Successfully connected to $server" -color Green
 }
 
 function VSAT {
@@ -4247,14 +4307,14 @@ function VSAT {
 
     # Run the CIS Benchmark checks and store the results in a variable
     # 1.Install
-    Write-Host "`n* These controls contain recommendations for settings related to 1.Install" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* These controls contain recommendations for settings related to 1.Install" -color Blue
     Ensure-ESXiIsProperlyPatched
     Ensure-VIBAcceptanceLevelIsConfiguredProperly
     Ensure-UnauthorizedModulesNotLoaded
     Ensure-DefaultSaultIsConfiguredProperly
 
     # 2.Communication
-    Write-Host "`n* These controls contain recommendations for settings related to 2.Communication" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* These controls contain recommendations for settings related to 2.Communication" -color Blue
     Ensure-NTPTimeSynchronizationIsConfiguredProperly
     Ensure-ESXiHostFirewallIsProperlyConfigured
     Ensure-MOBIsDisabled
@@ -4266,13 +4326,13 @@ function VSAT {
     Ensure-VDSHealthCheckIsDisabled
 
     # 3.Logging
-    Write-Host "`n* These controls contain recommendations for settings related to 3.Logging" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* These controls contain recommendations for settings related to 3.Logging" -color Blue
     Ensure-CentralizedESXiHostDumps
     Ensure-PersistentLoggingIsConfigured
     Ensure-RemoteLoggingIsConfigured
 
     # 4.Access
-    Write-Host "`n* These controls contain recommendations for settings related to 4.Access" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* These controls contain recommendations for settings related to 4.Access" -color Blue
     Ensure-NonRootExistsForLocalAdmin
     Ensure-PasswordsAreRequiredToBeComplex
     Ensure-LoginAttemptsIsSetTo5
@@ -4283,7 +4343,7 @@ function VSAT {
     Ensure-ExceptionUsersIsConfiguredManually
 
     # 5.Console
-    Write-Host "`n* These controls contain recommendations for settings related to 5.Console" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* These controls contain recommendations for settings related to 5.Console" -color Blue
     Ensure-DCUITimeOutIs600
     Ensure-ESXiShellIsDisabled
     Ensure-SSHIsDisabled
@@ -4297,13 +4357,13 @@ function VSAT {
     Ensure-ContentsOfExposedConfigurationsNotModified
 
     # 6.Storage
-    Write-Host "`n* These controls contain recommendations for settings related to 6.Storage" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* These controls contain recommendations for settings related to 6.Storage" -color Blue
     Ensure-BidirectionalCHAPAuthIsEnabled
     Ensure-UniquenessOfCHAPAuthSecretsForiSCSI
     Ensure-SANResourcesAreSegregatedProperly
 
     # 7.Network
-    Write-Host "`n* These controls contain recommendations for settings related to 7.Network" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* These controls contain recommendations for settings related to 7.Network" -color Blue
     Ensure-vSwitchForgedTransmitsIsReject
     Ensure-vSwitchMACAdressChangeIsReject
     Ensure-vSwitchPromiscuousModeIsReject
@@ -4314,7 +4374,7 @@ function VSAT {
     Ensure-PortLevelConfigurationOverridesAreDisabled
 
     # 8.Virual Machines
-    Write-Host "`n* These controls contain recommendations for settings related to 8.Virtual Machines" -ForegroundColor Blue
+    Write-MessageWithLogging -message "`n* These controls contain recommendations for settings related to 8.Virtual Machines" -color Blue
     Ensure-InformationalMessagesFromVMToVMXLimited
     Ensure-OnlyOneRemoteConnectionIsPermittedToVMAtAnyTime
     Ensure-UnnecessaryFloppyDevicesAreDisconnected
@@ -4364,4 +4424,4 @@ function VSAT {
 }
 #endregion
 
-VSAT >> "$PSScriptRoot\VSAT.log"
+VSAT
