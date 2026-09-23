@@ -29,3 +29,6 @@ if ($Screenshots) {
     }
 }
 Write-Host "Site built in $OutDir"
+
+# The demo run exits 1 (findings present) by design; the build itself succeeded.
+exit 0

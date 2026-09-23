@@ -63,3 +63,6 @@ $sbom | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $OutDir "VSAT-$ve
 $sums = Get-ChildItem -File $OutDir | Sort-Object Name | ForEach-Object { "$((Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant())  $($_.Name)" }
 Set-Content -Path (Join-Path $OutDir 'SHA256SUMS.txt') -Value $sums -Encoding ascii
 Get-ChildItem $OutDir | ForEach-Object { Write-Host $_.Name }
+
+# The sample demo run exits 1 (findings present) by design; asset assembly succeeded.
+exit 0
