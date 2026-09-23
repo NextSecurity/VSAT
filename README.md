@@ -5,7 +5,7 @@
 <h1 align="center">VSAT: Virtualization Security Audit Tool</h1>
 
 <p align="center">
-  <strong>Copy it into an isolated environment, run one command, and audit your VMware infrastructure, NSX included.<br>
+  <strong>Copy it into an isolated environment, run one command, and audit your virtualization backbone: VMware vSphere with NSX, Microsoft Hyper-V and KVM/libvirt.<br>
   You get an evidence-backed assessment with an interactive topology map and practical mitigations.</strong>
 </p>
 
@@ -18,8 +18,8 @@
 </p>
 
 > [!WARNING]
-> **Alpha status: `2.0.0-alpha.1` is a limited prerelease.**
-> - It has **not** been validated against a live vCenter, ESXi or NSX lab. It has only been exercised against synthetic fixtures and the built-in demo.
+> **Alpha status: `2.2.0-alpha.1` is a limited prerelease.**
+> - It has **not** been validated against a live vCenter, ESXi or NSX lab. It has been exercised against synthetic fixtures, the built-in demo, and protocol-level integration tests (govmomi vcsim vSphere simulator + mock NSX API). Hyper-V and KVM support is tested with synthetic collector output only.
 > - There is **no code-signing certificate**. Verify downloads with the published SHA-256 checksums.
 > - The Windows offline package is **assembled on a connected machine** by `build/New-OfflinePackage.ps1`, because we have not confirmed redistribution rights for PowerShell and PowerCLI.
 > - CIS control ID mappings are marked **`unverified`** until the licensed benchmark documents have been reviewed.
@@ -39,7 +39,7 @@
 | Artifact | What it is |
 |---|---|
 | `vsat.ps1` | A single application file: engine, built-in rules, local UI and report assets. It needs PowerShell 7.4+ and PowerCLI. |
-| `VSAT-2.0.0-alpha.1-win-x64-offline.zip` | A portable Windows package: `vsat.ps1`, a portable PowerShell runtime, pinned PowerCLI modules in `./modules`, the `VSAT.cmd` launcher, manifests and notices. **You build it yourself on a connected machine.** See [docs/offline-package.md](docs/offline-package.md). |
+| `VSAT-<version>-win-x64-offline.zip` | A portable Windows package: `vsat.ps1`, a portable PowerShell runtime, pinned PowerCLI modules in `./modules`, the `VSAT.cmd` launcher, manifests and notices. **You build it yourself on a connected machine.** See [docs/offline-package.md](docs/offline-package.md). |
 | `SHA256SUMS.txt` | Checksums for every release artifact. |
 
 Get releases from the [Releases page](https://github.com/NextSecurity/VSAT/releases). Alpha builds are marked as prereleases.
@@ -72,9 +72,9 @@ Coverage is organized **by platform, then by domain**. Each platform VSAT suppor
 
 | Platform | Release | Status |
 |---|---|---|
-| VMware vSphere + NSX | 2.0.0-alpha.1 | Alpha, this release |
+| VMware vSphere + NSX | 2.0 | **Available (alpha)** |
 | Microsoft Hyper-V | 2.1 | **Available (alpha)**: hosts, VMs, virtual switches (`-HyperVServer`, or offline `-ExportCollector hyperv` + `-HyperVEvidence`) |
-| KVM / libvirt | 2.2 | Planned |
+| KVM / libvirt | 2.2 | **Available (alpha)**: hosts, guests, virtual networks (`-KvmServer` over SSH, or offline `-ExportCollector kvm` + `-KvmEvidence`) |
 
 ### VMware vSphere + NSX
 
@@ -132,7 +132,7 @@ With `-Redact` you also get `assessment.redacted.vsat.zip` and `report.redacted.
 | NSX | Modern NSX (Policy/Manager REST API) | **None yet** |
 | Linux / macOS runners | Not supported and not validated | — |
 | Hyper-V | Windows Server 2016–2025 (lifecycle data for 2012 R2–2025) | **None yet** in a live assessment; synthetic collector fixtures only |
-| KVM/libvirt | Planned for 2.2 | Not available yet |
+| KVM/libvirt | RHEL/Rocky/Alma 8–10, Ubuntu 22.04–26.04, Debian 12–13 (lifecycle data) | **None yet** in a live assessment; synthetic collector fixtures only |
 
 Versions will be added to the "Tested" column only after live lab verification, with exact builds listed. Older and unrecognized versions are still inventoried, and VSAT marks their coverage as legacy or manual.
 
@@ -176,7 +176,7 @@ VSAT is the *Virtualization Security Audit Tool*. It starts with VMware and will
 |---|---|---|---|
 | **2.0.0-alpha.1** | VMware vSphere, vCenter, ESXi + mandatory NSX | PowerCLI reads + NSX REST GET allowlist | **Current alpha** |
 | 2.1 | Microsoft Hyper-V (hosts, VMs, virtual switches) | Read-only PowerShell remoting / CIM, `-HyperVServer` | **Released (alpha)** |
-| 2.2 | KVM / libvirt | Read-only SSH commands, or an offline collection script whose JSON is imported with `-KvmEvidence`; `-KvmServer` | Planned |
+| 2.2 | KVM / libvirt | Read-only SSH (key auth, pinned host key) or offline `vsat-kvm-collect.sh` imported with `-KvmEvidence`; `-KvmServer` | **Released (alpha)** |
 
 Planned releases are not available yet, and their scope may change. Each one will ship with its own limitations and privilege guidance.
 

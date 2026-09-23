@@ -54,6 +54,13 @@
     Credential for -HyperVServer. Omit to use the current Windows identity (Kerberos).
 .PARAMETER HyperVEvidence
     Import Hyper-V collector output (JSON) produced offline by vsat-hyperv-collect.ps1.
+.PARAMETER KvmServer
+    KVM/libvirt hosts to assess over SSH (key authentication only; host key must be known
+    or pinned with -TrustedThumbprint "host=SHA256:<base64>"). Use "host:port" for non-22.
+.PARAMETER KvmUser
+    SSH user for -KvmServer (read access to libvirt, e.g. a member of the libvirt group).
+.PARAMETER KvmEvidence
+    Import output of vsat-kvm-collect.sh produced offline on a KVM host.
 .PARAMETER ExportCollector
     Write the read-only offline collector script for a platform to -OutputPath and exit.
 
@@ -95,7 +102,10 @@ param(
     [string[]]$HyperVServer,
     [System.Management.Automation.PSCredential]$HyperVCredential,
     [string[]]$HyperVEvidence,
-    [ValidateSet('hyperv')]
+    [string[]]$KvmServer,
+    [string]$KvmUser,
+    [string[]]$KvmEvidence,
+    [ValidateSet('hyperv', 'kvm')]
     [string]$ExportCollector,
     [Parameter(DontShow)]
     [switch]$LibraryMode

@@ -6,6 +6,25 @@ The format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+## [2.2.0-alpha.1] - 2026-09-23
+
+Adds **KVM/libvirt** as the third audited platform. Limited prerelease: not validated against a live KVM host; exercised with synthetic collector output and a smoke run of the collector script on a host without libvirt.
+
+### Added
+
+- KVM collection (`-KvmServer`, `-KvmUser`) by running a read-only POSIX shell collector over SSH with key authentication (`BatchMode`) and strict host-key checking; host keys can be pinned per endpoint with `-TrustedThumbprint "host=SHA256:<base64>"`.
+- Air-gapped workflow: `-ExportCollector kvm` writes `vsat-kvm-collect.sh` (virsh always `--readonly`, domain XML without `--security-info` so console passwords are never collected, no writes); import its output with `-KvmEvidence`.
+- 24 KVM rules (`KVM-*`) across three new domains (hosts, VMs, virtual networks): package update age and OS lifecycle, sVirt (SELinux/AppArmor), unauthenticated libvirt TCP, QEMU running as root, VNC TLS/loopback, seccomp, Secure Boot, host firewall, SSH root/password login, libvirt group review, nested virtualization, per-VM seclabel, network-exposed consoles, host device passthrough, TCP serial consoles, USB redirection, nwfilter anti-spoofing, guest Secure Boot/vTPM, snapshot age, open-forward networks.
+- Hyper-V, KVM and VMware can be assessed together in one run and one report.
+
+### Security
+
+- Untrusted XML from collector output is parsed with DTD processing prohibited and no resolver (XXE-safe); malformed or unsafe documents become `ERROR` evidence, never passes.
+
+### Fixed
+
+- CLI runs without vSphere targets, and runs with an empty remediation worklist, no longer fail.
+
 ## [2.1.0-alpha.1] - 2026-09-23
 
 Adds **Microsoft Hyper-V** as the second audited platform. Limited prerelease: not validated against a live Hyper-V host; exercised with synthetic collector output.
@@ -109,7 +128,8 @@ These 1.x defects are covered by regression fixtures:
 - First release: the VMware vSphere security audit script `vsat.ps1`. It had PowerCLI-based `Ensure-*` checks derived from CIS VMware ESXi benchmark controls, console output and `vsat.log`.
 - The static ESXi patch list `vmware/patches.json`.
 
-[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.1.0-alpha.1...HEAD
+[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.2.0-alpha.1...HEAD
+[2.2.0-alpha.1]: https://github.com/NextSecurity/VSAT/releases/tag/v2.2.0-alpha.1
 [2.1.0-alpha.1]: https://github.com/NextSecurity/VSAT/releases/tag/v2.1.0-alpha.1
 [2.0.0-alpha.1]: https://github.com/NextSecurity/VSAT/releases/tag/v2.0.0-alpha.1
 [1.0.0]: https://github.com/NextSecurity/VSAT/commit/5f7eda7dc99e859566b21258a49bdc7147b457e3

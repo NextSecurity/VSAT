@@ -1,0 +1,140 @@
+
+==VSAT:SECTION meta==
+collector=1
+collected_utc=2026-09-23T08:00:00Z
+hostname=kvm01.example.local
+
+==VSAT:SECTION os-release==
+NAME="Ubuntu"
+VERSION_ID="22.04"
+ID=ubuntu
+PRETTY_NAME="Ubuntu 22.04.5 LTS"
+
+==VSAT:SECTION kernel==
+5.15.0-122-generic
+
+==VSAT:SECTION virsh-version==
+Compiled against library: libvirt 8.0.0
+Using library: libvirt 8.0.0
+Using API: QEMU 8.0.0
+Running hypervisor: QEMU 6.2.0
+
+==VSAT:SECTION qemu-conf==
+user = "root"
+vnc_listen = "0.0.0.0"
+security_driver = "apparmor"
+
+==VSAT:SECTION libvirtd-conf==
+/etc/libvirt/libvirtd.conf: listen_tcp = 1
+/etc/libvirt/libvirtd.conf: auth_tcp = "none"
+
+==VSAT:SECTION services==
+libvirtd=active
+virtqemud=inactive
+firewalld=inactive
+nftables=inactive
+ufw=inactive
+sshd=unknown
+ssh=active
+
+==VSAT:SECTION listening==
+0.0.0.0:22
+0.0.0.0:16509
+127.0.0.1:5900
+0.0.0.0:5901
+
+==VSAT:SECTION mac==
+apparmor=Y
+
+==VSAT:SECTION secureboot==
+SecureBoot disabled
+
+==VSAT:SECTION nested==
+Y
+
+==VSAT:SECTION sshd==
+/etc/ssh/sshd_config:PermitRootLogin yes
+/etc/ssh/sshd_config:PasswordAuthentication yes
+
+==VSAT:SECTION groups==
+libvirt:x:120:ops,jdoe
+kvm:x:108:
+
+==VSAT:SECTION packages==
+qemu-system-x86 1:6.2+dfsg-2ubuntu6.22
+libvirt-daemon 8.0.0-1ubuntu7.10
+
+==VSAT:SECTION last-update==
+dpkgstatus=1750000000
+
+==VSAT:SECTION now==
+1790121600
+
+==VSAT:SECTION domains==
+web-kvm01
+nva-kvm01
+<img src=x onerror=alert(9)>
+
+==VSAT:SECTION domain:web-kvm01==
+<domain type='kvm'>
+  <name>web-kvm01</name>
+  <uuid>6a1f0e2c-0000-4000-8000-000000000001</uuid>
+  <os firmware='efi'><type arch='x86_64' machine='q35'>hvm</type><loader secure='yes'/></os>
+  <devices>
+    <interface type='network'><mac address='52:54:00:00:00:01'/><source network='default'/><filterref filter='clean-traffic'/></interface>
+    <graphics type='vnc' autoport='yes'><listen type='address' address='127.0.0.1'/></graphics>
+    <console type='pty'/>
+    <tpm model='tpm-crb'><backend type='emulator' version='2.0'/></tpm>
+  </devices>
+  <seclabel type='dynamic' model='apparmor' relabel='yes'/>
+</domain>
+
+==VSAT:SECTION dominfo:web-kvm01==
+Name:           web-kvm01
+State:          running
+Autostart:      enable
+Persistent:     yes
+
+==VSAT:SECTION snapshots:web-kvm01==
+ Name        Creation Time               Parent
+---------------------------------------------------
+ old-snap    2026-07-01 10:00:00 +0000
+
+==VSAT:SECTION domain:nva-kvm01==
+<domain type='kvm'>
+  <name>nva-kvm01</name>
+  <uuid>6a1f0e2c-0000-4000-8000-000000000002</uuid>
+  <os><type arch='x86_64' machine='pc'>hvm</type></os>
+  <devices>
+    <interface type='bridge'><mac address='52:54:00:00:00:02'/><source bridge='br0'/></interface>
+    <graphics type='vnc' port='5901'><listen type='address' address='0.0.0.0'/></graphics>
+    <serial type='tcp'><source mode='bind' host='0.0.0.0' service='4555'/></serial>
+    <hostdev mode='subsystem' type='pci'/>
+    <redirdev bus='usb' type='spicevmc'/>
+  </devices>
+  <seclabel type='none' model='apparmor'/>
+</domain>
+
+==VSAT:SECTION dominfo:nva-kvm01==
+Name:           nva-kvm01
+State:          running
+
+==VSAT:SECTION snapshots:nva-kvm01==
+
+==VSAT:SECTION domain:<img src=x onerror=alert(9)>==
+<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><domain><name>&xxe;</name></domain>
+
+==VSAT:SECTION networks==
+default
+open-net
+
+==VSAT:SECTION network:default==
+<network><name>default</name><forward mode='nat'/><bridge name='virbr0'/></network>
+
+==VSAT:SECTION network:open-net==
+<network><name>open-net</name><forward mode='open'/><bridge name='virbr9'/></network>
+
+==VSAT:SECTION pools==
+default
+
+==VSAT:SECTION end==

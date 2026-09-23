@@ -141,7 +141,7 @@ function ConvertTo-VsatCsvCell {
 }
 
 function Export-VsatCsv {
-    param([Parameter(Mandatory)][object[]]$Rows, [Parameter(Mandatory)][string[]]$Columns, [Parameter(Mandatory)][string]$Path)
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Rows, [Parameter(Mandatory)][string[]]$Columns, [Parameter(Mandatory)][string]$Path)
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine((($Columns | ForEach-Object { ConvertTo-VsatCsvCell $_ }) -join ','))
     foreach ($r in $Rows) {

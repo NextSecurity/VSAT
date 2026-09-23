@@ -1,6 +1,6 @@
 # Control coverage matrix
 
-Generated from rule pack **2026.09.0** for VSAT **2.1.0-alpha.1** by `build/New-CoverageDoc.ps1`. Do not edit by hand.
+Generated from rule pack **2026.09.0** for VSAT **2.2.0-alpha.1** by `build/New-CoverageDoc.ps1`. Do not edit by hand.
 
 - **Automated** checks evaluate collected evidence; missing or denied evidence yields UNKNOWN, never PASS.
 - **Manual** checks always produce MANUAL results with guidance; completion is not certification.
@@ -15,11 +15,14 @@ Generated from rule pack **2026.09.0** for VSAT **2.1.0-alpha.1** by `build/New-
 | hyperv-host | 17 | 16 | 1 |
 | hyperv-network | 2 | 1 | 1 |
 | hyperv-vm | 13 | 13 | 0 |
+| kvm-host | 13 | 12 | 1 |
+| kvm-vm | 9 | 9 | 0 |
+| kvm-network | 1 | 1 | 0 |
 | nsx | 27 | 26 | 1 |
 | vcenter | 9 | 5 | 4 |
 | cluster | 4 | 4 | 0 |
 | vm | 24 | 23 | 1 |
-| **total** | **159** | **146** | **13** |
+| **total** | **182** | **168** | **14** |
 
 ## esxi
 
@@ -145,6 +148,44 @@ Generated from rule pack **2026.09.0** for VSAT **2.1.0-alpha.1** by `build/New-
 | `HV-VM-CHECKPOINT-AGE` | No checkpoints older than 7 days | hyperv-vm | medium | automated | standard, strict | VSAT HV-VM-CHECKPOINT-AGE |
 | `HV-VM-MEDIA` | No ISO media or named-pipe COM ports attached | hyperv-vm | low | automated | standard, strict | VSAT HV-VM-MEDIA |
 | `HV-VM-DDA` | No devices assigned with Discrete Device Assignment | hyperv-vm | medium | automated | standard, strict | VSAT HV-VM-DDA |
+
+## kvm-host
+
+| Rule | Title | Asset | Severity | Type | Profiles | Framework references |
+|---|---|---|---|---|---|---|
+| `KVM-OS-PATCH-AGE` | KVM host received package updates recently | kvm-host | high | automated | standard, strict | VSAT KVM-OS-PATCH-AGE |
+| `KVM-OS-LIFECYCLE` | Host OS release is within vendor security support | kvm-host | high | automated | standard, strict | VSAT KVM-OS-LIFECYCLE |
+| `KVM-SVIRT` | sVirt confinement is active (SELinux/AppArmor enforcing) | kvm-host | high | automated | standard, strict | VSAT KVM-SVIRT |
+| `KVM-LIBVIRT-TCP` | No unauthenticated or plain-TCP libvirt listener | kvm-host | high | automated | standard, strict | VSAT KVM-LIBVIRT-TCP |
+| `KVM-QEMU-USER` | QEMU does not run as root | kvm-host | high | automated | standard, strict | VSAT KVM-QEMU-USER |
+| `KVM-VNC-TLS` | Host VNC default is loopback-only or TLS-protected | kvm-host | medium | automated | standard, strict | VSAT KVM-VNC-TLS |
+| `KVM-SECCOMP` | QEMU seccomp sandbox is not disabled | kvm-host | medium | automated | standard, strict | VSAT KVM-SECCOMP |
+| `KVM-SECUREBOOT` | Host boots with UEFI Secure Boot | kvm-host | medium | automated | standard, strict | VSAT KVM-SECUREBOOT |
+| `KVM-FIREWALL` | Host firewall service is active | kvm-host | high | automated | standard, strict | VSAT KVM-FIREWALL |
+| `KVM-SSH-ROOT` | SSH does not allow root password login | kvm-host | medium | automated | standard, strict | VSAT KVM-SSH-ROOT |
+| `KVM-SSH-PASSWORD` | SSH password authentication is disabled | kvm-host | low | automated | standard, strict | VSAT KVM-SSH-PASSWORD |
+| `KVM-LIBVIRT-GROUP` | libvirt/kvm group membership is reviewed | kvm-host | low | manual | standard, strict | VSAT KVM-LIBVIRT-GROUP |
+| `KVM-NESTED` | Nested virtualization is disabled | kvm-host | low | automated | strict | VSAT KVM-NESTED |
+
+## kvm-vm
+
+| Rule | Title | Asset | Severity | Type | Profiles | Framework references |
+|---|---|---|---|---|---|---|
+| `KVM-VM-SECLABEL` | Guest uses dynamic sVirt labeling | kvm-vm | high | automated | standard, strict | VSAT KVM-VM-SECLABEL |
+| `KVM-VM-GRAPHICS` | Guest console is not exposed on the network | kvm-vm | medium | automated | standard, strict | VSAT KVM-VM-GRAPHICS |
+| `KVM-VM-HOSTDEV` | No host device passthrough | kvm-vm | medium | automated | standard, strict | VSAT KVM-VM-HOSTDEV |
+| `KVM-VM-CONSOLE-NET` | No network-backed serial consoles | kvm-vm | medium | automated | standard, strict | VSAT KVM-VM-CONSOLE-NET |
+| `KVM-VM-USBREDIR` | No USB redirection devices | kvm-vm | low | automated | standard, strict | VSAT KVM-VM-USBREDIR |
+| `KVM-VM-NWFILTER` | Guest interfaces use an anti-spoofing nwfilter | kvm-vm | low | automated | standard, strict | VSAT KVM-VM-NWFILTER |
+| `KVM-VM-SECUREBOOT` | Guest uses UEFI Secure Boot | kvm-vm | low | automated | strict | VSAT KVM-VM-SECUREBOOT |
+| `KVM-VM-TPM` | Guest has a virtual TPM | kvm-vm | low | automated | strict | VSAT KVM-VM-TPM |
+| `KVM-VM-SNAPSHOT-AGE` | No snapshots older than 7 days | kvm-vm | medium | automated | standard, strict | VSAT KVM-VM-SNAPSHOT-AGE |
+
+## kvm-network
+
+| Rule | Title | Asset | Severity | Type | Profiles | Framework references |
+|---|---|---|---|---|---|---|
+| `KVM-NET-OPEN` | Virtual network is not in 'open' forward mode | kvm-network | medium | automated | standard, strict | VSAT KVM-NET-OPEN |
 
 ## nsx
 

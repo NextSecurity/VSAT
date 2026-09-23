@@ -48,7 +48,7 @@ function Disconnect-VsatAll {
 }
 
 function Invoke-VsatLiveCollection {
-    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][object[]]$Targets)
+    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Targets)
     $vs = @($Targets | Where-Object { $_.type -in @('vcenter', 'esxi') })
     $nsx = @($Targets | Where-Object { $_.type -eq 'nsx' })
     $script:VsatProgress.totalSteps = ($vs.Count * 6) + ($nsx.Count * 7)
