@@ -38,7 +38,7 @@
   "description": "Portable PowerShell security auditing for VMware vSphere, vCenter, ESX/ESXi and NSX, with offline reports, topology maps and remediation guidance.",
   "applicationCategory": "SecurityApplication",
   "operatingSystem": "Windows",
-  "softwareVersion": "2.0.0-alpha.1",
+  "softwareVersion": "2.1.0-alpha.1",
   "softwareRequirements": "PowerShell 7.4 or later; VMware PowerCLI",
   "license": "https://opensource.org/licenses/MIT",
   "url": "https://nextsecurity.github.io/VSAT/",
@@ -161,7 +161,7 @@
         </tbody>
         <tbody data-platform="planned">
           <tr class="platform"><th scope="rowgroup" colspan="3">Planned platforms <span class="rel">next releases, not yet available</span></th></tr>
-          <tr class="planned"><th scope="row">Microsoft Hyper-V <span class="chip chip-plan">2.1 planned</span></th><td>Hosts, VMs and virtual switches</td><td>PowerShell remoting / CIM (read)</td></tr>
+          <tr><th scope="row">Microsoft Hyper-V <span class="chip chip-plan">2.1 alpha</span></th><td>Hosts, VMs and virtual switches</td><td>PowerShell remoting / CIM (read)</td></tr>
           <tr class="planned"><th scope="row">KVM / libvirt <span class="chip chip-plan">2.2 planned</span></th><td>Hosts, guests and networks</td><td>Read-only SSH or offline collector</td></tr>
         </tbody>
       </table>
@@ -295,7 +295,7 @@
     <p class="section-lede">VSAT stands for <em>Virtualization Security Audit Tool</em>. It starts with VMware and grows to other hypervisors, using the same evidence model, report, coverage rules and read-only guarantees.</p>
     <ol class="roadmap">
       <li class="now"><span class="state">Current</span><span class="ver">2.0.0-alpha.1</span><h3>VMware vSphere + NSX</h3><p>vCenter, ESXi, clusters, VMs, virtual networking, mandatory NSX, storage &amp; recovery.</p></li>
-      <li class="next"><span class="state">Planned, next</span><span class="ver">2.1</span><h3>Microsoft Hyper-V</h3><p>Hosts, VMs and virtual switches through read-only PowerShell remoting and CIM (<code>-HyperVServer</code>).</p></li>
+      <li><span class="state">Released (alpha)</span><span class="ver">2.1</span><h3>Microsoft Hyper-V</h3><p>Hosts, VMs and virtual switches through read-only PowerShell remoting and CIM (<code>-HyperVServer</code>).</p></li>
       <li class="next"><span class="state">Planned</span><span class="ver">2.2</span><h3>KVM / libvirt</h3><p>Read-only SSH commands, or an offline collection script whose JSON output VSAT imports (<code>-KvmServer</code>, <code>-KvmEvidence</code>).</p></li>
     </ol>
     <p class="fine">Planned releases are not yet available. Their scope may change, and each one will ship with its own limitations.</p>

@@ -73,7 +73,7 @@ Coverage is organized **by platform, then by domain**. Each platform VSAT suppor
 | Platform | Release | Status |
 |---|---|---|
 | VMware vSphere + NSX | 2.0.0-alpha.1 | Alpha, this release |
-| Microsoft Hyper-V | 2.1 | Planned, next release |
+| Microsoft Hyper-V | 2.1 | **Available (alpha)**: hosts, VMs, virtual switches (`-HyperVServer`, or offline `-ExportCollector hyperv` + `-HyperVEvidence`) |
 | KVM / libvirt | 2.2 | Planned |
 
 ### VMware vSphere + NSX
@@ -131,7 +131,8 @@ With `-Redact` you also get `assessment.redacted.vsat.zip` and `report.redacted.
 | vCenter / ESXi | 8.x and 9.x as modern; 7.x as legacy | **None yet** |
 | NSX | Modern NSX (Policy/Manager REST API) | **None yet** |
 | Linux / macOS runners | Not supported and not validated | — |
-| Hyper-V, KVM/libvirt | Planned for 2.1 and 2.2 | Not available yet |
+| Hyper-V | Windows Server 2016–2025 (lifecycle data for 2012 R2–2025) | **None yet** in a live assessment; synthetic collector fixtures only |
+| KVM/libvirt | Planned for 2.2 | Not available yet |
 
 Versions will be added to the "Tested" column only after live lab verification, with exact builds listed. Older and unrecognized versions are still inventoried, and VSAT marks their coverage as legacy or manual.
 
@@ -174,7 +175,7 @@ VSAT is the *Virtualization Security Audit Tool*. It starts with VMware and will
 | Release | Platform | Approach | Status |
 |---|---|---|---|
 | **2.0.0-alpha.1** | VMware vSphere, vCenter, ESXi + mandatory NSX | PowerCLI reads + NSX REST GET allowlist | **Current alpha** |
-| 2.1 | Microsoft Hyper-V (hosts, VMs, virtual switches) | Read-only PowerShell remoting / CIM, `-HyperVServer` | Planned, next release |
+| 2.1 | Microsoft Hyper-V (hosts, VMs, virtual switches) | Read-only PowerShell remoting / CIM, `-HyperVServer` | **Released (alpha)** |
 | 2.2 | KVM / libvirt | Read-only SSH commands, or an offline collection script whose JSON is imported with `-KvmEvidence`; `-KvmServer` | Planned |
 
 Planned releases are not available yet, and their scope may change. Each one will ship with its own limitations and privilege guidance.

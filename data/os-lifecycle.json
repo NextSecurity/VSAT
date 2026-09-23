@@ -1,0 +1,258 @@
+{
+  "schemaVersion": "1.0",
+  "snapshotDate": "2026-09-23",
+  "notes": "Dates verified against official vendor pages on 2026-09-23. Windows: Microsoft pages show end times as 'M/D/YYYY 6:59:59 AM' PT of the day after the last Patch Tuesday; stored value is the last supported day (the Patch Tuesday, i.e. page date minus one day). Windows endOfSupport = Extended End Date. RHEL endOfMainstream = end of Full Support, endOfSupport = end of Maintenance Support (ELS excluded). Ubuntu and Proxmox pages give month precision only; stored as last day of month and flagged datePrecision=month. Debian endOfSupport = end of regular Debian security support, endOfLts = end of Debian LTS (ELTS excluded). null means not confirmed on an official page. Azure Stack HCI / Azure Local omitted (Modern Lifecycle, per-version servicing; build mapping unclear). Treat a date as 'supported through end of that day'.",
+  "matching": {
+    "windows-server": {
+      "source": "Win32_OperatingSystem.BuildNumber",
+      "rule": "exact string match of BuildNumber to branch (e.g. '17763'). Also require ProductType != 1 (server) to avoid matching client Windows builds that share a number (e.g. 26100 is also Windows 11 24H2, 14393 is also Windows 10 1607, 17763 is Windows 10 1809)."
+    },
+    "linux": {
+      "source": "/etc/os-release",
+      "productFromId": {
+        "rhel": "rhel",
+        "rocky": "rocky",
+        "almalinux": "almalinux",
+        "ubuntu": "ubuntu",
+        "debian": "debian"
+      },
+      "rule": "rhel/rocky/almalinux/debian: branch = VERSION_ID split on '.' take first part ('9.4' -> '9', '12' -> '12'). ubuntu: branch = full VERSION_ID ('22.04'). Only Ubuntu LTS releases are listed; non-LTS VERSION_IDs have no entry."
+    },
+    "proxmox-ve": {
+      "source": "pveversion output (pve-manager/X.Y.Z)",
+      "rule": "branch = major version X. /etc/os-release reports the Debian base (ID=debian), so check Proxmox first."
+    }
+  },
+  "lifecycle": [
+    {
+      "product": "windows-server",
+      "branch": "9600",
+      "name": "Windows Server 2012 R2",
+      "endOfMainstream": "2018-10-09",
+      "endOfSupport": "2023-10-10",
+      "url": "https://learn.microsoft.com/en-us/lifecycle/products/windows-server-2012-r2",
+      "verifiedDate": "2026-09-23",
+      "endOfEsu": "2026-10-13",
+      "esuNote": "Extended Security Update Year 3 (paid ESU / Azure) ends 10/14/2026 6:59:59 AM PT per page; last covered Patch Tuesday 2026-10-13. Treat as out of support unless ESU is enrolled."
+    },
+    {
+      "product": "windows-server",
+      "branch": "14393",
+      "name": "Windows Server 2016",
+      "endOfMainstream": "2022-01-11",
+      "endOfSupport": "2027-01-12",
+      "url": "https://learn.microsoft.com/en-us/lifecycle/products/windows-server-2016",
+      "verifiedDate": "2026-09-23"
+    },
+    {
+      "product": "windows-server",
+      "branch": "17763",
+      "name": "Windows Server 2019",
+      "endOfMainstream": "2024-01-09",
+      "endOfSupport": "2029-01-09",
+      "url": "https://learn.microsoft.com/en-us/lifecycle/products/windows-server-2019",
+      "verifiedDate": "2026-09-23"
+    },
+    {
+      "product": "windows-server",
+      "branch": "20348",
+      "name": "Windows Server 2022",
+      "endOfMainstream": "2026-10-13",
+      "endOfSupport": "2031-10-14",
+      "url": "https://learn.microsoft.com/en-us/lifecycle/products/windows-server-2022",
+      "verifiedDate": "2026-09-23"
+    },
+    {
+      "product": "windows-server",
+      "branch": "26100",
+      "name": "Windows Server 2025",
+      "endOfMainstream": "2029-11-13",
+      "endOfSupport": "2034-11-14",
+      "url": "https://learn.microsoft.com/en-us/lifecycle/products/windows-server-2025",
+      "verifiedDate": "2026-09-23"
+    },
+    {
+      "product": "rhel",
+      "branch": "7",
+      "name": "Red Hat Enterprise Linux 7",
+      "endOfMainstream": null,
+      "endOfSupport": "2024-06-30",
+      "url": "https://access.redhat.com/articles/7005471",
+      "verifiedDate": "2026-09-23",
+      "note": "RHEL 7 is no longer listed in the errata page table. End of Maintenance (transition to Extended Life Phase) on June 30, 2024 confirmed in the Red Hat FAQ article 7005471 and errata_legacy page. End of Full Support date not confirmed on a current official page -> null. ELS add-on available through 2029-05-31 (not counted as endOfSupport)."
+    },
+    {
+      "product": "rhel",
+      "branch": "8",
+      "name": "Red Hat Enterprise Linux 8",
+      "endOfMainstream": "2024-05-31",
+      "endOfSupport": "2029-05-31",
+      "url": "https://access.redhat.com/support/policy/updates/errata",
+      "verifiedDate": "2026-09-23",
+      "note": "ELS add-on ends 2033-05-31. Dates from Red Hat Product Life Cycles data backing the errata page."
+    },
+    {
+      "product": "rhel",
+      "branch": "9",
+      "name": "Red Hat Enterprise Linux 9",
+      "endOfMainstream": "2027-05-31",
+      "endOfSupport": "2032-05-31",
+      "url": "https://access.redhat.com/support/policy/updates/errata",
+      "verifiedDate": "2026-09-23",
+      "note": "ELS add-on ends 2036-05-31. Red Hat states future dates are approximations subject to change."
+    },
+    {
+      "product": "rhel",
+      "branch": "10",
+      "name": "Red Hat Enterprise Linux 10",
+      "endOfMainstream": "2030-05-31",
+      "endOfSupport": "2035-05-31",
+      "url": "https://access.redhat.com/support/policy/updates/errata",
+      "verifiedDate": "2026-09-23",
+      "note": "ELS add-on ends 2039-05-31. Red Hat states future dates are approximations subject to change."
+    },
+    {
+      "product": "rocky",
+      "branch": "8",
+      "name": "Rocky Linux 8",
+      "endOfMainstream": "2024-05-31",
+      "endOfSupport": "2029-05-31",
+      "url": "https://wiki.rockylinux.org/rocky/version/",
+      "verifiedDate": "2026-09-23",
+      "note": "endOfMainstream = end of active support; endOfSupport = end of life (security)."
+    },
+    {
+      "product": "rocky",
+      "branch": "9",
+      "name": "Rocky Linux 9",
+      "endOfMainstream": "2027-05-31",
+      "endOfSupport": "2032-05-31",
+      "url": "https://wiki.rockylinux.org/rocky/version/",
+      "verifiedDate": "2026-09-23",
+      "note": "endOfMainstream = end of active support; endOfSupport = end of life (security)."
+    },
+    {
+      "product": "almalinux",
+      "branch": "8",
+      "name": "AlmaLinux OS 8",
+      "endOfMainstream": "2024-05-31",
+      "endOfSupport": "2029-05-31",
+      "url": "https://wiki.almalinux.org/release-notes/",
+      "verifiedDate": "2026-09-23",
+      "note": "Active support / security support per AlmaLinux wiki."
+    },
+    {
+      "product": "almalinux",
+      "branch": "9",
+      "name": "AlmaLinux OS 9",
+      "endOfMainstream": "2027-05-31",
+      "endOfSupport": "2032-05-31",
+      "url": "https://wiki.almalinux.org/release-notes/",
+      "verifiedDate": "2026-09-23",
+      "note": "Active support / security support per AlmaLinux wiki."
+    },
+    {
+      "product": "ubuntu",
+      "branch": "20.04",
+      "name": "Ubuntu 20.04 LTS",
+      "endOfMainstream": null,
+      "endOfSupport": "2025-05-31",
+      "endOfEsm": "2030-05-31",
+      "datePrecision": "month",
+      "url": "https://ubuntu.com/about/release-cycle",
+      "verifiedDate": "2026-09-23",
+      "note": "Official page states month only (standard security maintenance ends 2025-05); stored as last day of that month. endOfEsm = Ubuntu Pro Expanded Security Maintenance (not standard support)."
+    },
+    {
+      "product": "ubuntu",
+      "branch": "22.04",
+      "name": "Ubuntu 22.04 LTS",
+      "endOfMainstream": null,
+      "endOfSupport": "2027-05-31",
+      "endOfEsm": "2032-05-31",
+      "datePrecision": "month",
+      "url": "https://ubuntu.com/about/release-cycle",
+      "verifiedDate": "2026-09-23",
+      "note": "Official page states month only (standard security maintenance ends 2027-05); stored as last day of that month. endOfEsm = Ubuntu Pro Expanded Security Maintenance (not standard support)."
+    },
+    {
+      "product": "ubuntu",
+      "branch": "24.04",
+      "name": "Ubuntu 24.04 LTS",
+      "endOfMainstream": null,
+      "endOfSupport": "2029-05-31",
+      "endOfEsm": "2034-05-31",
+      "datePrecision": "month",
+      "url": "https://ubuntu.com/about/release-cycle",
+      "verifiedDate": "2026-09-23",
+      "note": "Official page states month only (standard security maintenance ends 2029-05); stored as last day of that month. endOfEsm = Ubuntu Pro Expanded Security Maintenance (not standard support)."
+    },
+    {
+      "product": "ubuntu",
+      "branch": "26.04",
+      "name": "Ubuntu 26.04 LTS",
+      "endOfMainstream": null,
+      "endOfSupport": "2031-05-31",
+      "endOfEsm": "2036-05-31",
+      "datePrecision": "month",
+      "url": "https://ubuntu.com/about/release-cycle",
+      "verifiedDate": "2026-09-23",
+      "note": "Official page states month only (standard security maintenance ends 2031-05); stored as last day of that month. endOfEsm = Ubuntu Pro Expanded Security Maintenance (not standard support)."
+    },
+    {
+      "product": "debian",
+      "branch": "11",
+      "name": "Debian 11 (bullseye)",
+      "endOfMainstream": null,
+      "endOfSupport": "2024-08-14",
+      "endOfLts": "2026-08-31",
+      "url": "https://www.debian.org/releases/bullseye/",
+      "verifiedDate": "2026-09-23",
+      "note": "Consistent with https://wiki.debian.org/LTS (LTS 2024-08-15 - 2026-08-31). Paid third-party ELTS to 2031-06-30 not counted."
+    },
+    {
+      "product": "debian",
+      "branch": "12",
+      "name": "Debian 12 (bookworm)",
+      "endOfMainstream": null,
+      "endOfSupport": "2026-06-10",
+      "endOfLts": "2028-06-30",
+      "url": "https://wiki.debian.org/LTS",
+      "verifiedDate": "2026-09-23",
+      "note": "wiki.debian.org/LTS lists bookworm LTS period 2026-06-11 - 2028-06-30, so regular security support ended 2026-06-10 (derived). DISCREPANCY: debian.org/releases/bookworm/ states full support 'until July 11th, 2026' (appears to be a typo; both dates are in the past as of snapshot)."
+    },
+    {
+      "product": "debian",
+      "branch": "13",
+      "name": "Debian 13 (trixie)",
+      "endOfMainstream": null,
+      "endOfSupport": "2028-08-09",
+      "endOfLts": "2030-06-30",
+      "url": "https://www.debian.org/releases/trixie/",
+      "verifiedDate": "2026-09-23",
+      "note": "Consistent with wiki.debian.org/LTS (LTS 2028-08-09 - 2030-06-30)."
+    },
+    {
+      "product": "proxmox-ve",
+      "branch": "8",
+      "name": "Proxmox VE 8",
+      "endOfMainstream": null,
+      "endOfSupport": "2026-08-31",
+      "datePrecision": "month",
+      "url": "https://pve.proxmox.com/wiki/FAQ",
+      "verifiedDate": "2026-09-23",
+      "note": "FAQ lists Proxmox EOL '2026-08' (Debian 12 base); stored as last day of month."
+    },
+    {
+      "product": "proxmox-ve",
+      "branch": "9",
+      "name": "Proxmox VE 9",
+      "endOfMainstream": null,
+      "endOfSupport": null,
+      "datePrecision": "month",
+      "url": "https://pve.proxmox.com/wiki/FAQ",
+      "verifiedDate": "2026-09-23",
+      "note": "FAQ lists EOL as 'tba' (Debian 13 base). Not confirmed -> null."
+    }
+  ]
+}

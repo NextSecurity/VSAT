@@ -61,6 +61,9 @@ Describe 'Local UI server security' {
         $cmd.credential.Password | Should -BeOfType [System.Security.SecureString]
     }
     It 'rejects oversized bodies' {
-        (Invoke-Raw POST '/api/run' @{ 'X-VSAT-Token' = $script:State.token; 'Content-Type' = 'application/json' } ('{"a":"' + ('x' * 70000) + '"}')).code | Should -Be 400
+        # The server refuses before reading the body; the client sees either 400 or a reset.
+        $code = try { (Invoke-Raw POST '/api/run' @{ 'X-VSAT-Token' = $script:State.token; 'Content-Type' = 'application/json' } ('{"a":"' + ('x' * 70000) + '"}')).code } catch { 'reset' }
+        $code | Should -BeIn @(400, 'reset')
+        $script:State.queue.Count | Should -Be 0
     }
 }

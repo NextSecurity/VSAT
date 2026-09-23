@@ -80,7 +80,7 @@ function Test-VsatAssetMatch {
 
 #region Exceptions and priority
 function Set-VsatExceptions {
-    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][object[]]$Findings)
+    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings)
     $now = [DateTime]::UtcNow
     foreach ($ex in @($Evidence.scope.exceptions)) {
         $exp = $null
@@ -97,7 +97,7 @@ function Set-VsatExceptions {
 }
 
 function Set-VsatPriority {
-    param([Parameter(Mandatory)][object[]]$Findings, [Parameter(Mandatory)]$Context, $PathTargets)
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings, [Parameter(Mandatory)]$Context, $PathTargets)
     $base = @{ critical = 90; high = 70; medium = 45; low = 20; info = 5 }
     foreach ($f in $Findings) {
         if ($f.result -notin @('FAIL', 'UNKNOWN', 'ERROR')) { continue }
@@ -300,18 +300,22 @@ function Get-VsatImpact {
             'connects' { if ($Context.assets[$r.source] -and $Context.assets[$r.source].type -eq 'vm') { if (-not $vmsOnNet[$r.target]) { $vmsOnNet[$r.target] = [System.Collections.Generic.List[string]]::new() }; $vmsOnNet[$r.target].Add($r.source) } }
         }
     }
-    foreach ($h in @($ev.assets | Where-Object { $_.type -eq 'host' })) {
-        $cl = @($Context.in[$h.id] | Where-Object { $_.type -eq 'contains' -and $Context.assets[$_.source] -and $Context.assets[$_.source].type -eq 'cluster' }) | Select-Object -First 1
+    foreach ($h in @($ev.assets | Where-Object { $_.type -in @('host', 'hyperv-host', 'kvm-host') })) {
+        $cl = @($Context.in[$h.id] | Where-Object { $_.type -eq 'contains' -and $Context.assets[$_.source] -and $Context.assets[$_.source].type -in @('cluster', 'hyperv-cluster') }) | Select-Object -First 1
         $ha = $false; $peers = 0
         if ($cl) {
             $c = $Context.assets[$cl.source]
-            $ha = [bool](Get-VsatProp $c.facts 'ha.value.enabled' $false)
-            $peers = @($Context.out[$c.id] | Where-Object { $_.type -eq 'contains' }).Count - 1
+            $ha = if ($c.type -eq 'hyperv-cluster') { $true } else { [bool](Get-VsatProp $c.facts 'ha.value.enabled' $false) }
+            $peers = if ($c.type -eq 'hyperv-cluster') { @($c.props.nodes).Count - 1 } else { @($Context.out[$c.id] | Where-Object { $_.type -eq 'contains' }).Count - 1 }
         }
-        $effect = if ($ha -and $peers -gt 0) { 'restart-expected' } else { 'outage' }
-        $reason = if ($effect -eq 'restart-expected') { "HA enabled with $peers other host(s); restart depends on capacity and admission control" } else { 'No HA restart target in cluster' }
-        $aff = @($vmsOnHost[$h.id] | Select-Object -First $MaxAffected | ForEach-Object { [ordered]@{ asset = $_; effect = $effect; reason = $reason } })
-        if ($aff.Count) { $list.Add([ordered]@{ component = $h.id; componentType = 'host'; affected = $aff; redundancy = $(if ($effect -eq 'restart-expected') { 'redundant' } else { 'none' }); notes = @('HA capacity is not verified; this is not proof of successful failover') }) }
+        $aff = @($vmsOnHost[$h.id] | Select-Object -First $MaxAffected | ForEach-Object {
+                $vmA = $Context.assets[$_]
+                # Hyper-V: only clustered VMs fail over; KVM: no libvirt-level HA is assumed.
+                $vmHa = $ha -and $peers -gt 0 -and ($h.type -ne 'hyperv-host' -or [bool](Get-VsatProp $vmA 'props.clustered' $false))
+                $effect = if ($vmHa) { 'restart-expected' } else { 'outage' }
+                [ordered]@{ asset = $_; effect = $effect; reason = $(if ($vmHa) { "HA/failover clustering with $peers other node(s); restart depends on capacity" } else { 'No HA restart target known' }) } })
+        $effect = if (@($aff | Where-Object { $_.effect -eq 'restart-expected' }).Count -eq $aff.Count -and $aff.Count) { 'restart-expected' } else { 'outage' }
+        if ($aff.Count) { $list.Add([ordered]@{ component = $h.id; componentType = $h.type; affected = $aff; redundancy = $(if ($effect -eq 'restart-expected') { 'redundant' } else { 'none' }); notes = @('HA capacity is not verified; this is not proof of successful failover') }) }
     }
     foreach ($d in @($ev.assets | Where-Object { $_.type -eq 'datastore' })) {
         $isVsan = ($d.props.type -eq 'vsan')
@@ -363,7 +367,7 @@ function Get-VsatImpact {
 
 #region Work packages
 function Get-VsatWorkPackages {
-    param([Parameter(Mandatory)][object[]]$Findings)
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings)
     $pack = Get-VsatRulePackMeta
     $defs = @{}; foreach ($w in @($pack.workPackages)) { $defs[$w.id] = $w }
     $groups = [ordered]@{}

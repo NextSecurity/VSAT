@@ -6,6 +6,27 @@ The format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+## [2.1.0-alpha.1] - 2026-09-23
+
+Adds **Microsoft Hyper-V** as the second audited platform. Limited prerelease: not validated against a live Hyper-V host; exercised with synthetic collector output.
+
+### Added
+
+- Hyper-V collection (`-HyperVServer`, `-HyperVCredential`) through one read-only collector script executed over PowerShell remoting (Kerberos/Negotiate, or `https://host` for WinRM over HTTPS) or locally (`localhost`). Collects host OS/build, update age, VBS/HVCI/Credential Guard, Secure Boot, TPM, Windows Firewall, SMB, services, RDP NLA, live migration, Replica, local/Hyper-V admin groups, failover cluster, virtual switches and per-VM security, firmware, adapters (MAC spoofing, DHCP/router guard, mirroring, VLAN mode), integration services, checkpoints and devices.
+- Air-gapped workflow: `-ExportCollector hyperv` writes `vsat-hyperv-collect.ps1` (Windows PowerShell 5.1 compatible, `Get-*`/CIM reads only); import its JSON with `-HyperVEvidence`.
+- 34 Hyper-V rules (`HV-*`) across three new mandatory-when-in-scope domains: Hyper-V hosts, virtual machines and virtual switches.
+- Verified OS lifecycle snapshot `data/os-lifecycle.json` (Windows Server 2012 R2–2025, RHEL, Rocky, AlmaLinux, Ubuntu, Debian, Proxmox VE) with official sources.
+- Failure-impact modeling for Hyper-V: clustered VMs restart on other nodes, non-clustered VMs are an outage.
+- Platform-neutral work packages (`WP-HOST-HARDENING`, `WP-HOST-SERVICES`, `WP-HOST-ACCESS`).
+
+### Changed
+
+- Coverage domains are platform-aware: VMware domains (and NSX) are `NOT_APPLICABLE` when no VMware endpoints are in scope; Hyper-V domains are mandatory whenever Hyper-V endpoints are in scope.
+
+### Fixed
+
+- The analysis pipeline no longer fails when a run produces zero findings (for example when every host collection fails); coverage is reported as `INCOMPLETE`.
+
 ## [2.0.0-alpha.1] - 2026-09-23
 
 This is a full rewrite of VSAT. **It is a limited prerelease.** It has not been validated against a live vCenter, ESXi or NSX lab. Artifacts are not code-signed. CIS control ID mappings are marked `unverified`. No performance measurements exist. See [docs/limitations.md](docs/limitations.md).
@@ -88,6 +109,7 @@ These 1.x defects are covered by regression fixtures:
 - First release: the VMware vSphere security audit script `vsat.ps1`. It had PowerCLI-based `Ensure-*` checks derived from CIS VMware ESXi benchmark controls, console output and `vsat.log`.
 - The static ESXi patch list `vmware/patches.json`.
 
-[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.0.0-alpha.1...HEAD
+[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.1.0-alpha.1...HEAD
+[2.1.0-alpha.1]: https://github.com/NextSecurity/VSAT/releases/tag/v2.1.0-alpha.1
 [2.0.0-alpha.1]: https://github.com/NextSecurity/VSAT/releases/tag/v2.0.0-alpha.1
 [1.0.0]: https://github.com/NextSecurity/VSAT/commit/5f7eda7dc99e859566b21258a49bdc7147b457e3

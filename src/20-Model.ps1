@@ -42,10 +42,10 @@ function New-VsatScope {
 }
 
 function Add-VsatEndpoint {
-    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][ValidateSet('vcenter', 'esxi', 'nsx')][string]$Type, [Parameter(Mandatory)][string]$Address)
+    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][ValidateSet('vcenter', 'esxi', 'nsx', 'hyperv', 'kvm')][string]$Type, [Parameter(Mandatory)][string]$Address)
     $existing = $Evidence.scope.endpoints | Where-Object { $_.address -eq $Address -and $_.type -eq $Type } | Select-Object -First 1
     if ($existing) { return $existing }
-    $prefix = if ($Type -eq 'nsx') { 'ep-nsx' } else { 'ep-vc' }
+    $prefix = switch ($Type) { 'nsx' { 'ep-nsx' } 'hyperv' { 'ep-hv' } 'kvm' { 'ep-kvm' } default { 'ep-vc' } }
     $n = @($Evidence.scope.endpoints | Where-Object { $_.id -like "$prefix*" }).Count + 1
     $ep = [ordered]@{ id = ('{0}{1:d2}' -f $prefix, $n); type = $Type; address = $Address; status = 'not-attempted'; product = $null; version = $null; build = $null; instanceUuid = $null; apiVersion = $null; errors = [System.Collections.Generic.List[string]]::new() }
     $Evidence.scope.endpoints.Add($ep)

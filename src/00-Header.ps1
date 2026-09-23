@@ -47,6 +47,15 @@
     Run against the built-in synthetic lab. No connectivity or credentials.
 .PARAMETER Version
     Print version information and exit.
+.PARAMETER HyperVServer
+    Microsoft Hyper-V hosts to assess over PowerShell remoting (WinRM). Use "https://host"
+    for WinRM over HTTPS, or "localhost" to assess the local host.
+.PARAMETER HyperVCredential
+    Credential for -HyperVServer. Omit to use the current Windows identity (Kerberos).
+.PARAMETER HyperVEvidence
+    Import Hyper-V collector output (JSON) produced offline by vsat-hyperv-collect.ps1.
+.PARAMETER ExportCollector
+    Write the read-only offline collector script for a platform to -OutputPath and exit.
 
 .EXAMPLE
     .\vsat.ps1
@@ -83,6 +92,11 @@ param(
     [switch]$NoBrowser,
     [switch]$Demo,
     [switch]$Version,
+    [string[]]$HyperVServer,
+    [System.Management.Automation.PSCredential]$HyperVCredential,
+    [string[]]$HyperVEvidence,
+    [ValidateSet('hyperv')]
+    [string]$ExportCollector,
     [Parameter(DontShow)]
     [switch]$LibraryMode
 )

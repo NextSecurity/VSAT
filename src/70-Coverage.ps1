@@ -11,6 +11,12 @@ $script:VsatDomains = @(
     [ordered]@{ id = 'network'; name = 'Virtual networking'; mandatory = $true; platform = 'vmware'; collectors = @('vsphere.hosts', 'vsphere.vds'); assetTypes = @('vss', 'vds', 'portgroup', 'dvportgroup') }
     [ordered]@{ id = 'nsx'; name = 'NSX'; mandatory = $true; platform = 'vmware'; collectors = @('nsx.manager', 'nsx.fabric', 'nsx.networking', 'nsx.groups', 'nsx.dfw', 'nsx.gfw', 'nsx.inventory'); assetTypes = @('nsx-manager') }
     [ordered]@{ id = 'storage'; name = 'Storage and recovery'; mandatory = $true; platform = 'vmware'; collectors = @('vsphere.datastores'); assetTypes = @('datastore') }
+    [ordered]@{ id = 'hyperv-host'; name = 'Hyper-V hosts'; mandatory = $true; platform = 'hyperv'; collectors = @('hyperv.host'); assetTypes = @('hyperv-host') }
+    [ordered]@{ id = 'hyperv-vm'; name = 'Hyper-V virtual machines'; mandatory = $true; platform = 'hyperv'; collectors = @('hyperv.vms'); assetTypes = @('hyperv-vm') }
+    [ordered]@{ id = 'hyperv-network'; name = 'Hyper-V virtual switches'; mandatory = $true; platform = 'hyperv'; collectors = @('hyperv.network'); assetTypes = @('hyperv-vswitch') }
+    [ordered]@{ id = 'kvm-host'; name = 'KVM/libvirt hosts'; mandatory = $true; platform = 'kvm'; collectors = @('kvm.host'); assetTypes = @('kvm-host') }
+    [ordered]@{ id = 'kvm-vm'; name = 'KVM virtual machines'; mandatory = $true; platform = 'kvm'; collectors = @('kvm.vms'); assetTypes = @('kvm-vm') }
+    [ordered]@{ id = 'kvm-network'; name = 'KVM virtual networks'; mandatory = $true; platform = 'kvm'; collectors = @('kvm.network'); assetTypes = @('kvm-network') }
 )
 
 function Update-VsatNsxDiscovery {
@@ -100,7 +106,7 @@ function Get-VsatNsxCoverage {
 }
 
 function Get-VsatCoverage {
-    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][object[]]$Findings)
+    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings)
     $domains = [System.Collections.Generic.List[object]]::new()
     $vsEps = @($Evidence.scope.endpoints | Where-Object { $_.type -in @('vcenter', 'esxi') })
     $hasVc = @($vsEps | Where-Object { $_.type -eq 'vcenter' }).Count -gt 0
@@ -163,7 +169,7 @@ function Get-VsatPlatformEndpoints {
 }
 
 function Get-VsatRunStatus {
-    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)]$Coverage, [Parameter(Mandatory)][object[]]$Findings)
+    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)]$Coverage, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings)
     $reasons = [System.Collections.Generic.List[string]]::new()
     if ($Evidence.run.status -eq 'canceled') {
         return [ordered]@{ overall = 'canceled'; label = 'CANCELED: PARTIAL RESULTS PRESERVED'; exitCode = 4; reasons = @('The run was canceled; collected evidence was preserved.') }

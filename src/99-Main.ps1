@@ -80,6 +80,41 @@ function Invoke-VsatLiveCollection {
     }
 }
 
+function Invoke-VsatPlatformCollection {
+    # Hyper-V and KVM: live collection or import of offline collector output.
+    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][hashtable]$A)
+    foreach ($s in @($A.HyperVServer | Where-Object { $_ })) {
+        $ep = Add-VsatEndpoint -Evidence $Evidence -Type hyperv -Address $s.ToLowerInvariant()
+        Update-VsatProgress -Phase 'collecting' -Message "Collecting Hyper-V host $s"
+        Invoke-VsatHyperVCollection -Evidence $Evidence -Endpoint $ep -Credential $A.HyperVCredential
+    }
+    foreach ($f in @($A.HyperVEvidence | Where-Object { $_ })) {
+        $txt = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $f).ProviderPath)
+        $name = try { [string](ConvertFrom-VsatJson $txt).host.fqdn } catch { [IO.Path]::GetFileNameWithoutExtension($f) }
+        $ep = Add-VsatEndpoint -Evidence $Evidence -Type hyperv -Address $(if ($name) { $name } else { $f })
+        Write-VsatLog -Source 'hyperv' -Message "Importing offline Hyper-V collector output $f"
+        Invoke-VsatHyperVCollection -Evidence $Evidence -Endpoint $ep -ImportedJson $txt
+    }
+    if (Get-Command Invoke-VsatKvmCollection -ErrorAction SilentlyContinue) {
+        foreach ($s in @($A.KvmServer | Where-Object { $_ })) {
+            $ep = Add-VsatEndpoint -Evidence $Evidence -Type kvm -Address $s.ToLowerInvariant()
+            Update-VsatProgress -Phase 'collecting' -Message "Collecting KVM host $s"
+            Invoke-VsatKvmCollection -Evidence $Evidence -Endpoint $ep -User $A.KvmUser
+        }
+        foreach ($f in @($A.KvmEvidence | Where-Object { $_ })) {
+            $txt = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $f).ProviderPath)
+            $hn = if ($txt -match '(?m)^hostname=(.+)$') { $Matches[1].Trim() } else { [IO.Path]::GetFileNameWithoutExtension($f) }
+            $ep = Add-VsatEndpoint -Evidence $Evidence -Type kvm -Address $hn.ToLowerInvariant()
+            Write-VsatLog -Source 'kvm' -Message "Importing offline KVM collector output $f"
+            Invoke-VsatKvmCollection -Evidence $Evidence -Endpoint $ep -ImportedText $txt
+        }
+    }
+    if ($Evidence.run.status -ne 'canceled') {
+        $Evidence.run.status = if (@($Evidence.scope.endpoints | Where-Object { $_.status -ne 'collected' }).Count) { 'partial' } else { 'complete' }
+        $Evidence.run.endedUtc = Get-VsatUtcNow
+    }
+}
+
 function Set-VsatEndpointStatus {
     param($Evidence, $Endpoint)
     $c = @($Evidence.collection.collectors | Where-Object { $_.endpoint -eq $Endpoint.id })
@@ -206,6 +241,13 @@ function Invoke-VsatMain {
         return 0
     }
 
+    if ($A.ExportCollector) {
+        $dir = if ($A.OutputPath) { $A.OutputPath } else { (Get-Location).ProviderPath }
+        $p = Export-VsatCollector -Platform $A.ExportCollector -OutputDir $dir
+        [Console]::Out.WriteLine("Read-only collector written to $p")
+        return 0
+    }
+
     $outDir = Resolve-VsatOutputDir $A.OutputPath
     [void](New-Item -ItemType Directory -Path $outDir -Force)
     [void](Protect-VsatDirectory -Path $outDir)
@@ -234,7 +276,8 @@ function Invoke-VsatMain {
     }
 
     if ($A.Cli) {
-        $interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+        $otherPlatforms = @($A.HyperVServer) + @($A.HyperVEvidence) + @($A.KvmServer) + @($A.KvmEvidence) | Where-Object { $_ }
+        $interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not $otherPlatforms.Count
         $t = Get-VsatCliTargets -Servers $A.Server -NsxServers $A.NsxServer -Scope $scope -Credential $A.Credential -NsxCred $A.NsxCredential -Interactive:$interactive
         if ($t.declaredAbsent) { if (-not $scope) { $scope = [ordered]@{} }; $scope.nsxDeclaredAbsent = $true }
         $ev = New-VsatEvidence -Mode live -Scope $scope
@@ -242,6 +285,7 @@ function Invoke-VsatMain {
         try {
             [Console]::TreatControlCAsInput = $false
             Invoke-VsatLiveCollection -Evidence $ev -Targets $t.targets
+            Invoke-VsatPlatformCollection -Evidence $ev -A $A
         }
         catch { Write-VsatLog -Level error -Message "Collection aborted: $($_.Exception.Message)" }
         $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact

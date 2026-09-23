@@ -82,6 +82,10 @@ if (-not $LibraryMode) {
         Cli = [bool]$Cli; Doctor = [bool]$Doctor; Replay = $Replay; Baseline = $Baseline; Redact = [bool]$Redact
         TrustedThumbprint = $TrustedThumbprint; Port = $Port; NoBrowser = [bool]$NoBrowser; Demo = [bool]$Demo; Version = [bool]$Version
     }
+    foreach ($vsatOpt in 'HyperVServer', 'HyperVCredential', 'HyperVEvidence', 'ExportCollector', 'KvmServer', 'KvmUser', 'KvmEvidence') {
+        $vsatVar = Get-Variable -Name $vsatOpt -Scope Script -ErrorAction SilentlyContinue
+        if ($vsatVar) { $vsatArgs[$vsatOpt] = $vsatVar.Value }
+    }
     try { $vsatExit = Invoke-VsatMain -A $vsatArgs }
     catch {
         Write-Host ("VSAT fatal error: {0}" -f (Protect-VsatText $_.Exception.Message)) -ForegroundColor Red

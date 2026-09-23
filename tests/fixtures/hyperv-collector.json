@@ -1,0 +1,722 @@
+{
+ "collectorVersion": "1",
+ "collectedUtc": "2026-09-23T08:00:00Z",
+ "host": {
+  "name": "hv01",
+  "domain": "example.local",
+  "fqdn": "hv01.example.local",
+  "os": {
+   "caption": "Microsoft Windows Server 2019 Datacenter",
+   "version": "10.0.17763",
+   "build": "17763",
+   "installationType": "Server",
+   "ubr": 6893
+  },
+  "facts": {
+   "vmhost": {
+    "status": "ok",
+    "value": {
+     "migrationEnabled": true,
+     "migrationAuth": "CredSSP",
+     "anyNetworkForMigration": true,
+     "enhancedSessionMode": true,
+     "numaSpanning": true,
+     "logicalProcessors": 64,
+     "memoryGB": 512
+    }
+   },
+   "hotfix": {
+    "status": "ok",
+    "value": {
+     "lastInstalledUtc": "2026-06-10T00:00:00Z",
+     "lastId": "KB5060531",
+     "count": 41,
+     "ageDays": 105
+    }
+   },
+   "deviceGuard": {
+    "status": "ok",
+    "value": {
+     "vbsStatus": 2,
+     "servicesRunning": [
+      2
+     ],
+     "servicesConfigured": [
+      1,
+      2
+     ]
+    }
+   },
+   "secureBoot": {
+    "status": "ok",
+    "value": true
+   },
+   "tpm": {
+    "status": "ok",
+    "value": {
+     "present": true,
+     "ready": true
+    }
+   },
+   "firewall": {
+    "status": "ok",
+    "value": [
+     {
+      "name": "Domain",
+      "enabled": "True",
+      "defaultInbound": "NotConfigured"
+     },
+     {
+      "name": "Private",
+      "enabled": "True",
+      "defaultInbound": "Block"
+     },
+     {
+      "name": "Public",
+      "enabled": "False",
+      "defaultInbound": "Block"
+     }
+    ]
+   },
+   "smb": {
+    "status": "ok",
+    "value": {
+     "smb1": false,
+     "requireSigning": false,
+     "encryptData": false
+    }
+   },
+   "services": {
+    "status": "ok",
+    "value": [
+     {
+      "key": "Spooler",
+      "running": true,
+      "policy": "Automatic"
+     },
+     {
+      "key": "WinRM",
+      "running": true,
+      "policy": "Automatic"
+     }
+    ]
+   },
+   "rdp": {
+    "status": "ok",
+    "value": {
+     "nla": true,
+     "securityLayer": 2
+    }
+   },
+   "replica": {
+    "status": "ok",
+    "value": {
+     "enabled": true,
+     "auth": "Kerberos",
+     "kerberosPort": 80,
+     "certPort": 443
+    }
+   },
+   "admins": {
+    "status": "ok",
+    "value": [
+     {
+      "name": "EXAMPLE\\Domain Admins",
+      "class": "Group"
+     },
+     {
+      "name": "HV01\\Administrator",
+      "class": "User"
+     }
+    ]
+   },
+   "hvAdmins": {
+    "status": "ok",
+    "value": [
+     {
+      "name": "EXAMPLE\\hv-operators",
+      "class": "Group"
+     }
+    ]
+   },
+   "cluster": {
+    "status": "ok",
+    "value": {
+     "name": "hvclu01",
+     "nodes": [
+      "hv01",
+      "hv02"
+     ]
+    }
+   }
+  }
+ },
+ "switches": [
+  {
+   "id": "sw-ext-1",
+   "name": "vSwitch-Ext",
+   "type": "External",
+   "allowManagementOS": true,
+   "embeddedTeaming": true,
+   "iov": false,
+   "uplinks": [
+    "Mellanox ConnectX-6 #1",
+    "Mellanox ConnectX-6 #2"
+   ],
+   "extensions": [
+    "Microsoft Windows Filtering Platform"
+   ]
+  },
+  {
+   "id": "sw-int-1",
+   "name": "vSwitch-Int",
+   "type": "Internal",
+   "allowManagementOS": true,
+   "embeddedTeaming": false,
+   "iov": false,
+   "uplinks": [],
+   "extensions": []
+  }
+ ],
+ "vms": [
+  {
+   "id": "00000000-0000-4000-8000-000000000001",
+   "name": "web-hv01",
+   "state": "Running",
+   "generation": 2,
+   "configVersion": "9.0",
+   "clustered": true,
+   "automaticStart": "StartIfRunning",
+   "checkpointType": "Production",
+   "facts": {
+    "security": {
+     "status": "ok",
+     "value": {
+      "tpm": false,
+      "shielded": false,
+      "encryptState": false
+     }
+    },
+    "firmware": {
+     "status": "ok",
+     "value": {
+      "generation": 2,
+      "secureBoot": "On",
+      "template": "MicrosoftWindows"
+     }
+    },
+    "adapters": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Network Adapter",
+       "switch": "vSwitch-Ext",
+       "switchId": "sw-ext-1",
+       "mac": "00155D0A0001",
+       "macSpoofing": "Off",
+       "dhcpGuard": "On",
+       "routerGuard": "On",
+       "portMirroring": "None",
+       "vlanMode": "Access",
+       "accessVlan": 20,
+       "allowedVlans": "",
+       "ips": [
+        "10.20.0.1"
+       ]
+      }
+     ]
+    },
+    "integration": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Guest Service Interface",
+       "enabled": false
+      },
+      {
+       "name": "Heartbeat",
+       "enabled": true
+      }
+     ]
+    },
+    "checkpoints": {
+     "status": "absent",
+     "value": null
+    },
+    "devices": {
+     "status": "ok",
+     "value": [
+      {
+       "type": "disk",
+       "path": "C:\\ClusterStorage\\v1\\web-hv01.vhdx",
+       "controller": "SCSI"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "00000000-0000-4000-8000-000000000002",
+   "name": "db-hv01",
+   "state": "Running",
+   "generation": 2,
+   "configVersion": "9.0",
+   "clustered": true,
+   "automaticStart": "StartIfRunning",
+   "checkpointType": "Production",
+   "facts": {
+    "security": {
+     "status": "ok",
+     "value": {
+      "tpm": true,
+      "shielded": false,
+      "encryptState": false
+     }
+    },
+    "firmware": {
+     "status": "ok",
+     "value": {
+      "generation": 2,
+      "secureBoot": "On",
+      "template": "MicrosoftWindows"
+     }
+    },
+    "adapters": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Network Adapter",
+       "switch": "vSwitch-Ext",
+       "switchId": "sw-ext-1",
+       "mac": "00155D0A0002",
+       "macSpoofing": "Off",
+       "dhcpGuard": "On",
+       "routerGuard": "On",
+       "portMirroring": "None",
+       "vlanMode": "Access",
+       "accessVlan": 20,
+       "allowedVlans": "",
+       "ips": [
+        "10.20.0.2"
+       ]
+      }
+     ]
+    },
+    "integration": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Guest Service Interface",
+       "enabled": false
+      },
+      {
+       "name": "Heartbeat",
+       "enabled": true
+      }
+     ]
+    },
+    "checkpoints": {
+     "status": "absent",
+     "value": null
+    },
+    "devices": {
+     "status": "ok",
+     "value": [
+      {
+       "type": "disk",
+       "path": "C:\\ClusterStorage\\v1\\db-hv01.vhdx",
+       "controller": "SCSI"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "00000000-0000-4000-8000-000000000003",
+   "name": "legacy-hv01",
+   "state": "Running",
+   "generation": 1,
+   "configVersion": "9.0",
+   "clustered": false,
+   "automaticStart": "StartIfRunning",
+   "checkpointType": "Production",
+   "facts": {
+    "security": {
+     "status": "ok",
+     "value": {
+      "tpm": false,
+      "shielded": false,
+      "encryptState": false
+     }
+    },
+    "firmware": {
+     "status": "ok",
+     "value": {
+      "generation": 1
+     }
+    },
+    "adapters": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Network Adapter",
+       "switch": "vSwitch-Ext",
+       "switchId": "sw-ext-1",
+       "mac": "00155D0A0003",
+       "macSpoofing": "Off",
+       "dhcpGuard": "On",
+       "routerGuard": "On",
+       "portMirroring": "None",
+       "vlanMode": "Access",
+       "accessVlan": 20,
+       "allowedVlans": "",
+       "ips": [
+        "10.20.0.3"
+       ]
+      }
+     ]
+    },
+    "integration": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Guest Service Interface",
+       "enabled": false
+      },
+      {
+       "name": "Heartbeat",
+       "enabled": true
+      }
+     ]
+    },
+    "checkpoints": {
+     "status": "absent",
+     "value": null
+    },
+    "devices": {
+     "status": "ok",
+     "value": [
+      {
+       "type": "disk",
+       "path": "C:\\ClusterStorage\\v1\\legacy-hv01.vhdx",
+       "controller": "SCSI"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "00000000-0000-4000-8000-000000000004",
+   "name": "nva-hv01",
+   "state": "Running",
+   "generation": 2,
+   "configVersion": "9.0",
+   "clustered": true,
+   "automaticStart": "StartIfRunning",
+   "checkpointType": "Production",
+   "facts": {
+    "security": {
+     "status": "ok",
+     "value": {
+      "tpm": false,
+      "shielded": false,
+      "encryptState": false
+     }
+    },
+    "firmware": {
+     "status": "ok",
+     "value": {
+      "generation": 2,
+      "secureBoot": "On",
+      "template": "MicrosoftWindows"
+     }
+    },
+    "adapters": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Network Adapter",
+       "switch": "vSwitch-Ext",
+       "switchId": "sw-ext-1",
+       "mac": "00155D0A0004",
+       "macSpoofing": "On",
+       "dhcpGuard": "On",
+       "routerGuard": "Off",
+       "portMirroring": "None",
+       "vlanMode": "Trunk",
+       "accessVlan": 20,
+       "allowedVlans": "",
+       "ips": [
+        "10.20.0.4"
+       ]
+      }
+     ]
+    },
+    "integration": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Guest Service Interface",
+       "enabled": false
+      },
+      {
+       "name": "Heartbeat",
+       "enabled": true
+      }
+     ]
+    },
+    "checkpoints": {
+     "status": "absent",
+     "value": null
+    },
+    "devices": {
+     "status": "ok",
+     "value": [
+      {
+       "type": "disk",
+       "path": "C:\\ClusterStorage\\v1\\nva-hv01.vhdx",
+       "controller": "SCSI"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "00000000-0000-4000-8000-000000000005",
+   "name": "ids-hv01",
+   "state": "Running",
+   "generation": 2,
+   "configVersion": "9.0",
+   "clustered": true,
+   "automaticStart": "StartIfRunning",
+   "checkpointType": "Production",
+   "facts": {
+    "security": {
+     "status": "ok",
+     "value": {
+      "tpm": false,
+      "shielded": false,
+      "encryptState": false
+     }
+    },
+    "firmware": {
+     "status": "ok",
+     "value": {
+      "generation": 2,
+      "secureBoot": "On",
+      "template": "MicrosoftWindows"
+     }
+    },
+    "adapters": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Network Adapter",
+       "switch": "vSwitch-Ext",
+       "switchId": "sw-ext-1",
+       "mac": "00155D0A0005",
+       "macSpoofing": "Off",
+       "dhcpGuard": "On",
+       "routerGuard": "On",
+       "portMirroring": "Destination",
+       "vlanMode": "Access",
+       "accessVlan": 20,
+       "allowedVlans": "",
+       "ips": [
+        "10.20.0.5"
+       ]
+      }
+     ]
+    },
+    "integration": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Guest Service Interface",
+       "enabled": true
+      },
+      {
+       "name": "Heartbeat",
+       "enabled": true
+      }
+     ]
+    },
+    "checkpoints": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "before-upgrade",
+       "createdUtc": "2026-08-01T00:00:00Z",
+       "ageDays": 53
+      }
+     ]
+    },
+    "devices": {
+     "status": "ok",
+     "value": [
+      {
+       "type": "disk",
+       "path": "C:\\ClusterStorage\\v1\\ids-hv01.vhdx",
+       "controller": "SCSI"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "00000000-0000-4000-8000-000000000006",
+   "name": "gpu-hv01",
+   "state": "Running",
+   "generation": 2,
+   "configVersion": "9.0",
+   "clustered": true,
+   "automaticStart": "StartIfRunning",
+   "checkpointType": "Production",
+   "facts": {
+    "security": {
+     "status": "ok",
+     "value": {
+      "tpm": false,
+      "shielded": false,
+      "encryptState": false
+     }
+    },
+    "firmware": {
+     "status": "ok",
+     "value": {
+      "generation": 2,
+      "secureBoot": "Off",
+      "template": "MicrosoftWindows"
+     }
+    },
+    "adapters": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Network Adapter",
+       "switch": "vSwitch-Ext",
+       "switchId": "sw-ext-1",
+       "mac": "00155D0A0006",
+       "macSpoofing": "Off",
+       "dhcpGuard": "On",
+       "routerGuard": "On",
+       "portMirroring": "None",
+       "vlanMode": "Access",
+       "accessVlan": 20,
+       "allowedVlans": "",
+       "ips": [
+        "10.20.0.6"
+       ]
+      }
+     ]
+    },
+    "integration": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Guest Service Interface",
+       "enabled": false
+      },
+      {
+       "name": "Heartbeat",
+       "enabled": true
+      }
+     ]
+    },
+    "checkpoints": {
+     "status": "absent",
+     "value": null
+    },
+    "devices": {
+     "status": "ok",
+     "value": [
+      {
+       "type": "dda",
+       "path": "PCIROOT(0)#PCI(0300)"
+      },
+      {
+       "type": "dvd",
+       "path": "C:\\iso\\tools.iso"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "00000000-0000-4000-8000-000000000007",
+   "name": "<svg onload=alert(7)>",
+   "state": "Running",
+   "generation": 2,
+   "configVersion": "9.0",
+   "clustered": true,
+   "automaticStart": "StartIfRunning",
+   "checkpointType": "Production",
+   "facts": {
+    "security": {
+     "status": "ok",
+     "value": {
+      "tpm": false,
+      "shielded": false,
+      "encryptState": false
+     }
+    },
+    "firmware": {
+     "status": "ok",
+     "value": {
+      "generation": 2,
+      "secureBoot": "On",
+      "template": "MicrosoftWindows"
+     }
+    },
+    "adapters": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Network Adapter",
+       "switch": "vSwitch-Ext",
+       "switchId": "sw-ext-1",
+       "mac": "00155D0A0007",
+       "macSpoofing": "Off",
+       "dhcpGuard": "Off",
+       "routerGuard": "On",
+       "portMirroring": "None",
+       "vlanMode": "Access",
+       "accessVlan": 20,
+       "allowedVlans": "",
+       "ips": [
+        "10.20.0.7"
+       ]
+      }
+     ]
+    },
+    "integration": {
+     "status": "ok",
+     "value": [
+      {
+       "name": "Guest Service Interface",
+       "enabled": false
+      },
+      {
+       "name": "Heartbeat",
+       "enabled": true
+      }
+     ]
+    },
+    "checkpoints": {
+     "status": "absent",
+     "value": null
+    },
+    "devices": {
+     "status": "ok",
+     "value": [
+      {
+       "type": "disk",
+       "path": "C:\\ClusterStorage\\v1\\<svg onload=alert(7)>.vhdx",
+       "controller": "SCSI"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

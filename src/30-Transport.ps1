@@ -86,6 +86,7 @@ function Register-VsatPins {
     param([string[]]$Pins)
     foreach ($p in @($Pins)) {
         if (-not $p) { continue }
+        if ($p -match '^\s*([^=\s]+)\s*=\s*(SHA256:[A-Za-z0-9+/]{43}=?)\s*$') { $script:VsatSshPins[$Matches[1].ToLowerInvariant()] = $Matches[2].TrimEnd('='); continue }
         if ($p -notmatch '^\s*([^=\s]+)\s*=\s*([0-9A-Fa-f:]{64,95})\s*$') { throw "Invalid -TrustedThumbprint '$p'. Expected host=SHA256HEX." }
         $hex = ($Matches[2] -replace ':', '').ToLowerInvariant()
         if ($hex.Length -ne 64) { throw "Invalid SHA-256 fingerprint for $($Matches[1])." }

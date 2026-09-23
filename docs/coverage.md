@@ -1,6 +1,6 @@
 # Control coverage matrix
 
-Generated from rule pack **2026.09.0** for VSAT **2.0.0-alpha.1** by `build/New-CoverageDoc.ps1`. Do not edit by hand.
+Generated from rule pack **2026.09.0** for VSAT **2.1.0-alpha.1** by `build/New-CoverageDoc.ps1`. Do not edit by hand.
 
 - **Automated** checks evaluate collected evidence; missing or denied evidence yields UNKNOWN, never PASS.
 - **Manual** checks always produce MANUAL results with guidance; completion is not certification.
@@ -12,11 +12,14 @@ Generated from rule pack **2026.09.0** for VSAT **2.0.0-alpha.1** by `build/New-
 | esxi | 37 | 35 | 2 |
 | storage | 8 | 6 | 2 |
 | network | 18 | 17 | 1 |
+| hyperv-host | 17 | 16 | 1 |
+| hyperv-network | 2 | 1 | 1 |
+| hyperv-vm | 13 | 13 | 0 |
 | nsx | 27 | 26 | 1 |
 | vcenter | 9 | 5 | 4 |
 | cluster | 4 | 4 | 0 |
 | vm | 24 | 23 | 1 |
-| **total** | **127** | **116** | **11** |
+| **total** | **159** | **146** | **13** |
 
 ## esxi
 
@@ -95,6 +98,53 @@ Generated from rule pack **2026.09.0** for VSAT **2.0.0-alpha.1** by `build/New-
 | `NET-VDS-HEALTHCHECK` | VDS health check is disabled | vds | low | automated | standard, strict | CIS VMware ESXi Benchmark 2.9 *(unverified)* |
 | `NET-VDS-MIRROR` | Port mirroring sessions are authorized | vds | medium | manual | standard, strict | VSAT NET-VDS-MIRROR |
 | `NET-UPLINK-REDUNDANCY` | Virtual switch has redundant physical uplinks | vss | low | automated | standard, strict | VSAT NET-UPLINK-REDUNDANCY |
+
+## hyperv-host
+
+| Rule | Title | Asset | Severity | Type | Profiles | Framework references |
+|---|---|---|---|---|---|---|
+| `HV-OS-PATCH-AGE` | Hyper-V host received updates recently | hyperv-host | high | automated | standard, strict | VSAT HV-OS-PATCH-AGE |
+| `HV-OS-LIFECYCLE` | Windows Server release is within vendor support | hyperv-host | high | automated | standard, strict | VSAT HV-OS-LIFECYCLE |
+| `HV-SECUREBOOT` | Host boots with UEFI Secure Boot | hyperv-host | medium | automated | standard, strict | VSAT HV-SECUREBOOT |
+| `HV-TPM` | TPM is present and ready | hyperv-host | low | automated | standard, strict | VSAT HV-TPM |
+| `HV-VBS-HVCI` | Hypervisor-protected code integrity (HVCI) is running | hyperv-host | medium | automated | standard, strict | VSAT HV-VBS-HVCI |
+| `HV-VBS-CREDGUARD` | Credential Guard is running | hyperv-host | medium | automated | strict | VSAT HV-VBS-CREDGUARD |
+| `HV-FIREWALL` | Windows Firewall is enabled on all profiles and blocks inbound by default | hyperv-host | high | automated | standard, strict | VSAT HV-FIREWALL |
+| `HV-SMB1` | SMBv1 is disabled | hyperv-host | high | automated | standard, strict | VSAT HV-SMB1 |
+| `HV-SMB-SIGNING` | SMB server requires signing | hyperv-host | medium | automated | standard, strict | VSAT HV-SMB-SIGNING |
+| `HV-SPOOLER` | Print Spooler is disabled on the host | hyperv-host | medium | automated | standard, strict | VSAT HV-SPOOLER |
+| `HV-RDP-NLA` | RDP requires Network Level Authentication | hyperv-host | medium | automated | standard, strict | VSAT HV-RDP-NLA |
+| `HV-MIGRATION-AUTH` | Live migration uses Kerberos (constrained delegation), not CredSSP | hyperv-host | medium | automated | standard, strict | VSAT HV-MIGRATION-AUTH |
+| `HV-MIGRATION-NETWORK` | Live migration is restricted to designated networks | hyperv-host | low | automated | standard, strict | VSAT HV-MIGRATION-NETWORK |
+| `HV-ENHANCED-SESSION` | Enhanced session mode is disabled on the host | hyperv-host | low | automated | strict | VSAT HV-ENHANCED-SESSION |
+| `HV-REPLICA-AUTH` | Hyper-V Replica uses certificate-based (HTTPS) authentication | hyperv-host | medium | automated | standard, strict | VSAT HV-REPLICA-AUTH |
+| `HV-ADMINS` | Local and Hyper-V administrator memberships are reviewed | hyperv-host | low | manual | standard, strict | VSAT HV-ADMINS |
+| `HV-SERVER-CORE` | Host uses the Server Core installation option | hyperv-host | info | automated | strict | VSAT HV-SERVER-CORE |
+
+## hyperv-network
+
+| Rule | Title | Asset | Severity | Type | Profiles | Framework references |
+|---|---|---|---|---|---|---|
+| `HV-VSWITCH-MGMTOS` | External virtual switch is not shared with the management OS | hyperv-vswitch | low | automated | standard, strict | VSAT HV-VSWITCH-MGMTOS |
+| `HV-VSWITCH-EXTENSIONS` | Enabled virtual switch extensions are authorized | hyperv-vswitch | info | manual | standard, strict | VSAT HV-VSWITCH-EXTENSIONS |
+
+## hyperv-vm
+
+| Rule | Title | Asset | Severity | Type | Profiles | Framework references |
+|---|---|---|---|---|---|---|
+| `HV-VM-GEN2` | VM is Generation 2 | hyperv-vm | low | automated | standard, strict | VSAT HV-VM-GEN2 |
+| `HV-VM-SECUREBOOT` | VM Secure Boot is enabled | hyperv-vm | medium | automated | standard, strict | VSAT HV-VM-SECUREBOOT |
+| `HV-VM-VTPM` | VM has a virtual TPM | hyperv-vm | low | automated | strict | VSAT HV-VM-VTPM |
+| `HV-VM-ENCRYPT-STATE` | VM state and migration traffic are encrypted | hyperv-vm | low | automated | strict | VSAT HV-VM-ENCRYPT-STATE |
+| `HV-VM-MACSPOOF` | MAC address spoofing is disabled on VM adapters | hyperv-vm | high | automated | standard, strict | VSAT HV-VM-MACSPOOF |
+| `HV-VM-DHCPGUARD` | DHCP guard is enabled on VM adapters | hyperv-vm | medium | automated | standard, strict | VSAT HV-VM-DHCPGUARD |
+| `HV-VM-ROUTERGUARD` | Router guard is enabled on VM adapters | hyperv-vm | medium | automated | standard, strict | VSAT HV-VM-ROUTERGUARD |
+| `HV-VM-PORTMIRROR` | VM adapters are not mirroring traffic | hyperv-vm | medium | automated | standard, strict | VSAT HV-VM-PORTMIRROR |
+| `HV-VM-TRUNK` | VM adapters are not in VLAN trunk mode without authorization | hyperv-vm | medium | automated | standard, strict | VSAT HV-VM-TRUNK |
+| `HV-VM-GUESTSERVICE` | Guest Service Interface is disabled | hyperv-vm | low | automated | standard, strict | VSAT HV-VM-GUESTSERVICE |
+| `HV-VM-CHECKPOINT-AGE` | No checkpoints older than 7 days | hyperv-vm | medium | automated | standard, strict | VSAT HV-VM-CHECKPOINT-AGE |
+| `HV-VM-MEDIA` | No ISO media or named-pipe COM ports attached | hyperv-vm | low | automated | standard, strict | VSAT HV-VM-MEDIA |
+| `HV-VM-DDA` | No devices assigned with Discrete Device Assignment | hyperv-vm | medium | automated | standard, strict | VSAT HV-VM-DDA |
 
 ## nsx
 
