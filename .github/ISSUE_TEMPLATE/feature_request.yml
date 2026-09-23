@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest an improvement to VSAT's workflow, reports or analysis
+title: "[Feature]: "
+labels: ["type:feature", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Guided UI / CLI workflow
+        - Report / topology
+        - Drift
+        - Attack paths
+        - Failure impact
+        - Work packages
+        - Replay / redaction
+        - Offline packaging
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Design principles
+      description: VSAT stays local, read-only and honest about coverage.
+      options:
+        - label: This does not require internet access, telemetry or modifying target infrastructure.
+          required: true

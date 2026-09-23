@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [master, 'vsat-*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test tooling
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+      - name: Verify generated vsat.ps1 matches src/ (reproducible build)
+        shell: pwsh
+        run: ./build/Build-Vsat.ps1 -Check
+      - name: Static analysis
+        shell: pwsh
+        run: |
+          $r = Invoke-ScriptAnalyzer -Path ./src -Recurse -Severity Error
+          $r | Format-Table -AutoSize
+          if ($r) { throw "PSScriptAnalyzer reported $($r.Count) error(s)" }
+      - name: Pester
+        shell: pwsh
+        run: |
+          $c = New-PesterConfiguration
+          $c.Run.Path = './tests'
+          $c.Output.Verbosity = 'Detailed'
+          $c.TestResult.Enabled = $true
+          $c.TestResult.OutputPath = 'testResults.xml'
+          $c.Run.Exit = $true
+          Invoke-Pester -Configuration $c
+      - name: Demo smoke test (offline, synthetic lab)
+        shell: pwsh
+        run: |
+          ./vsat.ps1 -Demo -Cli -Redact -OutputPath ./demo-out
+          if ($LASTEXITCODE -ne 1) { throw "Unexpected exit code $LASTEXITCODE (synthetic lab has findings => 1)" }
+          ./vsat.ps1 -Replay ./demo-out/assessment.vsat.zip -Cli -OutputPath ./replay-out
+          if ($LASTEXITCODE -ne 1) { throw "Replay exit code $LASTEXITCODE" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.os }}
+          path: |
+            testResults.xml
+            demo-out/report.redacted.html
+          retention-days: 7
+
+  integration:
+    name: Integration (vcsim + mock NSX over pinned TLS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned vcsim (govmomi v0.56.0)
+        run: |
+          curl -sSL -o vcsim.tgz https://github.com/vmware/govmomi/releases/download/v0.56.0/vcsim_Linux_x86_64.tar.gz
+          echo "1d207f69a1c78a4bc819a66c568013035229a91696131e9756be0444077ac2fe  vcsim.tgz" | sha256sum -c
+          tar xzf vcsim.tgz vcsim
+      - name: Save pinned PowerCLI modules
+        shell: pwsh
+        run: |
+          $lock = Get-Content -Raw build/runtime.lock.json | ConvertFrom-Json
+          New-Item -ItemType Directory -Force ./pcli | Out-Null
+          foreach ($m in $lock.powercli.modules) { Save-Module -Name $m.name -RequiredVersion $m.version -Repository PSGallery -Path ./pcli -AcceptLicense }
+      - name: Run integration test
+        shell: pwsh
+        run: ./tests/integration/Invoke-IntegrationTest.ps1 -VcsimPath ./vcsim -ModulesPath ./pcli

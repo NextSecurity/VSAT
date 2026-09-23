@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="__VSAT_CSP__">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
+<title>__VSAT_TITLE__</title>
+<style>__VSAT_CSS__</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="app-header">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 24 28" width="24" height="28" aria-hidden="true" focusable="false">
+      <path d="M12 1 L22 5 V13 C22 20 17.5 24.8 12 27 C6.5 24.8 2 20 2 13 V5 Z" fill="currentColor"/>
+      <path d="M7.5 13.5 L10.8 16.8 L16.8 10.2" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="wordmark">VSAT</span>
+    <span class="brand-sub">Guided assessment</span>
+  </div>
+  <div class="header-meta">
+    <span id="hdr-version" class="hdr-item">-</span>
+    <span id="hdr-mode" class="mode-badge" hidden>DEMO MODE</span>
+    <span class="hdr-item local-note">Local session on 127.0.0.1 &middot; read-only assessment</span>
+  </div>
+</header>
+<div class="layout">
+  <nav class="stepper" aria-label="Assessment steps">
+    <ol id="steps"></ol>
+  </nav>
+  <main id="main" tabindex="-1">
+    <div id="alert" class="notice notice-bad" role="alert" hidden></div>
+    <div id="view"></div>
+  </main>
+</div>
+<div id="live" class="sr-only" aria-live="polite"></div>
+<script>__VSAT_JS__</script>
+</body>
+</html>

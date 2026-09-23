@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="t">
+  <title id="t">VSAT</title>
+  <defs>
+    <linearGradient id="vsat-shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16395C"/>
+      <stop offset="1" stop-color="#0A1B2E"/>
+    </linearGradient>
+  </defs>
+  <path d="M64 6 L112 22 V60 C112 90 91 111 64 122 C37 111 16 90 16 60 V22 Z" fill="url(#vsat-shield)"/>
+  <path d="M64 6 L112 22 V60 C112 90 91 111 64 122 C37 111 16 90 16 60 V22 Z" fill="none" stroke="#2BD4B4" stroke-width="4" stroke-linejoin="round"/>
+  <g stroke="#2BD4B4" stroke-width="3.5" stroke-linecap="round" fill="none" opacity="0.9">
+    <path d="M42 44 L64 34 L86 44"/>
+    <path d="M42 44 L50 74 L64 94 L78 74 L86 44"/>
+    <path d="M64 34 L64 62"/>
+    <path d="M50 74 L64 62 L78 74"/>
+  </g>
+  <g fill="#0A1B2E" stroke="#2BD4B4" stroke-width="3.5">
+    <circle cx="64" cy="34" r="6"/>
+    <circle cx="42" cy="44" r="6"/>
+    <circle cx="86" cy="44" r="6"/>
+    <circle cx="50" cy="74" r="6"/>
+    <circle cx="78" cy="74" r="6"/>
+    <circle cx="64" cy="94" r="6"/>
+  </g>
+  <circle cx="64" cy="62" r="8" fill="#F5B83D"/>
+</svg>

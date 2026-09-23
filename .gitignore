@@ -1,0 +1,9 @@
+# VSAT outputs contain sensitive infrastructure data - never commit them
+vsat-output/
+*.vsat.zip
+!site/demo/*.vsat.zip
+# build artifacts
+dist/
+release/
+_site/
+testResults.xml

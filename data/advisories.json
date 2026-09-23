@@ -1,0 +1,141 @@
+{
+  "schemaVersion": "1.0",
+  "snapshotDate": "2026-09-23",
+  "notes": "Seed snapshot. Build ranges verified against cited sources on verifiedDate. Not exhaustive. Matching rule: for a given product+branch, select the affected entry with the greatest minBuild <= host build (a missing minBuild means 0); the host is exposed if build < fixedBuild. fixedBuild null means no public fix exists for that line (exposed; see entry notes). An optional per-entry 'cves' list means that entry only covers those CVEs; otherwise it covers all CVEs of the advisory. NSX entries use compareBy=version: select by minVersion and compare the dotted version against fixedVersionNumber (NSX build numbers are not monotonic across patch lines). Caveat: ESXi 8.0 GA-line express patches (8.0d/8.0e/8.0f/8.0g, builds 24118393/24569005/24814147/25191479) are not listed in these advisories and are not handled correctly by build comparison. Build-to-version mappings from Broadcom KB 316595 (ESXi) and KB 326316 (vCenter).",
+  "advisories": [
+    {
+      "id": "VMSA-2025-0004",
+      "title": "VMware ESXi, Workstation, and Fusion updates address multiple vulnerabilities (CVE-2025-22224, CVE-2025-22225, CVE-2025-22226)",
+      "published": "2025-03-04",
+      "updated": null,
+      "severity": "critical",
+      "cves": ["CVE-2025-22224", "CVE-2025-22225", "CVE-2025-22226"],
+      "knownExploited": true,
+      "knownExploitedSource": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=CVE-2025-22224",
+      "url": "https://support.broadcom.com/web/ecx/support-content-notification/-/external/content/SecurityAdvisories/0/25390",
+      "verifiedDate": "2026-09-23",
+      "affected": [
+        { "product": "esxi", "branch": "8.0", "minBuild": 24022510, "fixedBuild": 24585383, "fixedVersion": "ESXi 8.0 Update 3d (ESXi80U3d-24585383)", "notes": "8.0 U3 line (minBuild = ESXi 8.0 U3 GA build 24022510)." },
+        { "product": "esxi", "branch": "8.0", "fixedBuild": 24585300, "fixedVersion": "ESXi 8.0 Update 2d (ESXi80U2d-24585300)", "notes": "Hosts below 8.0 U3 GA. 8.0 GA/U1 have no fix on their own line; update to 8.0 U2d or 8.0 U3d." },
+        { "product": "esxi", "branch": "7.0", "fixedBuild": 24585291, "fixedVersion": "ESXi 7.0 Update 3s (ESXi70U3s-24585291)" }
+      ]
+    },
+    {
+      "id": "VMSA-2024-0013",
+      "title": "VMware ESXi and vCenter Server updates address multiple vulnerabilities (CVE-2024-37085, CVE-2024-37086, CVE-2024-37087)",
+      "published": "2024-06-25",
+      "updated": "2024-08-12",
+      "severity": "moderate",
+      "cves": ["CVE-2024-37085", "CVE-2024-37086", "CVE-2024-37087"],
+      "knownExploited": true,
+      "knownExploitedSource": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=CVE-2024-37085",
+      "url": "https://support.broadcom.com/web/ecx/support-content-notification/-/external/content/SecurityAdvisories/0/24505",
+      "verifiedDate": "2026-09-23",
+      "affected": [
+        { "product": "esxi", "branch": "8.0", "cves": ["CVE-2024-37085", "CVE-2024-37086"], "fixedBuild": 24022510, "fixedVersion": "ESXi 8.0 Update 3 (ESXi80U3-24022510)", "notes": "No 8.0 U2-line fix listed. CVE-2024-37085 workaround: KB369707. Exploitation of CVE-2024-37085 is from CISA KEV (added 2024-07-30); the advisory itself does not state it." },
+        { "product": "esxi", "branch": "7.0", "cves": ["CVE-2024-37085"], "fixedBuild": null, "fixedVersion": null, "notes": "No Patch Planned for ESXi 7.0 (AD integration auth bypass). Mitigate using the in-product workaround in KB369707. Treat every 7.0 host joined to AD as exposed unless the workaround is applied." },
+        { "product": "esxi", "branch": "7.0", "cves": ["CVE-2024-37086"], "fixedBuild": 23794019, "fixedVersion": "ESXi 7.0 Update 3q security-only image (ESXi70U3sq-23794019)" },
+        { "product": "vcenter", "branch": "8.0", "cves": ["CVE-2024-37087"], "fixedBuild": 24022515, "fixedVersion": "vCenter Server 8.0 Update 3" },
+        { "product": "vcenter", "branch": "7.0", "cves": ["CVE-2024-37087"], "fixedBuild": 23788036, "fixedVersion": "vCenter Server 7.0 Update 3q", "notes": "The advisory says 7.0 U3q is the first fixed version and recommends 7.0 U3r (VMSA-2024-0012)." }
+      ]
+    },
+    {
+      "id": "VMSA-2024-0019",
+      "title": "VMware vCenter Server updates address heap-overflow and privilege escalation vulnerabilities (CVE-2024-38812, CVE-2024-38813)",
+      "published": "2024-09-17",
+      "updated": "2024-11-18",
+      "severity": "critical",
+      "cves": ["CVE-2024-38812", "CVE-2024-38813"],
+      "knownExploited": true,
+      "knownExploitedSource": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=CVE-2024-38812",
+      "url": "https://support.broadcom.com/web/ecx/support-content-notification/-/external/content/SecurityAdvisories/0/24968",
+      "verifiedDate": "2026-09-23",
+      "affected": [
+        { "product": "vcenter", "branch": "8.0", "minBuild": 24022515, "fixedBuild": 24322831, "fixedVersion": "vCenter Server 8.0 Update 3d", "notes": "8.0 U3 line (minBuild = vCenter 8.0 U3 GA build 24022515). The 2024-09-17 patches (e.g. 8.0 U3b) did not fully fix CVE-2024-38812." },
+        { "product": "vcenter", "branch": "8.0", "fixedBuild": 24321653, "fixedVersion": "vCenter Server 8.0 Update 2e", "notes": "Hosts below 8.0 U3 GA. 8.0 U1 and earlier have no fix on their own line." },
+        { "product": "vcenter", "branch": "7.0", "fixedBuild": 24322018, "fixedVersion": "vCenter Server 7.0 Update 3t", "notes": "The 2024-09-17 patch 7.0 U3s did not fully fix CVE-2024-38812." }
+      ]
+    },
+    {
+      "id": "VMSA-2024-0012",
+      "title": "VMware vCenter Server updates address heap-overflow and privilege escalation vulnerabilities (CVE-2024-37079, CVE-2024-37080, CVE-2024-37081)",
+      "published": "2024-06-17",
+      "updated": "2026-01-23",
+      "severity": "critical",
+      "cves": ["CVE-2024-37079", "CVE-2024-37080", "CVE-2024-37081"],
+      "knownExploited": true,
+      "knownExploitedSource": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=CVE-2024-37079",
+      "url": "https://support.broadcom.com/web/ecx/support-content-notification/-/external/content/SecurityAdvisories/0/24453",
+      "verifiedDate": "2026-09-23",
+      "affected": [
+        { "product": "vcenter", "branch": "8.0", "minBuild": 22385739, "fixedBuild": 23929136, "fixedVersion": "vCenter Server 8.0 Update 2d", "notes": "8.0 U2 and later (minBuild = vCenter 8.0 U2 GA build 22385739). 8.0 U3 GA (24022515) and later builds are above the fix." },
+        { "product": "vcenter", "branch": "8.0", "cves": ["CVE-2024-37079", "CVE-2024-37080"], "fixedBuild": 24005165, "fixedVersion": "vCenter Server 8.0 Update 1e", "notes": "Hosts below 8.0 U2 GA. The 8.0 U1e build (24005165) is higher than the 8.0 U2 GA build, so a U1e host matches the U2-line entry and is still correctly reported as fixed. The matrix lists CVE-2024-37081 only for the 8.0 U2d and 7.0 U3r rows." },
+        { "product": "vcenter", "branch": "7.0", "fixedBuild": 24026615, "fixedVersion": "vCenter Server 7.0 Update 3r" }
+      ]
+    },
+    {
+      "id": "VMSA-2025-0013",
+      "title": "VMware ESXi, Workstation, Fusion, and Tools updates address multiple vulnerabilities (CVE-2025-41236, CVE-2025-41237, CVE-2025-41238, CVE-2025-41239)",
+      "published": "2025-07-15",
+      "updated": null,
+      "severity": "critical",
+      "cves": ["CVE-2025-41236", "CVE-2025-41237", "CVE-2025-41238", "CVE-2025-41239"],
+      "knownExploited": false,
+      "knownExploitedSource": null,
+      "url": "https://support.broadcom.com/web/ecx/support-content-notification/-/external/content/SecurityAdvisories/0/35877",
+      "verifiedDate": "2026-09-23",
+      "affected": [
+        { "product": "esxi", "branch": "8.0", "minBuild": 24022510, "fixedBuild": 24784735, "fixedVersion": "ESXi 8.0 Update 3f (ESXi80U3f-24784735)", "notes": "8.0 U3 line." },
+        { "product": "esxi", "branch": "8.0", "fixedBuild": 24789317, "fixedVersion": "ESXi 8.0 Update 2e (ESXi80U2e-24789317)", "notes": "Hosts below 8.0 U3 GA. The U2e build is higher than the U3f build; U3-line hosts are matched by the U3 entry." },
+        { "product": "esxi", "branch": "7.0", "fixedBuild": 24784741, "fixedVersion": "ESXi 7.0 Update 3w (ESXi70U3w-24784741)" }
+      ]
+    },
+    {
+      "id": "VMSA-2025-0012",
+      "title": "VMware NSX updates address multiple vulnerabilities (CVE-2025-22243, CVE-2025-22244, CVE-2025-22245)",
+      "published": "2025-06-04",
+      "updated": "2025-07-18",
+      "severity": "important",
+      "cves": ["CVE-2025-22243", "CVE-2025-22244", "CVE-2025-22245"],
+      "knownExploited": false,
+      "knownExploitedSource": null,
+      "url": "https://support.broadcom.com/web/ecx/support-content-notification/-/external/content/SecurityAdvisories/0/25738",
+      "verifiedDate": "2026-09-23",
+      "affected": [
+        { "product": "nsx", "branch": "4.2", "compareBy": "version", "minVersion": "4.2.2", "fixedVersionNumber": "4.2.2.1", "fixedBuild": 24765084, "fixedVersion": "NSX 4.2.2.1", "notes": "Matrix row 'NSX 4.2.x'. Build from the NSX 4.2.2.1 release notes." },
+        { "product": "nsx", "branch": "4.2", "compareBy": "version", "fixedVersionNumber": "4.2.1.4", "fixedBuild": 24765227, "fixedVersion": "NSX 4.2.1.4", "notes": "Matrix row 'NSX 4.2.1.x' (covers 4.2 versions below 4.2.2). Build from the NSX 4.2.1.4 release notes." },
+        { "product": "nsx", "branch": "4.1", "compareBy": "version", "fixedVersionNumber": "4.1.2.6", "fixedBuild": 24723849, "fixedVersion": "NSX 4.1.2.6", "notes": "Build from the NSX 4.1.2.6 release notes." },
+        { "product": "nsx", "branch": "4.0", "compareBy": "version", "fixedVersionNumber": "4.1.2.6", "fixedBuild": 24723849, "fixedVersion": "NSX 4.1.2.6", "notes": "No 4.0 fix. The matrix row 'NSX 4.1.x, 4.0.x' requires upgrading to 4.1.2.6, so every 4.0.x version is exposed." },
+        { "product": "nsx", "branch": "3.2", "compareBy": "version", "fixedVersionNumber": "3.2.4.2", "fixedBuild": 24840726, "fixedVersion": "NSX-T Data Center 3.2.4.2", "notes": "Added in VMSA-2025-0012.1 (patch released 2025-07-18). Build from the NSX-T 3.2.4.2 release notes." }
+      ]
+    },
+    {
+      "id": "VMSA-2026-0006",
+      "title": "VMware ESX, vCenter, Workstation, and Fusion updates address multiple vulnerabilities (CVE-2026-59309, CVE-2026-59310, CVE-2026-47876, CVE-2026-41703, CVE-2026-41709)",
+      "published": "2026-07-29",
+      "updated": "2026-08-19",
+      "severity": "critical",
+      "cves": ["CVE-2026-59309", "CVE-2026-59310", "CVE-2026-47876", "CVE-2026-41703", "CVE-2026-41709"],
+      "knownExploited": true,
+      "knownExploitedSource": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=CVE-2026-59310",
+      "url": "https://support.broadcom.com/web/ecx/support-content-notification/-/external/content/SecurityAdvisories/0/38017",
+      "verifiedDate": "2026-09-23",
+      "affected": [
+        { "product": "vcenter", "branch": "8.0", "minBuild": 24022515, "cves": ["CVE-2026-59309", "CVE-2026-59310"], "fixedBuild": 25600417, "fixedVersion": "vCenter 8.0 Update 3k", "notes": "8.0 U3 line. CISA KEV added CVE-2026-59310 on 2026-08-18 with known ransomware use; the advisory text does not mention exploitation." },
+        { "product": "vcenter", "branch": "8.0", "cves": ["CVE-2026-59309", "CVE-2026-59310"], "fixedBuild": 25624321, "fixedVersion": "vCenter 8.0 Update 2f", "notes": "Hosts below 8.0 U3 GA. Express patch added in VMSA-2026-0006.1. The U2f build is higher than the U3k build; U3-line hosts are matched by the U3 entry." },
+        { "product": "vcenter", "branch": "7.0", "cves": ["CVE-2026-59309", "CVE-2026-59310"], "fixedBuild": null, "fixedVersion": null, "notes": "No public fix. The matrix says 'Contact Broadcom Support if you have extended support contract' (7.0 is past End of General Support)." },
+        { "product": "esxi", "branch": "8.0", "minBuild": 24022510, "cves": ["CVE-2026-47876", "CVE-2026-41703", "CVE-2026-41709"], "fixedBuild": 25595708, "fixedVersion": "ESXi 8.0 Update 3k (ESXi80U3k-25595708)", "notes": "8.0 U3 line. U3k is the fix for CVE-2026-47876 and is cumulative. The first fixed builds were U3i (25205845) for CVE-2026-41703 and U3j (25429389) for CVE-2026-41709." },
+        { "product": "esxi", "branch": "8.0", "cves": ["CVE-2026-47876"], "fixedBuild": 25626445, "fixedVersion": "ESXi 8.0 Update 2f (ESXi80U2f-25626445)", "notes": "Hosts below 8.0 U3 GA. The matrix has no 8.0 U2 row for CVE-2026-41703 or CVE-2026-41709." },
+        { "product": "esxi", "branch": "7.0", "cves": ["CVE-2026-47876"], "fixedBuild": null, "fixedVersion": null, "notes": "No public fix. The matrix says 'Contact Broadcom Support if you have extended support contract'." }
+      ]
+    }
+  ],
+  "lifecycle": [
+    { "product": "esxi", "branch": "7.0", "endOfGeneralSupport": "2025-10-02", "endOfTechnicalGuidance": "2027-04-02", "url": "https://knowledge.broadcom.com/external/article/415405/end-of-general-support-for-vsphere", "eotgUrl": "https://ftpdocs.broadcom.com/cadocs/0/contentimages/Product_EOTG_Dates.pdf", "verifiedDate": "2026-09-23" },
+    { "product": "vcenter", "branch": "7.0", "endOfGeneralSupport": "2025-10-02", "endOfTechnicalGuidance": "2027-04-02", "url": "https://knowledge.broadcom.com/external/article/415405/end-of-general-support-for-vsphere", "eotgUrl": "https://ftpdocs.broadcom.com/cadocs/0/contentimages/Product_EOTG_Dates.pdf", "verifiedDate": "2026-09-23" },
+    { "product": "esxi", "branch": "8.0", "endOfGeneralSupport": null, "endOfTechnicalGuidance": "2029-10-11", "url": "https://ftpdocs.broadcom.com/cadocs/0/contentimages/Product_EOTG_Dates.pdf", "verifiedDate": "2026-09-23", "notes": "No official Broadcom page seen gives the exact EoGS day. A Broadcom VCF blog (https://blogs.vmware.com/cloud-foundation/2025/08/01/sap-customers-running-on-vmware-vsphere-7-call-to-action/) says vSphere 8 'will be supported until October 2027'. Third parties report 2027-10-11 (not verified)." },
+    { "product": "vcenter", "branch": "8.0", "endOfGeneralSupport": null, "endOfTechnicalGuidance": "2029-10-11", "url": "https://ftpdocs.broadcom.com/cadocs/0/contentimages/Product_EOTG_Dates.pdf", "verifiedDate": "2026-09-23", "notes": "Same as esxi 8.0: Broadcom says EoGS is 'October 2027'; the exact day was not verified on an official page." },
+    { "product": "nsx", "branch": "4.x", "endOfGeneralSupport": null, "endOfTechnicalGuidance": "2028-10-11", "url": "https://ftpdocs.broadcom.com/cadocs/0/contentimages/Product_EOTG_Dates.pdf", "verifiedDate": "2026-09-23", "notes": "The Broadcom EoTG list has one row, 'NSX 4.x', for 4.0/4.1/4.2. No official page with a per-minor EoGS date was found (the Broadcom lifecycle portal is a JavaScript app and could not be read)." },
+    { "product": "nsx", "branch": "3.2", "endOfGeneralSupport": "2025-10-02", "endOfTechnicalGuidance": "2026-04-07", "url": "https://knowledge.broadcom.com/external/article/421705/vmware-nsx-versions-that-are-end-of-serv.html", "eotgUrl": "https://ftpdocs.broadcom.com/cadocs/0/contentimages/Product_EOTG_Dates.pdf", "verifiedDate": "2026-09-23", "notes": "NSX-T Data Center 3.2. EoGS is the 'End of Service Date' in KB 421705. The EoTG comes from the 'NSX-T Data Center 3.x' row of the Broadcom EoTG PDF, while KB 421705 only says 'Check Guide'." }
+  ]
+}

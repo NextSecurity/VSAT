@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<title>VSAT: Portable VMware vSphere, ESXi and NSX security audit</title>
+<meta name="description" content="VSAT is a portable, read-only PowerShell security audit for VMware vSphere, vCenter, ESXi and NSX. Runs offline, produces a standalone report with interactive topology and remediation guidance. Alpha prerelease.">
+<link rel="canonical" href="https://nextsecurity.github.io/VSAT/">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#0A1B2E">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/site.css">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="VSAT">
+<meta property="og:title" content="VSAT: Portable VMware vSphere and NSX security audit">
+<meta property="og:description" content="Copy into an isolated environment, run one command, and get an evidence-backed assessment of vCenter, ESXi and NSX with interactive topology and practical mitigations.">
+<meta property="og:url" content="https://nextsecurity.github.io/VSAT/">
+<meta property="og:image" content="https://nextsecurity.github.io/VSAT/assets/social-preview.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="VSAT logo with the tagline: Audit VMware vSphere and NSX from one portable command.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="VSAT: Portable VMware vSphere and NSX security audit">
+<meta name="twitter:description" content="Read-only, offline-capable PowerShell audit for vCenter, ESXi and NSX with standalone reports, topology maps and remediation guidance.">
+<meta name="twitter:image" content="https://nextsecurity.github.io/VSAT/assets/social-preview.png">
+<meta name="twitter:image:alt" content="VSAT logo with the tagline: Audit VMware vSphere and NSX from one portable command.">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "VSAT",
+  "alternateName": "Virtualization Security Audit Tool",
+  "description": "Portable PowerShell security auditing for VMware vSphere, vCenter, ESX/ESXi and NSX, with offline reports, topology maps and remediation guidance.",
+  "applicationCategory": "SecurityApplication",
+  "operatingSystem": "Windows",
+  "softwareVersion": "2.0.0-alpha.1",
+  "softwareRequirements": "PowerShell 7.4 or later; VMware PowerCLI",
+  "license": "https://opensource.org/licenses/MIT",
+  "url": "https://nextsecurity.github.io/VSAT/",
+  "downloadUrl": "https://github.com/NextSecurity/VSAT/releases",
+  "codeRepository": "https://github.com/NextSecurity/VSAT",
+  "releaseNotes": "https://github.com/NextSecurity/VSAT/blob/main/CHANGELOG.md",
+  "image": "https://nextsecurity.github.io/VSAT/assets/social-preview.png",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<div class="alpha-bar" role="note">
+  <div class="wrap">
+    <strong>Alpha prerelease 2.0.0-alpha.1.</strong>
+    Not yet validated against a live vCenter, ESXi or NSX lab. <a href="#limitations">Read the limitations</a>.
+  </div>
+</div>
+
+<header class="site-header">
+  <div class="wrap nav">
+    <a class="brand" href="./" aria-label="VSAT home">
+      <img src="assets/logo.svg" alt="" width="32" height="32">
+      <span>VSAT</span>
+    </a>
+    <nav aria-label="Primary">
+      <ul>
+        <li><a href="#how">How it works</a></li>
+        <li><a href="#coverage">Coverage</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#security">Security</a></li>
+        <li><a href="#roadmap">Roadmap</a></li>
+        <li><a href="#docs">Docs</a></li>
+        <li><a class="nav-gh" href="https://github.com/NextSecurity/VSAT">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero" aria-labelledby="hero-title">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow">Virtualization Security Audit Tool · Open source · MIT</p>
+      <h1 id="hero-title">Audit VMware vSphere and NSX from one portable command.</h1>
+      <p class="lede">Copy VSAT into an isolated environment and run it. It audits vCenter, ESXi hosts, clusters, VMs, virtual networking, <strong>NSX</strong> and storage, and gives you an evidence-backed assessment with an interactive topology map and practical mitigations.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/NextSecurity/VSAT/releases">Download prerelease</a>
+        <a class="btn btn-ghost" href="demo/report.html">View demo report</a>
+      </div>
+      <ul class="facts" aria-label="Key facts">
+        <li>Read-only</li>
+        <li>Runs offline</li>
+        <li>No telemetry</li>
+        <li>Windows x64 · PowerShell 7.4+</li>
+      </ul>
+    </div>
+
+    <div class="hero-panel">
+      <div class="terminal" aria-labelledby="qs-title">
+        <div class="terminal-bar">
+          <span class="dot" aria-hidden="true"></span><span class="dot" aria-hidden="true"></span><span class="dot" aria-hidden="true"></span>
+          <h2 id="qs-title">Quick start</h2>
+          <button class="copy" type="button" data-copy="qs-code" aria-label="Copy quick start commands">Copy</button>
+        </div>
+<pre id="qs-code"><code><span class="c"># Offline package: extract, then</span>
+.\VSAT.cmd
+
+<span class="c"># Or with PowerShell 7.4+ and PowerCLI present</span>
+.\vsat.ps1 -Doctor        <span class="c"># readiness check</span>
+.\vsat.ps1                <span class="c"># guided UI on 127.0.0.1</span>
+.\vsat.ps1 -Demo          <span class="c"># synthetic lab, no connectivity</span>
+
+.\vsat.ps1 -Server vc01.example.local `
+           -NsxServer nsx01.example.local</code></pre>
+      </div>
+      <p class="panel-note">VSAT prompts for credentials securely. Passwords are never accepted on the command line.</p>
+    </div>
+  </div>
+</section>
+
+<section id="how" class="section" aria-labelledby="how-title">
+  <div class="wrap">
+    <p class="kicker">How it works</p>
+    <h2 id="how-title">Six steps from launch to results</h2>
+    <p class="section-lede">The same flow works in the guided browser UI and in terminal mode (<code>-Cli</code>). Advanced options stay tucked away until you need them.</p>
+    <ol class="steps">
+      <li><span class="step-n" aria-hidden="true">1</span><h3>Launch</h3><p>Run <code>VSAT.cmd</code>. A readiness check reports the runtime, modules, output folder and TLS trust in plain language.</p></li>
+      <li><span class="step-n" aria-hidden="true">2</span><h3>Authenticate</h3><p>Add one or more vCenter or ESXi endpoints and sign in with a read-only account.</p></li>
+      <li><span class="step-n nsx" aria-hidden="true">3</span><h3>NSX step</h3><p>Always shown. Connect your NSX Managers, or declare NSX absent so the declaration is recorded for review.</p></li>
+      <li><span class="step-n" aria-hidden="true">4</span><h3>Review scope</h3><p>Check the discovered systems, exclusions and profile (<code>standard</code> or <code>strict</code>) before anything runs.</p></li>
+      <li><span class="step-n" aria-hidden="true">5</span><h3>Run</h3><p>Follow phase progress with object counts and readable errors. You can cancel at any time.</p></li>
+      <li><span class="step-n" aria-hidden="true">6</span><h3>Results</h3><p>Coverage, prioritized findings, topology, NSX policy, drift and remediation work packages.</p></li>
+    </ol>
+  </div>
+</section>
+
+<section id="coverage" class="section alt" aria-labelledby="coverage-title">
+  <div class="wrap">
+    <p class="kicker">Mandatory audit coverage</p>
+    <h2 id="coverage-title">Seven VMware domains, and none of them optional</h2>
+    <p class="section-lede">A domain VSAT could not read is reported as <strong>INCOMPLETE</strong> or <strong>UNKNOWN</strong>, never as a pass. When NSX is detected but not assessed, the whole run reads <code class="status-inc">INCOMPLETE: NSX NOT ASSESSED</code> and exits with code 2.</p>
+    <div class="table-scroll" role="region" aria-labelledby="coverage-title" tabindex="0">
+      <table class="matrix">
+        <thead>
+          <tr><th scope="col">Domain</th><th scope="col">What is examined</th><th scope="col">Source</th></tr>
+        </thead>
+        <tbody data-platform="vmware">
+          <tr class="platform"><th scope="rowgroup" colspan="3">VMware vSphere + NSX <span class="rel">2.0.0-alpha.1 (current)</span></th></tr>
+          <tr><th scope="row">vCenter</th><td>Build and advisories, identity and session policy where accessible, roles and inherited permissions, certificates, extensions, services, logs, backup configuration</td><td>PowerCLI (read)</td></tr>
+          <tr><th scope="row">ESXi hosts</th><td>Build compared with advisory ranges, lockdown mode, SSH/shell/DCUI, firewall, services, Secure Boot/TPM where exposed, acceptance level, NTP/DNS, remote logging, advanced settings</td><td>PowerCLI (read)</td></tr>
+          <tr><th scope="row">Clusters</th><td>HA/DRS, admission control, isolation response, shared failure dependencies</td><td>PowerCLI (read)</td></tr>
+          <tr><th scope="row">VMs</th><td>Firmware and Secure Boot, vTPM, encryption, devices and passthrough, console, snapshots, sensitive advanced settings, Tools</td><td>PowerCLI (read)</td></tr>
+          <tr><th scope="row">Virtual networking</th><td>VSS/VDS, effective per-port-group security policy including overrides, VLANs, VMkernel separation, uplinks, LLDP/CDP neighbors, NetFlow and mirroring destinations</td><td>PowerCLI (read)</td></tr>
+          <tr class="row-nsx"><th scope="row">NSX <span class="chip">mandatory</span></th><td>Manager and cluster, fabric and transport nodes, segments, Tier-0/Tier-1, distributed and gateway firewall order, scope, defaults and exclusions, group membership and realization, logging, backup</td><td>REST API (GET allowlist)</td></tr>
+          <tr><th scope="row">Storage &amp; recovery</th><td>vSAN encryption and fault domains, NFS/iSCSI authentication, multipathing, datastore dependencies, snapshot age, backup evidence</td><td>PowerCLI (read)</td></tr>
+        </tbody>
+        <tbody data-platform="planned">
+          <tr class="platform"><th scope="rowgroup" colspan="3">Planned platforms <span class="rel">next releases, not yet available</span></th></tr>
+          <tr class="planned"><th scope="row">Microsoft Hyper-V <span class="chip chip-plan">2.1 planned</span></th><td>Hosts, VMs and virtual switches</td><td>PowerShell remoting / CIM (read)</td></tr>
+          <tr class="planned"><th scope="row">KVM / libvirt <span class="chip chip-plan">2.2 planned</span></th><td>Hosts, guests and networks</td><td>Read-only SSH or offline collector</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="legend">
+      <div>
+        <h3>Result states</h3>
+        <ul class="pills">
+          <li class="p-pass">PASS</li><li class="p-fail">FAIL</li><li class="p-manual">MANUAL</li>
+          <li class="p-na">NOT_APPLICABLE</li><li class="p-unknown">UNKNOWN</li><li class="p-error">ERROR</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Domain coverage</h3>
+        <ul class="pills">
+          <li class="p-pass">ASSESSED</li><li class="p-manual">PARTIAL</li><li class="p-fail">INCOMPLETE</li>
+          <li class="p-unknown">UNKNOWN</li><li class="p-na">NOT_APPLICABLE</li><li class="p-review">REVIEW</li>
+        </ul>
+      </div>
+    </div>
+    <p class="fine">The alpha rule pack is still growing. The per-control matrix is generated from the rules at build time. CIS control mappings are marked <em>unverified</em> until the licensed benchmark documents have been reviewed.</p>
+  </div>
+</section>
+
+<section id="features" class="section" aria-labelledby="features-title">
+  <div class="wrap">
+    <p class="kicker">Beyond a checklist</p>
+    <h2 id="features-title">Five advanced features</h2>
+    <p class="section-lede">Each feature is labeled with how much it can actually tell you. Inferred results are never presented as observed behavior.</p>
+    <div class="cards">
+      <article class="card">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h16M14 4l3 3-3 3M10 14l-3 3 3 3"/></svg>
+        <h3>Drift between runs</h3>
+        <p><code>-Baseline</code> compares with a previous evidence package and shows new, resolved, changed and unassessed items. Evidence that has disappeared is not treated as a resolved finding.</p>
+      </article>
+      <article class="card">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10M6 8l5 8M18 8l-5 8"/></svg>
+        <h3>Explainable potential attack paths</h3>
+        <p>Pick a source zone and a critical target. Each path lists the firewall rules, prerequisites and uncertainty involved. Paths are inferred from configuration, not proof of exploitability.</p>
+      </article>
+      <article class="card">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01M12 10v4"/></svg>
+        <h3>Failure-impact explorer</h3>
+        <p>Select a host, uplink, datastore or Edge and see which workloads could be affected, taking known redundancy into account. It is a configuration model. VSAT injects no failures.</p>
+      </article>
+      <article class="card">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h10M9 12h10M9 19h10M4 5l1 1 2-2M4 12l1 1 2-2M4 19l1 1 2-2"/></svg>
+        <h3>Remediation work packages</h3>
+        <p>Findings are grouped by corrective action and team, with impact, maintenance-window needs, rollback and validation steps. VSAT writes guidance and never applies changes.</p>
+      </article>
+      <article class="card">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM4 9h16M9 14h6"/></svg>
+        <h3>Collect once, replay, share safely</h3>
+        <p><code>-Replay</code> re-evaluates saved evidence offline with no credentials. <code>-Redact</code> writes a separate sharing copy that uses consistent pseudonyms.</p>
+      </article>
+      <article class="card card-demo">
+        <h3>See it on a synthetic lab</h3>
+        <p>The demo report is a real standalone <code>report.html</code> generated from the built-in <code>example.local</code> lab.</p>
+        <a class="btn btn-primary" href="demo/report.html">Open demo report</a>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="security" class="section alt" aria-labelledby="security-title">
+  <div class="wrap">
+    <p class="kicker">Security model</p>
+    <h2 id="security-title">Built for credentials that matter</h2>
+    <p class="section-lede">VSAT treats every inventory name, tag and imported file as untrusted. It assumes a hostile web page may be open in the same browser.</p>
+    <div class="sec-grid">
+      <div><h3>Read-only by design</h3><p>vSphere is accessed through read cmdlets. NSX REST calls pass an enforced method and path allowlist: GET requests only, apart from session create and destroy.</p></div>
+      <div><h3>Hardened local UI</h3><p>The listener binds to loopback only. Each run gets a random token in the URL fragment. Host and Origin are validated, a custom header guards against CSRF, and no CORS is allowed.</p></div>
+      <div><h3>Secrets stay in memory</h3><p>Credentials are handled as <code>PSCredential</code>, never taken on the command line, never sent to the browser and redacted from logs.</p></div>
+      <div><h3>Scoped TLS trust</h3><p>Pin a certificate per endpoint with <code>-TrustedThumbprint</code>. VSAT never changes the global PowerCLI certificate policy.</p></div>
+      <div><h3>Safe reports</h3><p>Reports use a strict CSP with hashes and safe DOM rendering. CSV formulas are neutralized, and ZIP imports have size limits and path validation.</p></div>
+      <div><h3>Honest residual risk</h3><p>PowerShell cannot guarantee that secrets are wiped from memory. Loopback is not an authentication boundary. Both are documented.</p></div>
+    </div>
+    <p><a class="link-arrow" href="https://github.com/NextSecurity/VSAT/blob/main/docs/threat-model.md">Read the threat model</a></p>
+  </div>
+</section>
+
+<section id="offline" class="section" aria-labelledby="offline-title">
+  <div class="wrap offline-grid">
+    <div>
+      <p class="kicker">Offline operation</p>
+      <h2 id="offline-title">Made for air-gapped environments</h2>
+      <ul class="checks">
+        <li>No internet needed during an audit, report viewing or replay</li>
+        <li>No telemetry, CDNs, web fonts or cloud accounts</li>
+        <li>PowerCLI loaded process-locally from <code>./modules</code>, with no global installs</li>
+        <li>Execution policy and application control are respected, not bypassed</li>
+        <li>Advisory data is a dated snapshot, and its age is shown in every report</li>
+        <li>SHA-256 manifest for every output</li>
+      </ul>
+    </div>
+    <div class="flow" aria-labelledby="flow-title">
+      <h3 id="flow-title">Building the offline package</h3>
+      <ol>
+        <li><strong>Connected machine:</strong> verify <code>vsat.ps1</code> against <code>SHA256SUMS.txt</code></li>
+        <li>Run <code>build/New-OfflinePackage.ps1</code>. It fetches pinned PowerShell and PowerCLI from vendor sources and verifies their hashes.</li>
+        <li>Record the ZIP hash and transfer it by approved media</li>
+        <li><strong>Isolated runner:</strong> verify the hash, extract, then run <code>.\VSAT.cmd</code></li>
+      </ol>
+      <p class="fine">Why a builder? Redistribution rights for PowerShell and PowerCLI inside our release have not been confirmed yet.</p>
+    </div>
+  </div>
+</section>
+
+<section id="limitations" class="section alt" aria-labelledby="lim-title">
+  <div class="wrap">
+    <div class="limits">
+      <p class="kicker kicker-warn">Alpha status</p>
+      <h2 id="lim-title">What 2.0.0-alpha.1 does not do yet</h2>
+      <ul>
+        <li><strong>Not validated against a live lab.</strong> Collectors are built against vendor API documentation and tested with synthetic fixtures plus protocol-level integration tests against the vcsim vSphere simulator and a mock NSX API. Tested product versions: none yet.</li>
+        <li><strong>No code signing.</strong> There is no signing certificate. Verify releases with SHA-256 checksums.</li>
+        <li><strong>You build the offline package</strong> on a connected machine, using the provided builder script.</li>
+        <li><strong>CIS mappings are unverified.</strong> VSAT is not certified by, endorsed by or affiliated with CIS, VMware or Broadcom. A clean run does not mean compliance.</li>
+        <li><strong>No performance measurements</strong> on large inventories yet.</li>
+        <li><strong>Windows x64 only.</strong> Linux and macOS runners are not supported or validated.</li>
+      </ul>
+      <p><a class="link-arrow" href="https://github.com/NextSecurity/VSAT/blob/main/docs/limitations.md">Full list of limitations</a></p>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap" class="section" aria-labelledby="roadmap-title">
+  <div class="wrap">
+    <p class="kicker">Roadmap</p>
+    <h2 id="roadmap-title">One auditor for the virtualized datacenter</h2>
+    <p class="section-lede">VSAT stands for <em>Virtualization Security Audit Tool</em>. It starts with VMware and grows to other hypervisors, using the same evidence model, report, coverage rules and read-only guarantees.</p>
+    <ol class="roadmap">
+      <li class="now"><span class="state">Current</span><span class="ver">2.0.0-alpha.1</span><h3>VMware vSphere + NSX</h3><p>vCenter, ESXi, clusters, VMs, virtual networking, mandatory NSX, storage &amp; recovery.</p></li>
+      <li class="next"><span class="state">Planned, next</span><span class="ver">2.1</span><h3>Microsoft Hyper-V</h3><p>Hosts, VMs and virtual switches through read-only PowerShell remoting and CIM (<code>-HyperVServer</code>).</p></li>
+      <li class="next"><span class="state">Planned</span><span class="ver">2.2</span><h3>KVM / libvirt</h3><p>Read-only SSH commands, or an offline collection script whose JSON output VSAT imports (<code>-KvmServer</code>, <code>-KvmEvidence</code>).</p></li>
+    </ol>
+    <p class="fine">Planned releases are not yet available. Their scope may change, and each one will ship with its own limitations.</p>
+  </div>
+</section>
+
+<section id="docs" class="section alt" aria-labelledby="docs-title">
+  <div class="wrap">
+    <p class="kicker">Documentation</p>
+    <h2 id="docs-title">Read before you run</h2>
+    <ul class="doc-grid">
+      <li><a href="https://github.com/NextSecurity/VSAT/blob/main/docs/usage.md"><strong>Usage</strong><span>Parameters, scope file, exit codes, outputs</span></a></li>
+      <li><a href="https://github.com/NextSecurity/VSAT/blob/main/docs/offline-package.md"><strong>Offline package</strong><span>Connected-side builder, hashes, contents</span></a></li>
+      <li><a href="https://github.com/NextSecurity/VSAT/blob/main/docs/privileges.md"><strong>Least privileges</strong><span>vCenter Read-only, NSX Auditor</span></a></li>
+      <li><a href="https://github.com/NextSecurity/VSAT/blob/main/docs/threat-model.md"><strong>Threat model</strong><span>Controls and residual risks</span></a></li>
+      <li><a href="https://github.com/NextSecurity/VSAT/blob/main/docs/migration-from-1x.md"><strong>Migrating from 1.x</strong><span>Changes in result semantics</span></a></li>
+      <li><a href="https://github.com/NextSecurity/VSAT/blob/main/docs/architecture/overview.md"><strong>Architecture</strong><span>Modules, data flow, data model</span></a></li>
+      <li><a href="https://github.com/NextSecurity/VSAT/blob/main/docs/faq.md"><strong>FAQ</strong><span>Common questions</span></a></li>
+      <li><a href="https://github.com/NextSecurity/VSAT/blob/main/CHANGELOG.md"><strong>Changelog</strong><span>What changed in 2.0.0-alpha.1</span></a></li>
+    </ul>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div class="footer-brand">
+      <img src="assets/logo.svg" alt="" width="28" height="28">
+      <span>VSAT 2.0.0-alpha.1</span>
+    </div>
+    <nav aria-label="Footer">
+      <ul>
+        <li><a href="https://github.com/NextSecurity/VSAT">Source</a></li>
+        <li><a href="https://github.com/NextSecurity/VSAT/releases">Releases</a></li>
+        <li><a href="https://github.com/NextSecurity/VSAT/blob/main/CHANGELOG.md">Changelog</a></li>
+        <li><a href="https://github.com/NextSecurity/VSAT/blob/main/SECURITY.md">Security</a></li>
+        <li><a href="https://github.com/NextSecurity/VSAT/blob/main/CONTRIBUTING.md">Contribute</a></li>
+        <li><a href="https://github.com/NextSecurity/VSAT/blob/main/LICENSE">MIT License</a></li>
+      </ul>
+    </nav>
+    <p class="fine">This site is static documentation. There are no uploads, no scan service and no tracking. VMware, vSphere, vCenter, ESXi and NSX are trademarks of Broadcom Inc. or its subsidiaries. CIS is a trademark of the Center for Internet Security. They are used here only to describe compatibility, and VSAT is not affiliated with or endorsed by either.</p>
+  </div>
+</footer>
+
+<script src="assets/site.js" defer></script>
+</body>
+</html>

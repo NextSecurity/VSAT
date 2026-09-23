@@ -1,0 +1,94 @@
+name: Bug report
+description: Something in VSAT is broken or produces a wrong result
+title: "[Bug]: "
+labels: ["type:bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Do not post real hostnames, IP addresses, credentials, thumbprints or unredacted reports.** Use `-Redact` and review the output first.
+        Security vulnerabilities must be reported privately: see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: VSAT version
+      description: Output of `.\vsat.ps1 -Version` (tool, rule pack, advisory snapshot, schema)
+      placeholder: "2.0.0-alpha.1 / rules 2026.09.0 / advisories 2026-09-23 / schema 2.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Guided browser UI
+        - CLI (-Cli)
+        - Doctor (-Doctor)
+        - Replay (-Replay)
+        - Demo (-Demo)
+        - Offline package (VSAT.cmd)
+        - Offline package builder (build/New-OfflinePackage.ps1)
+    validations:
+      required: true
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Affected domain
+      multiple: true
+      options:
+        - vCenter
+        - ESXi hosts
+        - Clusters
+        - VMs
+        - Virtual networking
+        - NSX
+        - Storage & recovery
+        - Report / UI
+        - Packaging / runtime
+        - Not sure
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Include the exit code and the relevant coverage/finding (redacted).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. .\vsat.ps1 -Cli -Server vc01.example.local ...
+        2. ...
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Runner OS, PowerShell version, PowerCLI version, target product versions/builds (vCenter, ESXi, NSX), account role.
+      placeholder: |
+        Runner: Windows Server 2022, PowerShell 7.4.x, VCF.PowerCLI 9.x
+        Target: vCenter 8.0.x, ESXi 8.0.x, NSX 4.x
+        Role: Read-only / NSX Auditor
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log excerpt (redacted)
+      description: From collection.log. Secrets are redacted by VSAT, but review before posting.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmation
+      options:
+        - label: I removed or pseudonymized all real infrastructure data from this report.
+          required: true
+        - label: This is not a security vulnerability (those go to private advisories).
+          required: true

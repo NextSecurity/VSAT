@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0C2238"/>
+      <stop offset="1" stop-color="#06111D"/>
+    </linearGradient>
+    <linearGradient id="sp-shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1A4269"/>
+      <stop offset="1" stop-color="#0A1B2E"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.78" cy="0.45" r="0.5">
+      <stop offset="0" stop-color="#2BD4B4" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#2BD4B4" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0 H0 V40" fill="none" stroke="#FFFFFF" stroke-opacity="0.035" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+
+  <!-- topology motif -->
+  <g stroke="#2BD4B4" stroke-opacity="0.35" stroke-width="2" fill="none">
+    <path d="M880 150 L1010 210 L1140 160"/>
+    <path d="M880 150 L900 300 L1010 210"/>
+    <path d="M1010 210 L1080 330 L1140 160"/>
+    <path d="M900 300 L1080 330"/>
+    <path d="M900 300 L960 450 L1080 330"/>
+    <path d="M1080 330 L1180 440"/>
+    <path d="M960 450 L1100 510 L1180 440"/>
+    <path d="M820 400 L900 300"/>
+    <path d="M820 400 L960 450"/>
+  </g>
+  <g fill="#0A1B2E" stroke="#2BD4B4" stroke-width="3">
+    <circle cx="880" cy="150" r="10"/><circle cx="1140" cy="160" r="10"/>
+    <circle cx="900" cy="300" r="12"/><circle cx="1180" cy="440" r="10"/>
+    <circle cx="960" cy="450" r="11"/><circle cx="1100" cy="510" r="9"/>
+    <circle cx="820" cy="400" r="8"/>
+  </g>
+  <circle cx="1010" cy="210" r="13" fill="#0A1B2E" stroke="#2BD4B4" stroke-width="3"/>
+  <circle cx="1080" cy="330" r="16" fill="#F5B83D"/>
+  <circle cx="1080" cy="330" r="28" fill="none" stroke="#F5B83D" stroke-opacity="0.35" stroke-width="2"/>
+
+  <!-- logo -->
+  <g transform="translate(96 118) scale(1.25)">
+    <path d="M64 6 L112 22 V60 C112 90 91 111 64 122 C37 111 16 90 16 60 V22 Z" fill="url(#sp-shield)" stroke="#2BD4B4" stroke-width="4" stroke-linejoin="round"/>
+    <g stroke="#2BD4B4" stroke-width="3.5" stroke-linecap="round" fill="none">
+      <path d="M42 44 L64 34 L86 44"/>
+      <path d="M42 44 L50 74 L64 94 L78 74 L86 44"/>
+      <path d="M64 34 L64 62"/>
+      <path d="M50 74 L64 62 L78 74"/>
+    </g>
+    <g fill="#0A1B2E" stroke="#2BD4B4" stroke-width="3.5">
+      <circle cx="64" cy="34" r="6"/><circle cx="42" cy="44" r="6"/><circle cx="86" cy="44" r="6"/>
+      <circle cx="50" cy="74" r="6"/><circle cx="78" cy="74" r="6"/><circle cx="64" cy="94" r="6"/>
+    </g>
+    <circle cx="64" cy="62" r="8" fill="#F5B83D"/>
+  </g>
+
+  <g font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+    <text x="276" y="212" font-size="104" font-weight="800" letter-spacing="8" fill="#FFFFFF">VSAT</text>
+    <text x="280" y="258" font-size="24" font-weight="600" letter-spacing="3" fill="#2BD4B4">VIRTUALIZATION SECURITY AUDIT TOOL</text>
+
+    <text x="100" y="370" font-size="44" font-weight="700" fill="#FFFFFF">Audit VMware vSphere and NSX</text>
+    <text x="100" y="424" font-size="44" font-weight="700" fill="#FFFFFF">from one portable command.</text>
+    <text x="100" y="476" font-size="24" fill="#A9BCD0">Offline reports · interactive topology · remediation guidance</text>
+
+    <g font-size="20" font-weight="600">
+      <rect x="100" y="528" width="138" height="42" rx="21" fill="#2BD4B4" fill-opacity="0.12" stroke="#2BD4B4" stroke-opacity="0.6"/>
+      <text x="169" y="556" text-anchor="middle" fill="#7FE9D5">PowerShell</text>
+      <rect x="252" y="528" width="128" height="42" rx="21" fill="#2BD4B4" fill-opacity="0.12" stroke="#2BD4B4" stroke-opacity="0.6"/>
+      <text x="316" y="556" text-anchor="middle" fill="#7FE9D5">Air-gapped</text>
+      <rect x="394" y="528" width="112" height="42" rx="21" fill="#2BD4B4" fill-opacity="0.12" stroke="#2BD4B4" stroke-opacity="0.6"/>
+      <text x="450" y="556" text-anchor="middle" fill="#7FE9D5">Read-only</text>
+      <rect x="520" y="528" width="176" height="42" rx="21" fill="#F5B83D" fill-opacity="0.12" stroke="#F5B83D" stroke-opacity="0.7"/>
+      <text x="608" y="556" text-anchor="middle" fill="#F8CF7A">2.0.0-alpha.1</text>
+    </g>
+  </g>
+</svg>

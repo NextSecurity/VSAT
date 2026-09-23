@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Pester
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck
+      - name: Verify tag matches build version
+        shell: pwsh
+        run: |
+          $v = (Get-Content -Raw build/version.json | ConvertFrom-Json).version
+          if ("v$v" -ne $env:GITHUB_REF_NAME) { throw "Tag $env:GITHUB_REF_NAME does not match build/version.json ($v)" }
+      - name: Reproducible build check and tests
+        shell: pwsh
+        run: |
+          ./build/Build-Vsat.ps1 -Check
+          $c = New-PesterConfiguration; $c.Run.Path = './tests'; $c.Run.Exit = $true; Invoke-Pester -Configuration $c
+      - name: Assemble release assets
+        shell: pwsh
+        run: ./build/New-ReleaseAssets.ps1 -OutDir ./release
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $pre = if ($tag -match '-') { '--prerelease' } else { '' }
+          $notes = ./build/Get-ReleaseNotes.ps1 -Version $tag.TrimStart('v')
+          Set-Content -Path notes.md -Value $notes
+          gh release create $tag ./release/* --title "VSAT $($tag.TrimStart('v'))" --notes-file notes.md $pre --verify-tag

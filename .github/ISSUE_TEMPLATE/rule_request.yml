@@ -1,0 +1,63 @@
+name: Rule request
+description: Request a new check or report an incorrect rule
+title: "[Rule]: "
+labels: ["type:rule", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste proprietary benchmark text.** Reference the source edition and control ID, and describe the check in your own words.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Request type
+      options:
+        - New rule
+        - Incorrect result (false positive / false negative)
+        - Wrong or missing framework mapping
+        - Mitigation guidance improvement
+    validations:
+      required: true
+  - type: input
+    id: rule-id
+    attributes:
+      label: Existing rule ID (if any)
+      placeholder: ESXI-SVC-SSH
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain
+      options:
+        - vCenter
+        - ESXi hosts
+        - Clusters
+        - VMs
+        - Virtual networking
+        - NSX
+        - Storage & recovery
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Source reference
+      description: Framework and edition + control ID (e.g. CIS VMware ESXi 8.0 Benchmark vX.Y.Z, control N.N), vendor security configuration guide, or vendor KB/API documentation URL.
+    validations:
+      required: true
+  - type: textarea
+    id: check
+    attributes:
+      label: What should be checked
+      description: Facts/properties to read (API or cmdlet), applicability, expected value per profile (standard/strict).
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Applicable product versions
+      placeholder: ESXi 8.0 U2+, vCenter 8.0+, NSX 4.1+
+  - type: textarea
+    id: unknown
+    attributes:
+      label: When should the result be UNKNOWN or NOT_APPLICABLE?
+      description: e.g. permission denied, API not exposed on older versions, feature not deployed.

@@ -1,0 +1,17 @@
+{
+  "notes": "Pinned inputs for build/New-OfflinePackage.ps1. PowerShell 7.6 is the current LTS line; the runtime hash is the GitHub release asset digest (verified 2026-09-23). VSAT needs only the PowerCLI Core and Storage modules (plus their dependencies), which keeps the package small; they ship inside VCF.PowerCLI 9.1.1.25718932. PowerCLI/runtime compatibility must be confirmed against Broadcom's compatibility matrix before a final release. Update deliberately and record the reason in CHANGELOG.md.",
+  "powershell": {
+    "version": "7.6.6",
+    "file": "PowerShell-7.6.6-win-x64.zip",
+    "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.6.6/PowerShell-7.6.6-win-x64.zip",
+    "sha256": "02fe458be20493fbdf43f61ea20610b811ee6c738ab1676c61b9cfcd1a33c860"
+  },
+  "powercli": {
+    "distribution": "VCF.PowerCLI 9.1.1.25718932",
+    "repository": "PSGallery",
+    "modules": [
+      { "name": "VMware.VimAutomation.Core", "version": "13.5.1.25718932" },
+      { "name": "VMware.VimAutomation.Storage", "version": "13.5.1.25718932" }
+    ]
+  }
+}
