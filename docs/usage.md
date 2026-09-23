@@ -1,6 +1,6 @@
 # Using VSAT
 
-> **Alpha (`2.0.0-alpha.1`).** VSAT has not been validated against a live lab. Review every result before acting on it. See [limitations.md](limitations.md).
+> **Alpha (`2.0.0`).** VSAT has not been validated against a live lab. Review every result before acting on it. See [limitations.md](limitations.md).
 
 ## Requirements
 

@@ -9,7 +9,7 @@ and namespaced by endpoint; names and IP addresses are never used as identity.
 ```jsonc
 {
   "schemaVersion": "2.0",
-  "tool":  { "name": "VSAT", "version": "2.0.0-alpha.1" },
+  "tool":  { "name": "VSAT", "version": "2.0.0" },
   "run": {
     "id": "8c1e…",                    // GUID
     "startedUtc": "2026-09-23T10:00:00Z",
@@ -84,7 +84,7 @@ does not expose it). Only `ok` and `absent` can yield `PASS`/`FAIL`.
 ```jsonc
 {
   "schemaVersion": "2.0",
-  "tool": { "name": "VSAT", "version": "2.0.0-alpha.1" },
+  "tool": { "name": "VSAT", "version": "2.0.0" },
   "run":  { /* copied from evidence.run */ },
   "generatedUtc": "…",
   "rulePack":  { "version": "2026.09.0", "profile": "standard|strict", "ruleCount": 140 },

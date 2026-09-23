@@ -6,9 +6,9 @@ The format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
-## [2.0.0-alpha.1] - 2026-09-23
+## [2.0.0] - 2026-09-23
 
-This is a full rewrite of VSAT. **It is a limited prerelease.** It has not been validated against a live vCenter, ESXi or NSX lab. Artifacts are not code-signed. CIS control ID mappings are marked `unverified`. No performance measurements exist. See [docs/limitations.md](docs/limitations.md).
+This is a full rewrite of VSAT. **It has not yet been validated against live labs.** It has not been validated against a live vCenter, ESXi or NSX lab. Artifacts are not code-signed. CIS control ID mappings are marked `unverified`. No performance measurements exist. See [docs/limitations.md](docs/limitations.md).
 
 ### Breaking
 
@@ -88,6 +88,6 @@ These 1.x defects are covered by regression fixtures:
 - First release: the VMware vSphere security audit script `vsat.ps1`. It had PowerCLI-based `Ensure-*` checks derived from CIS VMware ESXi benchmark controls, console output and `vsat.log`.
 - The static ESXi patch list `vmware/patches.json`.
 
-[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.0.0-alpha.1...HEAD
-[2.0.0-alpha.1]: https://github.com/NextSecurity/VSAT/releases/tag/v2.0.0-alpha.1
+[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.0.0
 [1.0.0]: https://github.com/NextSecurity/VSAT/commit/5f7eda7dc99e859566b21258a49bdc7147b457e3

@@ -1,6 +1,6 @@
 # Threat model
 
-This document covers VSAT `2.0.0-alpha.1`. It maps each threat from the product plan (§11) to the control implemented in this release and to the test that checks it. **It is a design self-review.** No independent penetration test or security certification has been performed. Controls are verified with Pester fixtures, not in a live environment. The "Implemented control" column describes the security contract the engine implements. Where this document and the code under `src/` disagree, the code governs, and the discrepancy is a bug worth reporting.
+This document covers VSAT `2.0.0`. It maps each threat from the product plan (§11) to the control implemented in this release and to the test that checks it. **It is a design self-review.** No independent penetration test or security certification has been performed. Controls are verified with Pester fixtures, not in a live environment. The "Implemented control" column describes the security contract the engine implements. Where this document and the code under `src/` disagree, the code governs, and the discrepancy is a bug worth reporting.
 
 ## Assets and trust boundaries
 

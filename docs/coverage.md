@@ -1,6 +1,6 @@
 # Control coverage matrix
 
-Generated from rule pack **2026.09.0** for VSAT **2.0.0-alpha.1** by `build/New-CoverageDoc.ps1`. Do not edit by hand.
+Generated from rule pack **2026.09.0** for VSAT **2.0.0** by `build/New-CoverageDoc.ps1`. Do not edit by hand.
 
 - **Automated** checks evaluate collected evidence; missing or denied evidence yields UNKNOWN, never PASS.
 - **Manual** checks always produce MANUAL results with guidance; completion is not certification.

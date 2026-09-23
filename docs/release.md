@@ -6,7 +6,7 @@ VSAT versions four things separately. All four are recorded in `manifest.json`, 
 
 | Item | Scheme | Example | Changes when |
 |---|---|---|---|
-| Tool | SemVer with prerelease tags | `2.0.0-alpha.1` | Any code change |
+| Tool | SemVer with prerelease tags | `2.0.0` | Any code change |
 | Rule pack | `YYYY.MM.patch` | `2026.09.0` | Rules added or changed. Each rule also has its own `ruleVersion`. |
 | Advisory snapshot | Snapshot date | `2026-09-23` | Advisory data refreshed. The age is shown in every report. |
 | Evidence schema | `major.minor` | `2.0` | Evidence or results structure changes. Replay checks compatibility. |
@@ -44,7 +44,7 @@ Based on plan §14.
 - [ ] SBOM generated (CycloneDX or SPDX) for the script's embedded assets and the offline package components
 - [ ] `THIRD-PARTY-NOTICES.txt` complete
 - [ ] Package manifest and provenance attached
-- [ ] Signatures: **only if a trusted signing identity exists**. Checksums and signatures are described separately in the notes. No signing certificate exists as of `2.0.0-alpha.1`.
+- [ ] Signatures: **only if a trusted signing identity exists**. Checksums and signatures are described separately in the notes. No signing certificate exists as of `2.0.0`.
 - [ ] Sample sanitized report and evidence package from the synthetic demo lab (`example.local`, RFC 5737/1918 only)
 - [ ] GitHub Pages demo regenerated from the same build
 - [ ] Release marked **prerelease** for alpha, beta and rc

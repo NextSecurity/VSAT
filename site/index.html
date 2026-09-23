@@ -38,7 +38,7 @@
   "description": "Portable PowerShell security auditing for VMware vSphere, vCenter, ESX/ESXi and NSX, with offline reports, topology maps and remediation guidance.",
   "applicationCategory": "SecurityApplication",
   "operatingSystem": "Windows",
-  "softwareVersion": "2.0.0-alpha.1",
+  "softwareVersion": "2.0.0",
   "softwareRequirements": "PowerShell 7.4 or later; VMware PowerCLI",
   "license": "https://opensource.org/licenses/MIT",
   "url": "https://nextsecurity.github.io/VSAT/",
@@ -55,7 +55,7 @@
 
 <div class="alpha-bar" role="note">
   <div class="wrap">
-    <strong>Alpha prerelease 2.0.0-alpha.1.</strong>
+    <strong>Alpha prerelease 2.0.0.</strong>
     Not yet validated against a live vCenter, ESXi or NSX lab. <a href="#limitations">Read the limitations</a>.
   </div>
 </div>
@@ -150,7 +150,7 @@
           <tr><th scope="col">Domain</th><th scope="col">What is examined</th><th scope="col">Source</th></tr>
         </thead>
         <tbody data-platform="vmware">
-          <tr class="platform"><th scope="rowgroup" colspan="3">VMware vSphere + NSX <span class="rel">2.0.0-alpha.1 (current)</span></th></tr>
+          <tr class="platform"><th scope="rowgroup" colspan="3">VMware vSphere + NSX <span class="rel">2.0.0 (current)</span></th></tr>
           <tr><th scope="row">vCenter</th><td>Build and advisories, identity and session policy where accessible, roles and inherited permissions, certificates, extensions, services, logs, backup configuration</td><td>PowerCLI (read)</td></tr>
           <tr><th scope="row">ESXi hosts</th><td>Build compared with advisory ranges, lockdown mode, SSH/shell/DCUI, firewall, services, Secure Boot/TPM where exposed, acceptance level, NTP/DNS, remote logging, advanced settings</td><td>PowerCLI (read)</td></tr>
           <tr><th scope="row">Clusters</th><td>HA/DRS, admission control, isolation response, shared failure dependencies</td><td>PowerCLI (read)</td></tr>
@@ -274,7 +274,7 @@
   <div class="wrap">
     <div class="limits">
       <p class="kicker kicker-warn">Alpha status</p>
-      <h2 id="lim-title">What 2.0.0-alpha.1 does not do yet</h2>
+      <h2 id="lim-title">What 2.0.0 does not do yet</h2>
       <ul>
         <li><strong>Not validated against a live lab.</strong> Collectors are built against vendor API documentation and tested with synthetic fixtures plus protocol-level integration tests against the vcsim vSphere simulator and a mock NSX API. Tested product versions: none yet.</li>
         <li><strong>No code signing.</strong> There is no signing certificate. Verify releases with SHA-256 checksums.</li>
@@ -294,7 +294,7 @@
     <h2 id="roadmap-title">One auditor for the virtualized datacenter</h2>
     <p class="section-lede">VSAT stands for <em>Virtualization Security Audit Tool</em>. It starts with VMware and grows to other hypervisors, using the same evidence model, report, coverage rules and read-only guarantees.</p>
     <ol class="roadmap">
-      <li class="now"><span class="state">Current</span><span class="ver">2.0.0-alpha.1</span><h3>VMware vSphere + NSX</h3><p>vCenter, ESXi, clusters, VMs, virtual networking, mandatory NSX, storage &amp; recovery.</p></li>
+      <li class="now"><span class="state">Current</span><span class="ver">2.0.0</span><h3>VMware vSphere + NSX</h3><p>vCenter, ESXi, clusters, VMs, virtual networking, mandatory NSX, storage &amp; recovery.</p></li>
       <li class="next"><span class="state">Planned, next</span><span class="ver">2.1</span><h3>Microsoft Hyper-V</h3><p>Hosts, VMs and virtual switches through read-only PowerShell remoting and CIM (<code>-HyperVServer</code>).</p></li>
       <li class="next"><span class="state">Planned</span><span class="ver">2.2</span><h3>KVM / libvirt</h3><p>Read-only SSH commands, or an offline collection script whose JSON output VSAT imports (<code>-KvmServer</code>, <code>-KvmEvidence</code>).</p></li>
     </ol>
@@ -314,7 +314,7 @@
       <li><a href="https://github.com/NextSecurity/VSAT/blob/main/docs/migration-from-1x.md"><strong>Migrating from 1.x</strong><span>Changes in result semantics</span></a></li>
       <li><a href="https://github.com/NextSecurity/VSAT/blob/main/docs/architecture/overview.md"><strong>Architecture</strong><span>Modules, data flow, data model</span></a></li>
       <li><a href="https://github.com/NextSecurity/VSAT/blob/main/docs/faq.md"><strong>FAQ</strong><span>Common questions</span></a></li>
-      <li><a href="https://github.com/NextSecurity/VSAT/blob/main/CHANGELOG.md"><strong>Changelog</strong><span>What changed in 2.0.0-alpha.1</span></a></li>
+      <li><a href="https://github.com/NextSecurity/VSAT/blob/main/CHANGELOG.md"><strong>Changelog</strong><span>What changed in 2.0.0</span></a></li>
     </ul>
   </div>
 </section>
@@ -325,7 +325,7 @@
   <div class="wrap footer-grid">
     <div class="footer-brand">
       <img src="assets/logo.svg" alt="" width="28" height="28">
-      <span>VSAT 2.0.0-alpha.1</span>
+      <span>VSAT 2.0.0</span>
     </div>
     <nav aria-label="Footer">
       <ul>
