@@ -7,3 +7,9 @@ dist/
 release/
 _site/
 testResults.xml
+# planning documents - never commit
+docs/superpowers/
+docs/plans/
+plans/
+.planning/
+*.plan.md

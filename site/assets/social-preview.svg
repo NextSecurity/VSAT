@@ -74,7 +74,7 @@
       <rect x="394" y="528" width="112" height="42" rx="21" fill="#2BD4B4" fill-opacity="0.12" stroke="#2BD4B4" stroke-opacity="0.6"/>
       <text x="450" y="556" text-anchor="middle" fill="#7FE9D5">Read-only</text>
       <rect x="520" y="528" width="176" height="42" rx="21" fill="#F5B83D" fill-opacity="0.12" stroke="#F5B83D" stroke-opacity="0.7"/>
-      <text x="608" y="556" text-anchor="middle" fill="#F8CF7A">2.0.0-alpha.1</text>
+      <text x="608" y="556" text-anchor="middle" fill="#F8CF7A">2.0.0</text>
     </g>
   </g>
 </svg>

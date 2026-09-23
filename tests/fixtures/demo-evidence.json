@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "tool": {
     "name": "VSAT",
-    "version": "2.0.0-alpha.1"
+    "version": "2.2.0"
   },
   "run": {
     "id": "00000000-0000-4000-8000-000000000d30",
@@ -39,12 +39,12 @@
       }
     ],
     "exclusions": {
-      "pattern": "vm:lab-*",
-      "reason": "Disposable lab VMs out of scope"
+      "reason": "Disposable lab VMs out of scope",
+      "pattern": "vm:lab-*"
     },
     "nativeVlans": {
-      "switch": "*",
-      "vlan": 1
+      "vlan": 1,
+      "switch": "*"
     },
     "authorizedNetflowCollectors": "10.0.0.50",
     "authorizedSyslogTargets": [
@@ -93,18 +93,18 @@
     ],
     "exceptions": [
       {
-        "expires": "2026-12-31",
-        "asset": "esx02.example.local",
         "owner": "infra-team",
-        "ruleId": "ESXI-SVC-SSH",
-        "rationale": "Vendor support session (ticket CHG-1042)"
+        "expires": "2026-12-31",
+        "rationale": "Vendor support session (ticket CHG-1042)",
+        "asset": "esx02.example.local",
+        "ruleId": "ESXI-SVC-SSH"
       },
       {
-        "expires": "2026-06-30",
-        "asset": "ai-train01",
         "owner": "ml-platform",
-        "ruleId": "VM-PASSTHROUGH",
-        "rationale": "GPU passthrough for model training"
+        "expires": "2026-06-30",
+        "rationale": "GPU passthrough for model training",
+        "asset": "ai-train01",
+        "ruleId": "VM-PASSTHROUGH"
       }
     ],
     "nsxDeclaredAbsent": false

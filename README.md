@@ -18,7 +18,7 @@
 </p>
 
 > [!WARNING]
-> **Alpha status: `2.2.0-alpha.1` is a limited prerelease.**
+> **Status: `2.2.0` has not yet been validated against live labs.**
 > - It has **not** been validated against a live vCenter, ESXi or NSX lab. It has been exercised against synthetic fixtures, the built-in demo, and protocol-level integration tests (govmomi vcsim vSphere simulator + mock NSX API). Hyper-V and KVM support is tested with synthetic collector output only.
 > - There is **no code-signing certificate**. Verify downloads with the published SHA-256 checksums.
 > - The Windows offline package is **assembled on a connected machine** by `build/New-OfflinePackage.ps1`, because we have not confirmed redistribution rights for PowerShell and PowerCLI.
@@ -42,7 +42,7 @@
 | `VSAT-<version>-win-x64-offline.zip` | A portable Windows package: `vsat.ps1`, a portable PowerShell runtime, pinned PowerCLI modules in `./modules`, the `VSAT.cmd` launcher, manifests and notices. **You build it yourself on a connected machine.** See [docs/offline-package.md](docs/offline-package.md). |
 | `SHA256SUMS.txt` | Checksums for every release artifact. |
 
-Get releases from the [Releases page](https://github.com/NextSecurity/VSAT/releases). Alpha builds are marked as prereleases.
+Get releases from the [Releases page](https://github.com/NextSecurity/VSAT/releases).
 
 ## One-command start
 
@@ -72,15 +72,15 @@ Coverage is organized **by platform, then by domain**. Each platform VSAT suppor
 
 | Platform | Release | Status |
 |---|---|---|
-| VMware vSphere + NSX | 2.0 | **Available (alpha)** |
-| Microsoft Hyper-V | 2.1 | **Available (alpha)**: hosts, VMs, virtual switches (`-HyperVServer`, or offline `-ExportCollector hyperv` + `-HyperVEvidence`) |
-| KVM / libvirt | 2.2 | **Available (alpha)**: hosts, guests, virtual networks (`-KvmServer` over SSH, or offline `-ExportCollector kvm` + `-KvmEvidence`) |
+| VMware vSphere + NSX | 2.0 | **Available** |
+| Microsoft Hyper-V | 2.1 | **Available**: hosts, VMs, virtual switches (`-HyperVServer`, or offline `-ExportCollector hyperv` + `-HyperVEvidence`) |
+| KVM / libvirt | 2.2 | **Available**: hosts, guests, virtual networks (`-KvmServer` over SSH, or offline `-ExportCollector kvm` + `-KvmEvidence`) |
 
 ### VMware vSphere + NSX
 
 Every full VMware assessment covers all seven domains. A domain VSAT could not read is reported as `INCOMPLETE` or `UNKNOWN`, never as a pass.
 
-| Domain | What is examined (alpha rule pack, still growing) |
+| Domain | What is examined (rule pack, still growing) |
 |---|---|
 | **vCenter** | Build and advisories, SSO/identity and session policy where accessible, roles and inherited permissions, certificates, extensions, services, time, logs, backup configuration |
 | **ESXi hosts** | Build vs. advisory ranges, lockdown mode (`HostConfigInfo.lockdownMode`), SSH/shell/DCUI, firewall, services, Secure Boot/TPM where exposed, acceptance level, NTP/DNS, remote logging, advanced settings |
@@ -157,7 +157,7 @@ The full threat model and residual risks are in [docs/threat-model.md](docs/thre
 
 ## Limitations
 
-This is an alpha. The main limits:
+Current limits:
 
 - Not validated against a live lab. Collectors are built against API documentation and synthetic fixtures.
 - CIS mappings are `unverified`. **VSAT is not certified by, endorsed by or affiliated with CIS, VMware or Broadcom**, and a clean run does not mean compliance.
@@ -174,9 +174,9 @@ VSAT is the *Virtualization Security Audit Tool*. It starts with VMware and will
 
 | Release | Platform | Approach | Status |
 |---|---|---|---|
-| **2.0.0-alpha.1** | VMware vSphere, vCenter, ESXi + mandatory NSX | PowerCLI reads + NSX REST GET allowlist | **Current alpha** |
-| 2.1 | Microsoft Hyper-V (hosts, VMs, virtual switches) | Read-only PowerShell remoting / CIM, `-HyperVServer` | **Released (alpha)** |
-| 2.2 | KVM / libvirt | Read-only SSH (key auth, pinned host key) or offline `vsat-kvm-collect.sh` imported with `-KvmEvidence`; `-KvmServer` | **Released (alpha)** |
+| **2.0.0** | VMware vSphere, vCenter, ESXi + mandatory NSX | PowerCLI reads + NSX REST GET allowlist | **Released** |
+| 2.1 | Microsoft Hyper-V (hosts, VMs, virtual switches) | Read-only PowerShell remoting / CIM, `-HyperVServer` | **Released** |
+| 2.2 | KVM / libvirt | Read-only SSH (key auth, pinned host key) or offline `vsat-kvm-collect.sh` imported with `-KvmEvidence`; `-KvmServer` | **Released** |
 
 Planned releases are not available yet, and their scope may change. Each one will ship with its own limitations and privilege guidance.
 

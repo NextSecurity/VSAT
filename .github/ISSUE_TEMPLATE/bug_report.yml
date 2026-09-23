@@ -13,7 +13,7 @@ body:
     attributes:
       label: VSAT version
       description: Output of `.\vsat.ps1 -Version` (tool, rule pack, advisory snapshot, schema)
-      placeholder: "2.0.0-alpha.1 / rules 2026.09.0 / advisories 2026-09-23 / schema 2.0"
+      placeholder: "2.0.0 / rules 2026.09.0 / advisories 2026-09-23 / schema 2.0"
     validations:
       required: true
   - type: dropdown

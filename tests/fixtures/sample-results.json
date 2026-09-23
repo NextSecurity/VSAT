@@ -2,7 +2,7 @@
  "schemaVersion": "2.0",
  "tool": {
   "name": "VSAT",
-  "version": "2.0.0-alpha.1"
+  "version": "2.0.0"
  },
  "run": {
   "id": "8c1e5d2a-7f4b-4c3e-9d11-2b6a0f9e4c77",
