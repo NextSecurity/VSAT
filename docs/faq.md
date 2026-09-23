@@ -2,7 +2,7 @@
 
 ### Is VSAT production-ready?
 
-No. `2.0.0-alpha.1` is a limited prerelease that has not been validated against a live vCenter, ESXi or NSX lab. Use it to evaluate the workflow, try the demo and help validate it. Review every result. See [limitations.md](limitations.md).
+No. `2.0.0` has not yet been validated against live labs that has not been validated against a live vCenter, ESXi or NSX lab. Use it to evaluate the workflow, try the demo and help validate it. Review every result. See [limitations.md](limitations.md).
 
 ### Does VSAT change anything in my environment?
 

@@ -1,6 +1,6 @@
 # Limitations
 
-This page is the full list of limits for VSAT `2.0.0-alpha.1`. It is updated with every release. If something here matters for your use case, wait for a later release or help validate it.
+This page is the full list of limits for VSAT `2.0.0`. It is updated with every release. If something here matters for your use case, wait for a later release or help validate it.
 
 ## Release status
 

@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "tool": {
     "name": "VSAT",
-    "version": "2.0.0-alpha.1"
+    "version": "2.1.0"
   },
   "run": {
     "id": "00000000-0000-4000-8000-000000000d30",
@@ -71,40 +71,40 @@
     ],
     "zones": [
       {
-        "match": "name:jump*",
-        "name": "DMZ"
+        "name": "DMZ",
+        "match": "name:jump*"
       },
       {
-        "match": "name:web0*",
-        "name": "Web"
+        "name": "Web",
+        "match": "name:web0*"
       },
       {
-        "match": "name:app0*",
-        "name": "App"
+        "name": "App",
+        "match": "name:app0*"
       },
       {
-        "match": "name:db0*",
-        "name": "Data"
+        "name": "Data",
+        "match": "name:db0*"
       },
       {
-        "match": "name:vcsa*",
-        "name": "Management"
+        "name": "Management",
+        "match": "name:vcsa*"
       }
     ],
     "exceptions": [
       {
-        "expires": "2026-12-31",
-        "asset": "esx02.example.local",
-        "owner": "infra-team",
         "ruleId": "ESXI-SVC-SSH",
-        "rationale": "Vendor support session (ticket CHG-1042)"
+        "owner": "infra-team",
+        "rationale": "Vendor support session (ticket CHG-1042)",
+        "asset": "esx02.example.local",
+        "expires": "2026-12-31"
       },
       {
-        "expires": "2026-06-30",
-        "asset": "ai-train01",
-        "owner": "ml-platform",
         "ruleId": "VM-PASSTHROUGH",
-        "rationale": "GPU passthrough for model training"
+        "owner": "ml-platform",
+        "rationale": "GPU passthrough for model training",
+        "asset": "ai-train01",
+        "expires": "2026-06-30"
       }
     ],
     "nsxDeclaredAbsent": false

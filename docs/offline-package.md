@@ -2,7 +2,7 @@
 
 VSAT is designed for isolated (air-gapped) environments. The Windows offline package contains everything needed to run an assessment with **no internet access and nothing installed on the runner**.
 
-## Why you build it yourself (alpha)
+## Why you build it yourself
 
 We have **not confirmed redistribution rights** for the PowerShell runtime and the VMware PowerCLI modules inside a VSAT release. Until we have, releases do **not** include those binaries. Instead, `build/New-OfflinePackage.ps1` runs on a **connected** machine, downloads the dependencies from their official vendor sources, and produces the same fully populated ZIP that a release would contain. You then move the ZIP into the isolated environment.
 
@@ -19,7 +19,7 @@ flowchart LR
   D --> F[Save-Module pinned PowerCLI Core + Storage<br/>(13.5.1, from VCF.PowerCLI 9.1.1)]
   E --> G[Verify pinned hashes]
   F --> G
-  G --> H[Assemble VSAT-2.0.0-alpha.1-win-x64-offline.zip<br/>+ package-manifest.json]
+  G --> H[Assemble VSAT-2.0.0-win-x64-offline.zip<br/>+ package-manifest.json]
   H --> I[Transfer by approved media]
   I --> J[Isolated runner: verify hash, extract, .\VSAT.cmd]
 ```
@@ -42,7 +42,7 @@ flowchart LR
 ## What's inside
 
 ```text
-VSAT-2.0.0-alpha.1-win-x64-offline/
+VSAT-2.0.0-win-x64-offline/
 ├── VSAT.cmd                 # launcher: starts the bundled pwsh with vsat.ps1
 ├── vsat.ps1                 # the single application file (same as the release asset)
 ├── runtime/pwsh/            # portable PowerShell 7.x (x64)
