@@ -14,7 +14,7 @@ Adds **KVM/libvirt** as the third audited platform. Not validated against a live
 
 - KVM collection (`-KvmServer`, `-KvmUser`) by running a read-only POSIX shell collector over SSH with key authentication (`BatchMode`) and strict host-key checking; host keys can be pinned per endpoint with `-TrustedThumbprint "host=SHA256:<base64>"`.
 - Air-gapped workflow: `-ExportCollector kvm` writes `vsat-kvm-collect.sh` (virsh always `--readonly`, domain XML without `--security-info` so console passwords are never collected, no writes); import its output with `-KvmEvidence`.
-- 24 KVM rules (`KVM-*`) across three new domains (hosts, VMs, virtual networks): package update age and OS lifecycle, sVirt (SELinux/AppArmor), unauthenticated libvirt TCP, QEMU running as root, VNC TLS/loopback, seccomp, Secure Boot, host firewall, SSH root/password login, libvirt group review, nested virtualization, per-VM seclabel, network-exposed consoles, host device passthrough, TCP serial consoles, USB redirection, nwfilter anti-spoofing, guest Secure Boot/vTPM, snapshot age, open-forward networks.
+- 23 KVM rules (`KVM-*`) across three new domains (hosts, VMs, virtual networks): package update age and OS lifecycle, sVirt (SELinux/AppArmor), unauthenticated libvirt TCP, QEMU running as root, VNC TLS/loopback, seccomp, Secure Boot, host firewall, SSH root/password login, libvirt group review, nested virtualization, per-VM seclabel, network-exposed consoles, host device passthrough, TCP serial consoles, USB redirection, nwfilter anti-spoofing, guest Secure Boot/vTPM, snapshot age, open-forward networks.
 - Hyper-V, KVM and VMware can be assessed together in one run and one report.
 
 ### Security
@@ -33,7 +33,7 @@ Adds **Microsoft Hyper-V** as the second audited platform. Not validated against
 
 - Hyper-V collection (`-HyperVServer`, `-HyperVCredential`) through one read-only collector script executed over PowerShell remoting (Kerberos/Negotiate, or `https://host` for WinRM over HTTPS) or locally (`localhost`). Collects host OS/build, update age, VBS/HVCI/Credential Guard, Secure Boot, TPM, Windows Firewall, SMB, services, RDP NLA, live migration, Replica, local/Hyper-V admin groups, failover cluster, virtual switches and per-VM security, firmware, adapters (MAC spoofing, DHCP/router guard, mirroring, VLAN mode), integration services, checkpoints and devices.
 - Air-gapped workflow: `-ExportCollector hyperv` writes `vsat-hyperv-collect.ps1` (Windows PowerShell 5.1 compatible, `Get-*`/CIM reads only); import its JSON with `-HyperVEvidence`.
-- 34 Hyper-V rules (`HV-*`) across three new mandatory-when-in-scope domains: Hyper-V hosts, virtual machines and virtual switches.
+- 32 Hyper-V rules (`HV-*`) across three new mandatory-when-in-scope domains: Hyper-V hosts, virtual machines and virtual switches.
 - Verified OS lifecycle snapshot `data/os-lifecycle.json` (Windows Server 2012 R2–2025, RHEL, Rocky, AlmaLinux, Ubuntu, Debian, Proxmox VE) with official sources.
 - Failure-impact modeling for Hyper-V: clustered VMs restart on other nodes, non-clustered VMs are an outage.
 - Platform-neutral work packages (`WP-HOST-HARDENING`, `WP-HOST-SERVICES`, `WP-HOST-ACCESS`).
