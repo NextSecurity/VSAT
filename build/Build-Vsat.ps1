@@ -96,7 +96,8 @@ if (-not $LibraryMode) {
 '@)
 $sha = [System.Security.Cryptography.SHA256]::Create()
 $srcHash = (($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($sourceHashInput.ToString())) | ForEach-Object { $_.ToString('x2') }) -join '').Substring(0, 16)
-$out = $sb.ToString().Replace('__SOURCE_HASH__', "src-$srcHash")
+# Normalize everything (including this script's own here-strings, which are CRLF on Windows checkouts).
+$out = $sb.ToString().Replace("`r`n", "`n").Replace('__SOURCE_HASH__', "src-$srcHash")
 $enc = New-Object System.Text.UTF8Encoding($true)   # BOM: Windows PowerShell reads non-ASCII correctly
 if ($Check) {
     $existing = if (Test-Path -LiteralPath $OutFile) { [System.IO.File]::ReadAllText($OutFile) } else { '' }
