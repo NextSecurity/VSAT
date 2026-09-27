@@ -144,7 +144,7 @@
           <span class="ro-num"><strong>23</strong> rules</span>
         </li>
       </ul>
-      <p class="readout-foot">188 rules in rule pack 2026.09.1, including 6 OT segmentation rules. All three platforms can be assessed in one run and one report. <a href="https://github.com/NextSecurity/VSAT/blob/master/docs/coverage.md">See&nbsp;every&nbsp;rule</a>.</p>
+      <p class="readout-foot">191 rules in rule pack 2026.09.2, including 6 OT segmentation and 3 ransomware readiness rules. All three platforms can be assessed in one run and one report. <a href="https://github.com/NextSecurity/VSAT/blob/master/docs/coverage.md">See&nbsp;every&nbsp;rule</a>.</p>
     </aside>
   </div>
 
@@ -181,7 +181,7 @@
   <div class="wrap">
     <div class="sec-head">
       <h2 id="report-title" class="display">One file you can carry out of the room</h2>
-      <p class="sec-lede">Every run writes a standalone <code>report.html</code> that works offline, next to an evidence package and CSV worklists. Nine features go beyond a checklist, and each one says plainly how much it can tell you.</p>
+      <p class="sec-lede">Every run writes a standalone <code>report.html</code> that works offline, next to an evidence package and CSV worklists. Ten features go beyond a checklist, and each one says plainly how much it can tell you.</p>
     </div>
 
     <div class="viewer" data-tabs>
@@ -235,6 +235,11 @@
           <dt>OT segmentation lens</dt>
           <dd class="is">Declare Purdue levels on scope zones and VSAT checks that OT and IT workloads do not share hosts, virtual switches, management planes, admin accounts or network paths.</dd>
           <dd class="not">Virtualization layer only. No OT network scanning, industrial protocols or field devices.</dd>
+        </div>
+        <div class="ledger-row">
+          <dt>Ransomware readiness</dt>
+          <dd class="is">Declare your backup systems and VSAT checks whether an attacker path reaches them, whether they run alongside production and whether production admins control them, plus how many hypervisors each account controls.</dd>
+          <dd class="not">Backup software itself is not audited. Paths are inferred from configuration.</dd>
         </div>
         <div class="ledger-row">
           <dt>MITRE ATT&amp;CK mapping</dt>

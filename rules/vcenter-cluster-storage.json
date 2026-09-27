@@ -1,6 +1,6 @@
 {
   "rules": [
-    { "id": "VC-PATCH-ADV", "changeCategory": "patch", "title": "vCenter build is not exposed to known security advisories", "domain": "vcenter", "assetType": "vcenter", "severity": "critical",
+    { "id": "VC-PATCH-ADV", "changeCategory": "patch", "title": "vCenter build is not exposed to known security advisories", "domain": "vcenter", "assetType": "vcenter", "severity": "critical", "ransomware": true,
       "attack": { "mitigates": ["T1190", "T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "Advisory" },
       "rationale": "vCenter is the control plane for every host and VM; exploited vCenter vulnerabilities give full infrastructure compromise.",
@@ -10,7 +10,7 @@
       "check": { "type": "script", "name": "Lifecycle" },
       "rationale": "Unsupported releases no longer receive routine security fixes.",
       "mitigation": { "summary": "Upgrade vCenter to a supported release.", "steps": ["Plan upgrade"], "workPackage": "WP-LIFECYCLE" }, "vsat": true },
-    { "id": "VC-ADMIN-USERS", "changeCategory": "access", "title": "Administrator role is granted to groups, not individual users", "domain": "vcenter", "assetType": "vcenter", "severity": "medium",
+    { "id": "VC-ADMIN-USERS", "changeCategory": "access", "title": "Administrator role is granted to groups, not individual users", "domain": "vcenter", "assetType": "vcenter", "severity": "medium", "ransomware": true,
       "attack": { "mitigates": ["T1078"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "script", "name": "VcAdminUsers" },
       "rationale": "Direct user grants bypass group lifecycle controls and complicate access reviews.",
@@ -90,7 +90,7 @@
       "check": { "type": "setting", "fact": "vsan", "path": "dataInTransitEncryption", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "Protects replication traffic on the vSAN network.",
       "mitigation": { "summary": "Enable data-in-transit encryption.", "steps": ["Cluster > Configure > vSAN > Services"], "workPackage": "WP-STORAGE" }, "vsat": true },
-    { "id": "ST-RECOVERY-EVIDENCE", "title": "Backup and restore-test evidence exists", "domain": "storage", "assetType": "vcenter", "severity": "medium",
+    { "id": "ST-RECOVERY-EVIDENCE", "title": "Backup and restore-test evidence exists", "domain": "storage", "assetType": "vcenter", "severity": "medium", "ransomware": true,
       "attack": { "mitigates": ["T1490", "T1485", "T1486"], "mitigation": "M1053", "status": "proposed" },
       "check": { "type": "manual", "guidance": "Import or attach backup job, retention and restore-test evidence with dates; snapshots and successful jobs are not proof of restore" },
       "rationale": "Recoverability is only demonstrated by tested restores.",

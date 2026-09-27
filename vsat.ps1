@@ -1,6 +1,6 @@
 ﻿<#PSScriptInfo
 
-.VERSION 2.4.0
+.VERSION 2.5.0
 
 .GUID 228b4d14-2c3e-4ace-b07f-9151849e54c6
 
@@ -152,8 +152,8 @@ $ErrorActionPreference = 'Stop'
 # Build: pwsh ./build/Build-Vsat.ps1
 # ---------------------------------------------------------------------------
 
-$script:VsatVersion = '2.4.0'
-$script:VsatBuildCommit = 'src-5cd664ae36e26802'
+$script:VsatVersion = '2.5.0'
+$script:VsatBuildCommit = 'src-f9fa9ac7f78efefa'
 
 # ---- src/10-Util.ps1 ----
 #region Util
@@ -399,8 +399,9 @@ function New-VsatEvidence {
 
 # The 2.3 Blast Radius scope keys (controller ruling P51) that get light type validation.
 # Kept as one script-scope list so New-VsatScope and the -Replay scope merge (99-Main.ps1)
-# agree on exactly which keys are validated.
-$script:VsatNewScopeArrayKeys = @('entryPoints', 'credentialStores', 'identityGroups', 'identityDomains', 'aiWorkloads', 'signoffs')
+# agree on exactly which keys are validated. Later array-shaped keys join the same list
+# (2.5 Ransomware readiness: backupSystems).
+$script:VsatNewScopeArrayKeys = @('entryPoints', 'credentialStores', 'identityGroups', 'identityDomains', 'aiWorkloads', 'signoffs', 'backupSystems')
 
 function Read-VsatScopeArrayKey {
     # Reads one array-shaped scope key and reports whether it was present, so a caller can tell
@@ -450,6 +451,8 @@ function New-VsatScope {
         identityDomains             = @()
         aiWorkloads                 = @()
         signoffs                    = @()
+        # 2.5 Ransomware readiness: [{ match }] assets that hold the backups.
+        backupSystems               = @()
     }
     # Pre-existing keys (including `exceptions`, which may now also carry optional
     # `approver`/`compensatingControl`/`ticket` fields per element) keep their original,
@@ -3384,11 +3387,19 @@ function Invoke-VsatCheckOtMix {
 }
 
 function Get-VsatOtAdminIndex {
-    # Per principal: the hosts it administers (admin-of on the host, or on a container that
-    # controls it), including rights inherited through member-of. Cached on the rule context.
+    # Host admin index of the rule context's security graph, cached on the context.
     param($Context)
     if ($Context.Contains('otAdmin')) { return $Context.otAdmin }
-    $G = (Get-VsatContextGraph -Context $Context).graph
+    $Context.otAdmin = Get-VsatHostAdminIndex -Graph (Get-VsatContextGraph -Context $Context).graph
+    return $Context.otAdmin
+}
+
+function Get-VsatHostAdminIndex {
+    # Per principal: the hosts it administers (admin-of on the host, or on a container that
+    # controls it), including rights inherited through member-of. Shared by the OT and
+    # ransomware lenses and the one-account-reach analysis.
+    param([Parameter(Mandatory)]$Graph)
+    $G = $Graph
     $hostTypes = $script:VsatGraphHostTypes
     $under = @{}
     $hostsUnder = {
@@ -3426,8 +3437,7 @@ function Get-VsatOtAdminIndex {
     $parents = @{}
     foreach ($e in $G.edges.Values) { if ($e.kind -eq 'controls') { if (-not $parents.ContainsKey($e.target)) { $parents[$e.target] = [System.Collections.Generic.List[string]]::new() }; $parents[$e.target].Add($e.source) } }
     $gapTargets = @{}; foreach ($x in @($G.needsEvidence | Where-Object { $_ -and $_.kind -eq 'admin-of' })) { $gapTargets[[string]$x.target] = $x }
-    $Context.otAdmin = @{ graph = $G; reach = $reach; parents = $parents; gapTargets = $gapTargets }
-    return $Context.otAdmin
+    return @{ graph = $G; reach = $reach; parents = $parents; gapTargets = $gapTargets }
 }
 
 function Invoke-VsatCheckOtAdmin {
@@ -3739,6 +3749,8 @@ $script:VsatDomains = @(
     # Audit integrity: does each endpoint's own change history cover the engagement window
     # (src/78-Changes.ps1)? Never mandatory; gaps and denied reads are shown, never hidden.
     [ordered]@{ id = 'change-history'; name = 'Change history (engagement window)'; mandatory = $false; platform = 'audit'; collectors = @(); assetTypes = @() }
+    # Lens driven by scope backupSystems; never mandatory.
+    [ordered]@{ id = 'ransomware-readiness'; name = 'Ransomware readiness (backup systems)'; mandatory = $false; platform = 'cross-platform'; collectors = @(); assetTypes = @() }
 )
 
 function Update-VsatNsxDiscovery {
@@ -3868,6 +3880,26 @@ function Get-VsatCoverage {
             else { $d.label = 'OT SEGMENTATION ASSESSED' }
             $d.detail = "$otCount OT workload(s) (Purdue 0-3) in scope; $($checks.total) check result(s). Virtualization layer only."
             if (-not $otCount) { $d.detail += ' No workload matched a zone with Purdue level 0-3.' }
+            $domains.Add($d); continue
+        }
+        if ($def.id -eq 'ransomware-readiness') {
+            $d.mandatory = $false
+            $pats = @(Get-VsatBackupMatches -Scope $Evidence.scope)
+            if (-not $pats.Count) {
+                $d.state = 'NOT_APPLICABLE'; $d.label = 'NOT APPLICABLE: NO BACKUP SYSTEMS DECLARED'
+                $d.detail = 'The backup checks run only when the scope file declares backupSystems. This is not a ransomware readiness pass.'
+                $d.evidence = @($script:VsatRwOffText)
+                $domains.Add($d); continue
+            }
+            $bk = @($Evidence.assets | Where-Object { $a = $_; @($pats | Where-Object { Test-VsatAssetMatch -Asset $a -Match $_ }).Count })
+            $d.evidence = @("$($pats.Count) backupSystems pattern(s) declared: $($pats -join ', ')", "$($bk.Count) asset(s) matched$(if ($bk.Count) { ': ' + (Format-VsatOtNames (Get-VsatOrdinalSorted @($bk.name))) })")
+            $missing = [System.Collections.Generic.List[string]]::new()
+            if (-not @($bk | Where-Object { $_.type -in $script:VsatRwVmTypes }).Count) { $missing.Add('backupSystems matched no collected VM') }
+            $gaps = $checks.UNKNOWN + $checks.ERROR
+            if ($gaps) { $missing.Add("$gaps check(s) lack evidence (UNKNOWN/ERROR)") }
+            if ($missing.Count) { $d.state = 'PARTIAL'; $d.label = 'PARTIAL: RANSOMWARE READINESS'; $d.missing = @($missing) }
+            else { $d.label = 'RANSOMWARE READINESS ASSESSED' }
+            $d.detail = "$(@($bk | Where-Object { $_.type -in $script:VsatRwVmTypes }).Count) backup VM(s) in scope; $($checks.total) check result(s)."
             $domains.Add($d); continue
         }
         $platformEps = @(Get-VsatPlatformEndpoints -Evidence $Evidence -Platform $def.platform)
@@ -5649,6 +5681,202 @@ function Get-VsatFixWorkPackage {
 }
 #endregion Blast radius
 
+# ---- src/77-EvaluatorsRansomware.ps1 ----
+#region Ransomware readiness
+# "Could one stolen account encrypt every hypervisor, and the backups too?" Reads collected
+# facts, relationships, the backupSystems scope key and the security graph only. Loaded after
+# the graph (76) so the backup crown rule can register itself; the evaluators build the graph
+# lazily through Get-VsatContextGraph, like the OT lens. Off unless backupSystems is declared.
+
+$script:VsatRwVmTypes = @('vm', 'hyperv-vm', 'kvm-vm')
+$script:VsatRwOffText = 'No backup systems declared'
+$script:VsatRwVmCollectors = @{ vm = 'vsphere.vms'; 'hyperv-vm' = 'hyperv.vms'; 'kvm-vm' = 'kvm.vms' }
+
+function Get-VsatBackupMatches {
+    # The match patterns of scope backupSystems ([{ match }] or bare strings); empty when undeclared.
+    param($Scope)
+    return @(foreach ($b in @(Get-VsatProp $Scope 'backupSystems' @() | Where-Object { $_ })) {
+            $m = if ($b -is [string]) { $b } else { [string](Get-VsatProp $b 'match' '') }
+            if ($m) { $m }
+        })
+}
+
+function Get-VsatBackupIndex {
+    # @{ declared; ids } for the evidence under evaluation, cached on the rule context.
+    param($Context)
+    if ($Context.Contains('backupIndex')) { return $Context.backupIndex }
+    $ids = @{}
+    $pats = @(Get-VsatBackupMatches -Scope $Context.scope)
+    if ($pats.Count -and $Context.evidence) {
+        foreach ($a in $Context.evidence.assets) { foreach ($m in $pats) { if (Test-VsatAssetMatch -Asset $a -Match $m) { $ids[$a.id] = $true; break } } }
+    }
+    $Context.backupIndex = @{ declared = [bool]$pats.Count; ids = $ids }
+    return $Context.backupIndex
+}
+
+# Declared backup systems are crown jewels ahead of operator criticality, so the reason always reads as backup.
+Add-VsatCrownRule -Id 'backup-system' -Before 'operator-high' -Test { param($a, $c) if ($c -and $c.Contains('scope') -and (Get-VsatBackupIndex -Context $c).ids.ContainsKey($a.id)) { 'backup infrastructure' } }
+
+function Get-VsatRwSkip {
+    # NOT_APPLICABLE finding when the lens is off or the asset is not a declared backup system, else $null.
+    param($Rule, $Asset, $Context)
+    $idx = Get-VsatBackupIndex -Context $Context
+    if (-not $idx.declared) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result NOT_APPLICABLE -Observed $script:VsatRwOffText -Expected '') }
+    if (-not $idx.ids.ContainsKey($Asset.id)) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result NOT_APPLICABLE -Observed 'Not a declared backup system' -Expected '') }
+    return $null
+}
+
+function Test-VsatRwProduction {
+    # A production workload: a VM that is neither a declared backup system nor a template.
+    param($Context, $Vm)
+    return ($Vm -and $Vm.type -in $script:VsatRwVmTypes -and -not (Get-VsatBackupIndex -Context $Context).ids.ContainsKey($Vm.id) -and -not (Get-VsatProp $Vm 'props.template' $false))
+}
+
+function Get-VsatRwPlacement {
+    # Where a VM runs: its host, and the unit it shares with other workloads (the vSphere or
+    # Hyper-V cluster of that host, else the host itself), with every VM in that unit.
+    # $null when the VM's host was not collected.
+    param($Context, $Asset)
+    $hid = @($Context.out[$Asset.id] | Where-Object { $_ -and $_.type -eq 'runs-on' } | ForEach-Object { [string]$_.target })[0]
+    if (-not $hid -or -not $Context.assets[$hid]) { return $null }
+    $h = $Context.assets[$hid]
+    $cl = @($Context.in[$hid] | Where-Object { $_ -and $_.type -eq 'contains' } | ForEach-Object { $Context.assets[$_.source] } | Where-Object { $_ -and $_.type -in @('cluster', 'hyperv-cluster') })[0]
+    $hosts = if ($cl) { @($Context.out[$cl.id] | Where-Object { $_ -and $_.type -eq 'contains' } | ForEach-Object { $Context.assets[$_.target] } | Where-Object { $_ -and $_.type -in $script:VsatGraphHostTypes }) } else { @($h) }
+    $vms = @($hosts | ForEach-Object { $Context.in[$_.id] } | Where-Object { $_ -and $_.type -eq 'runs-on' } | ForEach-Object { $Context.assets[$_.source] } | Where-Object { $_ -and $_.type -in $script:VsatRwVmTypes } | Sort-Object { $_.id } -Unique)
+    return @{ host = $h; unit = $(if ($cl) { $cl } else { $h }); vms = $vms }
+}
+
+function Invoke-VsatCheckRwReachable {
+    param($Rule, $Asset, $Check, $Context)
+    $skip = Get-VsatRwSkip -Rule $Rule -Asset $Asset -Context $Context
+    if ($skip) { return $skip }
+    $exp = 'No blast-radius entry point reaches this backup system'
+    $cg = Get-VsatContextGraph -Context $Context
+    $hits = @($cg.blast.paths | Where-Object { $_.crown -eq $Asset.id })
+    if ($hits.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result FAIL -Observed "$($hits[0].narrative)$(if ($hits.Count -gt 1) { " (+$($hits.Count - 1) more path(s))" })" -Expected $exp -Confidence inferred) }
+    # No path found: only a pass when the evidence behind it is complete (same gates as OT-IT-PATH).
+    if ($Asset.type -eq 'vm' -and $Context.nsxState -ne 'ASSESSED') { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "No path found, but NSX policy was not assessed (NSX coverage: $($Context.nsxState)); network reachability is unknown" -Expected $exp) }
+    if ($cg.blast.bounds.truncated) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed 'No path found, but blast-radius search bounds were hit (results partial)' -Expected $exp) }
+    if (@($cg.blast.needsEvidence | Where-Object { $_ -and @($_.crowns) -contains $Asset.id }).Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed 'No confirmed path, but a route to this backup system needs evidence VSAT could not collect' -Expected $exp) }
+    return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed 'No entry point reaches this backup system' -Expected $exp -Confidence inferred)
+}
+
+function Invoke-VsatCheckRwColocated {
+    param($Rule, $Asset, $Check, $Context)
+    $skip = Get-VsatRwSkip -Rule $Rule -Asset $Asset -Context $Context
+    if ($skip) { return $skip }
+    $exp = 'Backup system runs in its own cluster or host, apart from the production workloads it protects'
+    $pl = Get-VsatRwPlacement -Context $Context -Asset $Asset
+    if (-not $pl) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed 'The host this VM runs on was not collected; placement is unknown' -Expected $exp) }
+    $where = "$(if ($pl.unit.type -like '*cluster') { 'cluster' } else { 'host' }) $($pl.unit.name)"
+    $prod = @($pl.vms | Where-Object { $_.id -ne $Asset.id -and (Test-VsatRwProduction -Context $Context -Vm $_) })
+    if ($prod.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result FAIL -Observed "Runs in $where with $($prod.Count) production workload(s): $(Format-VsatOtNames (Get-VsatOrdinalSorted @($prod.name)))" -Expected $exp -Facts @('props')) }
+    # Alone in its unit: only a pass when the VM inventory of this endpoint was fully collected.
+    $cn = $script:VsatRwVmCollectors[[string]$Asset.type]
+    $coll = @($Context.evidence.collection.collectors | Where-Object { $_ -and $_.name -eq $cn -and $_.endpoint -eq $Asset.endpoint })
+    if (-not @($coll | Where-Object status -eq 'ok').Count -or @($coll | Where-Object status -ne 'ok').Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "No production workload found in $where, but the VM inventory ($cn) was not fully collected" -Expected $exp) }
+    return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed "No production workload in $where" -Expected $exp -Facts @('props'))
+}
+
+function Invoke-VsatCheckRwSharedAdmin {
+    param($Rule, $Asset, $Check, $Context)
+    $skip = Get-VsatRwSkip -Rule $Rule -Asset $Asset -Context $Context
+    if ($skip) { return $skip }
+    $exp = 'No administrator of the backup system''s hypervisor also administers production hypervisors'
+    $pl = Get-VsatRwPlacement -Context $Context -Asset $Asset
+    if (-not $pl) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed 'The host this VM runs on was not collected; its administrators are unknown' -Expected $exp) }
+    $hid = $pl.host.id
+    $idx = Get-VsatOtAdminIndex -Context $Context
+    $G = $idx.graph
+    $prodHost = @{}
+    $admins = 0
+    $shared = [System.Collections.Generic.List[string]]::new()
+    foreach ($p in (Get-VsatOrdinalSorted $idx.reach.Keys)) {
+        $set = $idx.reach[$p]
+        if (-not $set.ContainsKey($hid)) { continue }
+        $admins++
+        $others = [System.Collections.Generic.List[string]]::new()
+        foreach ($h in (Get-VsatOrdinalSorted $set.Keys)) {
+            if ($h -eq $hid) { continue }
+            if (-not $prodHost.ContainsKey($h)) { $prodHost[$h] = [bool]@($Context.in[$h] | Where-Object { $_ -and $_.type -eq 'runs-on' -and (Test-VsatRwProduction -Context $Context -Vm $Context.assets[$_.source]) }).Count }
+            if ($prodHost[$h]) { $others.Add([string]$G.nodes[$h].name) }
+        }
+        if ($others.Count) { $shared.Add("$($G.nodes[$p].name) (also $($others.Count) production host(s): $(Format-VsatOtNames $others 3))") }
+    }
+    if ($shared.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result FAIL -Observed "Administrators of $($pl.host.name) also administer production hypervisors: $(Format-VsatOtNames $shared 3)" -Expected $exp -Facts @('props') -Confidence inferred) }
+    # Unknown principals on the backup host or on any container above it: never a pass.
+    $seen = @{}; $q = [System.Collections.Generic.Queue[string]]::new(); $q.Enqueue($hid)
+    while ($q.Count) {
+        $u = $q.Dequeue(); if ($seen.ContainsKey($u)) { continue }; $seen[$u] = $true
+        if ($idx.gapTargets.ContainsKey($u)) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "Administrators of $($pl.host.name) cannot be fully determined: $($idx.gapTargets[$u].explanation)" -Expected $exp) }
+        if ($idx.parents.ContainsKey($u)) { foreach ($x in $idx.parents[$u]) { $q.Enqueue($x) } }
+    }
+    if (-not $admins) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "No administrator of $($pl.host.name) was identified in the collected evidence" -Expected $exp) }
+    return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed "$admins administrator(s) of $($pl.host.name), none of them administers a production hypervisor" -Expected $exp -Facts @('props') -Confidence inferred)
+}
+
+function Get-VsatRansomwareAnalysis {
+    # results.analysis.ransomware: one-account reach over hypervisor hosts (admin-of, directly,
+    # through a group or through a management plane that controls the host), status counts of
+    # the ransomware-tagged rules, and the blast-radius paths that end at a backup system.
+    param([Parameter(Mandatory)]$Graph, $Blast, [Parameter(Mandatory)]$Context, [AllowEmptyCollection()][object[]]$Findings = @(), $Rules = @())
+    $idx = Get-VsatHostAdminIndex -Graph $Graph
+    $hostIds = Get-VsatOrdinalSorted @($Graph.nodes.Keys | Where-Object { $Graph.nodes[$_].kind -eq 'asset' -and $Graph.nodes[$_].type -in $script:VsatGraphHostTypes })
+    $rows = [System.Collections.Generic.List[object]]::new()
+    foreach ($p in $idx.reach.Keys) {
+        $hs = Get-VsatOrdinalSorted $idx.reach[$p].Keys
+        $n = $Graph.nodes[$p]
+        $rows.Add([ordered]@{
+                principal = [string]$n.name; id = [string]$p; type = [string]$n.type
+                hypervisors = $hs.Count; total = $hostIds.Count
+                platforms = [string[]]@(Get-VsatOrdinalSorted @($hs | ForEach-Object { [string]$Graph.nodes[$_].platform } | Select-Object -Unique))
+                hosts = [string[]]@($hs | Select-Object -First 20 | ForEach-Object { [string]$Graph.nodes[$_].name })
+            })
+    }
+    # Worst first: most hosts, then principal name and key (ordinal, culture-independent).
+    $reach = [System.Collections.Generic.List[object]]::new()
+    foreach ($c in @($rows | ForEach-Object { $_.hypervisors } | Sort-Object -Unique -Descending)) {
+        $byKey = @{}; foreach ($r in @($rows | Where-Object { $_.hypervisors -eq $c })) { $byKey["$($r.principal)`n$($r.id)"] = $r }
+        foreach ($k in (Get-VsatOrdinalSorted $byKey.Keys)) { if ($reach.Count -lt 50) { $reach.Add($byKey[$k]) } }
+    }
+    $tagged = @(@($Rules) | Where-Object { $_ -and [bool](Get-VsatProp $_ 'ransomware' $false) } | ForEach-Object { [string]$_.id })
+    $tagSet = @{}; foreach ($t in $tagged) { $tagSet[$t] = $true }
+    $counts = [ordered]@{ PASS = 0; FAIL = 0; MANUAL = 0; UNKNOWN = 0; ERROR = 0; NOT_APPLICABLE = 0 }
+    foreach ($f in @($Findings | Where-Object { $_ -and $tagSet.ContainsKey([string]$_.ruleId) })) { $counts[[string]$f.result] = [int]$counts[[string]$f.result] + 1 }
+    $bidx = Get-VsatBackupIndex -Context $Context
+    $backups = @(foreach ($id in (Get-VsatOrdinalSorted $bidx.ids.Keys)) { $a = $Context.assets[$id]; if ($a) { [ordered]@{ id = [string]$id; name = [string]$a.name; type = [string]$a.type } } })
+    $paths = @(foreach ($p in @($Blast.paths | Where-Object { $_ -and $bidx.ids.ContainsKey([string]$_.crown) })) {
+            [ordered]@{ pathId = $p.id; backupId = [string]$p.crown; backup = (Get-VsatGraphNodeName $Graph ([string]$p.crown)); entryId = [string]$p.entry; entry = (Get-VsatGraphNodeName $Graph ([string]$p.entry)); cost = $p.cost; hops = $p.hops; platforms = @($p.platforms); narrative = [string]$p.narrative }
+        })
+    $gapHosts = @($hostIds | Where-Object {
+            $seen = @{}; $q = [System.Collections.Generic.Queue[string]]::new(); $q.Enqueue($_); $hit = $false
+            while ($q.Count -and -not $hit) { $u = $q.Dequeue(); if ($seen.ContainsKey($u)) { continue }; $seen[$u] = $true; if ($idx.gapTargets.ContainsKey($u)) { $hit = $true }; if ($idx.parents.ContainsKey($u)) { foreach ($x in $idx.parents[$u]) { $q.Enqueue($x) } } }
+            $hit
+        })
+    $notes = [System.Collections.Generic.List[string]]::new()
+    if ($gapHosts.Count) { $notes.Add("Administrators of $($gapHosts.Count) hypervisor host(s) could not be fully determined; their reach counts may be low") }
+    if (-not $bidx.declared) { $notes.Add('No backup systems declared: declare backupSystems in the scope file to assess backup exposure') }
+    elseif (-not $backups.Count) { $notes.Add('backupSystems matched no collected asset') }
+    return [ordered]@{
+        declared = $bidx.declared; backups = @($backups)
+        oneAccountReach = @($reach); hostTotal = $hostIds.Count; unknownAdminHosts = $gapHosts.Count
+        taggedRules = [ordered]@{ ruleIds = [string[]]$tagged; counts = $counts }
+        backupPaths = @($paths); notes = [string[]]$notes.ToArray()
+    }
+}
+
+function Get-VsatRansomwareSummary {
+    # Compact copy of analysis.ransomware for the local UI results step (top principals, counts).
+    param($Analysis)
+    if (-not $Analysis) { return $null }
+    return [ordered]@{
+        declared = [bool]$Analysis.declared; backups = @($Analysis.backups).Count; backupPaths = @($Analysis.backupPaths).Count; hostTotal = $Analysis.hostTotal
+        oneAccountReach = @(@($Analysis.oneAccountReach) | Select-Object -First 5 | ForEach-Object { [ordered]@{ principal = $_.principal; hypervisors = $_.hypervisors; total = $_.total; platforms = @($_.platforms) } })
+        taggedRules = [ordered]@{ counts = $Analysis.taggedRules.counts }
+    }
+}
+#endregion Ransomware readiness
+
 # ---- src/78-Changes.ps1 ----
 #region Change timeline, engagement window and receipt
 # 2.4 Audit Integrity. The change records the platforms already keep (vCenter events, NSX
@@ -6409,10 +6637,11 @@ function Invoke-VsatAnalysisPipeline {
     $blast.fixPlan = @(Get-VsatFixPlan -Paths $blast.paths -Graph $graph -Bounds $blast.bounds)
     foreach ($p in @($blast.paths)) { $pathTargets[[string]$p.crown] = $true }
     Set-VsatPriority -Findings $findings -Context $eval.context -PathTargets $pathTargets
+    $ransomware = Get-VsatRansomwareAnalysis -Graph $graph -Blast $blast -Context $eval.context -Findings $findings -Rules $eval.rules
     $impact = Get-VsatImpact -Context $eval.context
     $wps = Get-VsatWorkPackages -Findings $findings
     $results = New-VsatResultsObject -Evidence $Evidence -Eval $eval -Coverage $coverage -Status $status -ProfileName $ProfileName
-    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; workPackageCatalog = @(Get-VsatWorkPackageCatalog); changes = $changes }
+    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; ransomware = $ransomware; workPackageCatalog = @(Get-VsatWorkPackageCatalog); changes = $changes }
     if ($BaselineEvidence) {
         Update-VsatProgress -Message 'Comparing with baseline'
         $saveIdx = $script:VsatAssetIndex
@@ -6818,7 +7047,7 @@ function Get-VsatRedactedCopy {
     $ctx = @{ map = $map; ipMap = $ipMap; nameRx = $nameRx; ipRx = $ipRx; macRx = $macRx; uuidRx = $uuidRx }
     $ev = Invoke-VsatRedactValue -Value $Evidence -Ctx $ctx
     $res = Invoke-VsatRedactValue -Value $Results -Ctx $ctx
-    if ($bare.Count) { Protect-VsatRedactBlastPrincipals -Blast (Get-VsatProp $res 'analysis.blastRadius' $null) -Bare $bare }
+    if ($bare.Count) { Protect-VsatRedactBlastPrincipals -Blast (Get-VsatProp $res 'analysis.blastRadius' $null) -Ransomware (Get-VsatProp $res 'analysis.ransomware' $null) -Bare $bare }
     $rch = Get-VsatProp $res 'analysis.changes' $null
     if ($rch -and $changeUsers.Count) { foreach ($x in @(@($rch.entries) + @($rch.accountSessions))) { if ($x -and $x.user -and $changeUsers.Contains([string]$x.user)) { $x.user = $changeUsers[[string]$x.user] } } }
     $res.redacted = [ordered]@{ pseudonyms = $map.Count; ipAddresses = $ctx.ipMap.Count; note = 'Names, addresses, UUIDs and principals replaced with consistent pseudonyms. Review before sharing.' }
@@ -6828,7 +7057,7 @@ function Get-VsatRedactedCopy {
 function Protect-VsatRedactBlastPrincipals {
     # Bare principal names: rewrite only the fields that name a principal (principal node names, the
     # narratives, explanations of edges leaving a principal, and revoke fix titles), never other text.
-    param($Blast, [System.Collections.IDictionary]$Bare)
+    param($Blast, [System.Collections.IDictionary]$Bare, $Ransomware)
     if (-not $Blast) { return }
     $keys = @($Bare.Keys | Sort-Object { - ([string]$_).Length })
     $rx = [regex]::new('(?<![A-Za-z0-9_.\\@-])(?:' + (($keys | ForEach-Object { [regex]::Escape([string]$_) }) -join '|') + ')(?![A-Za-z0-9_@-])')
@@ -6838,6 +7067,11 @@ function Protect-VsatRedactBlastPrincipals {
     foreach ($e in @($Blast.edges)) { if ($e -and $principals.ContainsKey([string]$e.source)) { $e.explanation = & $sub ([string]$e.explanation) } }
     foreach ($p in @(@($Blast.paths) + @($Blast.needsEvidence))) { if ($p) { $p.narrative = & $sub ([string]$p.narrative) } }
     foreach ($f in @($Blast.fixPlan)) { if ($f -and ([string]$f.fixId).StartsWith('revoke')) { $f.title = & $sub ([string]$f.title) } }
+    # The ransomware card repeats principal names (one-account reach) and path narratives.
+    if ($Ransomware) {
+        foreach ($r in @($Ransomware.oneAccountReach)) { if ($r -and $Bare.Contains([string]$r.principal)) { $r.principal = $Bare[[string]$r.principal] } }
+        foreach ($p in @($Ransomware.backupPaths)) { if ($p) { $p.narrative = & $sub ([string]$p.narrative); if ($Bare.Contains([string]$p.entry)) { $p.entry = $Bare[[string]$p.entry] } } }
+    }
 }
 
 function Invoke-VsatRedactValue {
@@ -7729,7 +7963,7 @@ function Invoke-VsatUi {
                         }
                         $r = Complete-VsatRun -Evidence $ev -ProfileName $cmd.profile -OutputDir $OutputDir -BaselineEvidence $Baseline -Redact:$A.Redact
                         $state.reportHtml = [System.IO.File]::ReadAllText((Join-Path $OutputDir 'report.html'))
-                        $state.result = @{ status = $r.results.status; summary = $r.results.summary; outputDir = $OutputDir; runId = [string]$r.results.run.id; reportUrl = '/report'; files = @($r.files); receipt = $r.receipt; blastRadius = $r.results.analysis.blastRadius; workPackageCatalog = @($r.results.analysis.workPackageCatalog); workPackages = @($r.results.analysis.workPackages | ForEach-Object { [ordered]@{ id = $_.id; title = $_.title } }) }
+                        $state.result = @{ status = $r.results.status; summary = $r.results.summary; outputDir = $OutputDir; runId = [string]$r.results.run.id; reportUrl = '/report'; files = @($r.files); receipt = $r.receipt; blastRadius = $r.results.analysis.blastRadius; workPackageCatalog = @($r.results.analysis.workPackageCatalog); workPackages = @($r.results.analysis.workPackages | ForEach-Object { [ordered]@{ id = $_.id; title = $_.title } }); ransomware = (Get-VsatRansomwareSummary $r.results.analysis.ransomware) }
                         $state.phase = $(if ($r.results.status.overall -eq 'canceled') { 'canceled' } else { 'done' })
                         $exit = $r.results.status.exitCode
                         Write-VsatSummary -Results $r.results -OutputDir $OutputDir -Files $r.files -Receipt $r.receipt
@@ -7768,7 +8002,7 @@ $script:VsatEmbedded = [ordered]@{
     'rules/esxi.json' = @'
 {
   "rules": [
-    { "id": "ESXI-PATCH-ADV", "changeCategory": "patch", "title": "ESXi build is not exposed to known security advisories", "domain": "esxi", "assetType": "host", "severity": "critical",
+    { "id": "ESXI-PATCH-ADV", "changeCategory": "patch", "title": "ESXi build is not exposed to known security advisories", "domain": "esxi", "assetType": "host", "severity": "critical", "ransomware": true,
       "attack": { "mitigates": ["T1190", "T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "Advisory" },
       "rationale": "Hosts below the fixed build of a published advisory remain exposed to its vulnerabilities, some of which are exploited in the wild.",
@@ -7779,12 +8013,12 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "script", "name": "Lifecycle" },
       "rationale": "Releases past end of general support stop receiving routine security fixes.",
       "mitigation": { "summary": "Plan an upgrade to a supported ESXi release.", "steps": ["Check hardware compatibility", "Upgrade via vSphere Lifecycle Manager"], "workPackage": "WP-LIFECYCLE" }, "vsat": true },
-    { "id": "ESXI-ACCEPTANCE", "changeCategory": "patch", "title": "Host image acceptance level is not CommunitySupported", "domain": "esxi", "assetType": "host", "severity": "high",
+    { "id": "ESXI-ACCEPTANCE", "changeCategory": "patch", "title": "Host image acceptance level is not CommunitySupported", "domain": "esxi", "assetType": "host", "severity": "high", "ransomware": true,
       "attack": { "mitigates": ["T1505.006"], "mitigation": "M1045", "status": "proposed" },
       "check": { "type": "setting", "fact": "acceptance", "op": "in", "value": ["VMwareCertified", "VMwareAccepted", "PartnerSupported"], "absent": "unknown" },
       "rationale": "CommunitySupported VIBs are unsigned and bypass vendor validation, enabling malicious kernel modules.",
       "mitigation": { "summary": "Set the acceptance level to PartnerSupported or higher and remove community VIBs.", "steps": ["esxcli software acceptance set --level=PartnerSupported (review first)"], "workPackage": "WP-ESXI-HARDENING" }, "cis": "1.2", "scg": "esxi.acceptance-level" },
-    { "id": "ESXI-EXEC-INSTALLED-ONLY", "changeCategory": "settings", "title": "Only installed binaries may execute (execInstalledOnly)", "domain": "esxi", "assetType": "host", "severity": "high",
+    { "id": "ESXI-EXEC-INSTALLED-ONLY", "changeCategory": "settings", "title": "Only installed binaries may execute (execInstalledOnly)", "domain": "esxi", "assetType": "host", "severity": "high", "ransomware": true,
       "attack": { "mitigates": ["T1486", "T1059.004"], "mitigation": "M1038", "status": "proposed" },
       "applies": { "minVersion": "7.0" },
       "check": { "type": "setting", "fact": "kernel", "key": "execInstalledOnly", "op": "eq", "value": true, "absent": "unknown" },
@@ -7795,17 +8029,17 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "setting", "fact": "attestation", "path": "status", "op": "eq", "value": "accepted", "absent": "unknown" },
       "rationale": "TPM 2.0 attestation provides evidence that the host booted with Secure Boot and trusted components.",
       "mitigation": { "summary": "Enable UEFI Secure Boot and TPM 2.0 in firmware; investigate attestation failures.", "steps": ["Enable TPM 2.0 (FIFO/CRB) and Secure Boot in BIOS", "Check host Summary > Security"], "workPackage": "WP-ESXI-HARDENING" }, "vsat": true },
-    { "id": "ESXI-SVC-SSH", "changeCategory": "service", "title": "SSH service is stopped and set to start manually", "domain": "esxi", "assetType": "host", "severity": "medium",
+    { "id": "ESXI-SVC-SSH", "changeCategory": "service", "title": "SSH service is stopped and set to start manually", "domain": "esxi", "assetType": "host", "severity": "medium", "ransomware": true,
       "attack": { "mitigates": ["T1021.004"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "service", "key": "TSM-SSH", "running": false, "policy": "off" },
       "rationale": "Persistent SSH exposes a privileged remote shell and bypasses vCenter auditing.",
       "mitigation": { "summary": "Stop SSH and set its startup policy to manual.", "steps": ["Host > Configure > Services > SSH > Stop; Startup policy: Start and stop manually"], "workPackage": "WP-ESXI-SERVICES" }, "cis": "5.3", "scg": "esxi.ssh" },
-    { "id": "ESXI-SVC-SHELL", "changeCategory": "service", "title": "ESXi Shell is stopped and set to start manually", "domain": "esxi", "assetType": "host", "severity": "medium",
+    { "id": "ESXI-SVC-SHELL", "changeCategory": "service", "title": "ESXi Shell is stopped and set to start manually", "domain": "esxi", "assetType": "host", "severity": "medium", "ransomware": true,
       "attack": { "mitigates": ["T1059.004"], "mitigation": null, "status": "proposed" },
       "check": { "type": "service", "key": "TSM", "running": false, "policy": "off" },
       "rationale": "The ESXi Shell grants unaudited root-level access on the console.",
       "mitigation": { "summary": "Stop the ESXi Shell service and set it to manual.", "steps": ["Host > Configure > Services > ESXi Shell > Stop"], "workPackage": "WP-ESXI-SERVICES" }, "cis": "5.2", "scg": "esxi.shell" },
-    { "id": "ESXI-SVC-SLP", "changeCategory": "service", "title": "SLP service is stopped and disabled", "domain": "esxi", "assetType": "host", "severity": "high",
+    { "id": "ESXI-SVC-SLP", "changeCategory": "service", "title": "SLP service is stopped and disabled", "domain": "esxi", "assetType": "host", "severity": "high", "ransomware": true,
       "attack": { "mitigates": ["T1210"], "mitigation": "M1042", "status": "proposed" },
       "applies": { "maxVersion": "8.0", "reason": "ESX 9.0 removed CIM, SFCB and the OpenSLP stack (VCF 9.0 product support notes)", "source": "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/release-notes/vmware-cloud-foundation-90-release-notes/platform-product-support-notes/product-support-notes-vsphere.html" },
       "check": { "type": "service", "key": "slpd", "running": false, "policy": "off" },
@@ -7822,7 +8056,7 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "service", "key": "snmpd", "running": false, "policy": "off" },
       "rationale": "SNMP v1/v2c community strings are cleartext; use SNMPv3 only when monitoring requires it.",
       "mitigation": { "summary": "Disable SNMP or configure SNMPv3 with authentication and privacy, then record an exception.", "steps": ["esxcli system snmp get / set (review first)"], "workPackage": "WP-ESXI-SERVICES" }, "cis": "2.5" },
-    { "id": "ESXI-LOCKDOWN", "changeCategory": "access", "title": "Lockdown mode is enabled", "domain": "esxi", "assetType": "host", "severity": "medium",
+    { "id": "ESXI-LOCKDOWN", "changeCategory": "access", "title": "Lockdown mode is enabled", "domain": "esxi", "assetType": "host", "severity": "medium", "ransomware": true,
       "attack": { "mitigates": ["T1078", "T1675"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "setting", "fact": "lockdown", "path": "mode", "op": "in", "value": ["lockdownNormal", "lockdownStrict"], "absent": "unknown" },
       "profiles": { "strict": { "value": ["lockdownStrict"] } },
@@ -7871,12 +8105,12 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "setting", "fact": "advanced", "key": "Security.PasswordHistory", "op": "ge", "value": 5, "absent": "fail" },
       "rationale": "Prevents cycling back to compromised passwords.",
       "mitigation": { "summary": "Set Security.PasswordHistory to 5 or more.", "steps": ["Set advanced setting Security.PasswordHistory = 5"], "workPackage": "WP-ESXI-ACCESS" }, "cis": "4.5", "scg": "Security.PasswordHistory" },
-    { "id": "ESXI-AD-ADMINS-GROUP", "changeCategory": "settings", "title": "AD admin group is not the default 'ESX Admins'", "domain": "esxi", "assetType": "host", "severity": "high",
+    { "id": "ESXI-AD-ADMINS-GROUP", "changeCategory": "settings", "title": "AD admin group is not the default 'ESX Admins'", "domain": "esxi", "assetType": "host", "severity": "high", "ransomware": true,
       "attack": { "mitigates": ["T1078.002", "T1098.007"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "Config.HostAgent.plugins.hostsvc.esxAdminsGroup", "op": "ne", "value": "ESX Admins", "absent": "unknown" },
       "rationale": "Any domain user able to create an 'ESX Admins' group gains full host admin rights on AD-joined hosts (CVE-2024-37085, exploited by ransomware operators).",
       "mitigation": { "summary": "Set esxAdminsGroup to a dedicated, protected group (or empty if AD is not used) and disable auto-add.", "steps": ["Set Config.HostAgent.plugins.hostsvc.esxAdminsGroup", "Set Config.HostAgent.plugins.hostsvc.esxAdminsGroupAutoAdd = false"], "workPackage": "WP-ESXI-ACCESS" }, "cis": "4.7", "vsat": true },
-    { "id": "ESXI-AD-ADMINS-AUTOADD", "changeCategory": "settings", "title": "AD admin group auto-add is disabled", "domain": "esxi", "assetType": "host", "severity": "high",
+    { "id": "ESXI-AD-ADMINS-AUTOADD", "changeCategory": "settings", "title": "AD admin group auto-add is disabled", "domain": "esxi", "assetType": "host", "severity": "high", "ransomware": true,
       "attack": { "mitigates": ["T1078.002", "T1098.007"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "Config.HostAgent.plugins.hostsvc.esxAdminsGroupAutoAdd", "op": "eq", "value": false, "absent": "unknown" },
       "rationale": "Automatic admin grant for a named AD group is the root cause of CVE-2024-37085.",
@@ -7917,7 +8151,7 @@ $script:VsatEmbedded = [ordered]@{
       "profiles": { "strict": { "minServers": 2 } },
       "rationale": "Accurate time is required for log correlation, certificates and Kerberos.",
       "mitigation": { "summary": "Configure authoritative NTP/PTP sources and start the service with policy 'on'.", "steps": ["Host > Configure > Time Configuration"], "workPackage": "WP-ESXI-LOGGING" }, "cis": "2.1" },
-    { "id": "ESXI-SYSLOG-REMOTE", "changeCategory": "settings", "title": "Remote syslog is configured", "domain": "esxi", "assetType": "host", "severity": "medium",
+    { "id": "ESXI-SYSLOG-REMOTE", "changeCategory": "settings", "title": "Remote syslog is configured", "domain": "esxi", "assetType": "host", "severity": "medium", "ransomware": true,
       "attack": { "mitigates": ["T1070"], "mitigation": "M1029", "status": "proposed" },
       "check": { "type": "script", "name": "SyslogRemote" },
       "rationale": "Local logs can be erased by an attacker with root access; remote copies preserve evidence.",
@@ -7979,7 +8213,7 @@ $script:VsatEmbedded = [ordered]@{
     'rules/hyperv.json' = @'
 {
   "rules": [
-    { "id": "HV-OS-PATCH-AGE", "changeCategory": "patch", "title": "Hyper-V host received updates recently", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "high",
+    { "id": "HV-OS-PATCH-AGE", "changeCategory": "patch", "title": "Hyper-V host received updates recently", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "high", "ransomware": true,
       "attack": { "mitigates": ["T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "PatchAge", "fact": "hotfix", "maxDays": 45 },
       "profiles": { "strict": { "maxDays": 31 } },
@@ -8056,7 +8290,7 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "script", "name": "HvReplica" },
       "rationale": "Kerberos replication uses HTTP and does not encrypt replica traffic in transit.",
       "mitigation": { "summary": "Use certificate-based (HTTPS) replication or encrypt the path.", "steps": ["Hyper-V Settings > Replication Configuration"], "workPackage": "WP-STORAGE" }, "vsat": true },
-    { "id": "HV-ADMINS", "title": "Local and Hyper-V administrator memberships are reviewed", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "low",
+    { "id": "HV-ADMINS", "title": "Local and Hyper-V administrator memberships are reviewed", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "low", "ransomware": true,
       "attack": { "mitigates": ["T1078"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "manual", "fact": "hvAdmins", "guidance": "Confirm Administrators and Hyper-V Administrators contain only approved groups; Hyper-V Administrators effectively control all VMs" },
       "rationale": "Hyper-V Administrators can access every VM's disks and memory.",
@@ -8151,7 +8385,7 @@ $script:VsatEmbedded = [ordered]@{
     'rules/kvm.json' = @'
 {
   "rules": [
-    { "id": "KVM-OS-PATCH-AGE", "changeCategory": "patch", "title": "KVM host received package updates recently", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high",
+    { "id": "KVM-OS-PATCH-AGE", "changeCategory": "patch", "title": "KVM host received package updates recently", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high", "ransomware": true,
       "attack": { "mitigates": ["T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "PatchAge", "fact": "updates", "maxDays": 45 }, "profiles": { "strict": { "maxDays": 31 } },
       "rationale": "QEMU, libvirt and kernel updates fix guest-to-host escape and privilege-escalation flaws. Package database age is a proxy for patch level.",
@@ -8197,17 +8431,17 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "script", "name": "Kvm", "mode": "firewall" },
       "rationale": "A host firewall limits exposure of libvirt, VNC/SPICE and management services.",
       "mitigation": { "summary": "Enable firewalld, nftables or ufw with a restrictive policy.", "steps": ["systemctl enable --now firewalld (review first)"], "workPackage": "WP-HOST-HARDENING" }, "vsat": true },
-    { "id": "KVM-SSH-ROOT", "changeCategory": "access", "title": "SSH does not allow root password login", "domain": "kvm-host", "assetType": "kvm-host", "severity": "medium",
+    { "id": "KVM-SSH-ROOT", "changeCategory": "access", "title": "SSH does not allow root password login", "domain": "kvm-host", "assetType": "kvm-host", "severity": "medium", "ransomware": true,
       "attack": { "mitigates": ["T1021.004", "T1110"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "setting", "fact": "sshd", "key": "PermitRootLogin", "op": "notin", "value": ["yes"], "absent": "default", "default": "prohibit-password" },
       "rationale": "Direct root password login enables brute force against the most privileged account.",
       "mitigation": { "summary": "Set PermitRootLogin no (or prohibit-password) and use named accounts with sudo.", "steps": ["Edit sshd_config (review first)"], "workPackage": "WP-HOST-ACCESS" }, "vsat": true },
-    { "id": "KVM-SSH-PASSWORD", "changeCategory": "access", "title": "SSH password authentication is disabled", "domain": "kvm-host", "assetType": "kvm-host", "severity": "low",
+    { "id": "KVM-SSH-PASSWORD", "changeCategory": "access", "title": "SSH password authentication is disabled", "domain": "kvm-host", "assetType": "kvm-host", "severity": "low", "ransomware": true,
       "attack": { "mitigates": ["T1021.004", "T1110"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "setting", "fact": "sshd", "key": "PasswordAuthentication", "op": "ne", "value": "yes", "absent": "unknown" },
       "rationale": "Key-based authentication resists password guessing and credential reuse.",
       "mitigation": { "summary": "Set PasswordAuthentication no after deploying keys.", "steps": ["Edit sshd_config (review first)"], "workPackage": "WP-HOST-ACCESS" }, "vsat": true },
-    { "id": "KVM-LIBVIRT-GROUP", "title": "libvirt/kvm group membership is reviewed", "domain": "kvm-host", "assetType": "kvm-host", "severity": "low",
+    { "id": "KVM-LIBVIRT-GROUP", "title": "libvirt/kvm group membership is reviewed", "domain": "kvm-host", "assetType": "kvm-host", "severity": "low", "ransomware": true,
       "attack": { "mitigates": ["T1078", "T1059.012"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "manual", "fact": "groups", "guidance": "Members of the libvirt group can manage all guests and are effectively root; confirm only approved administrators" },
       "rationale": "libvirt group membership grants root-equivalent control.",
@@ -8386,7 +8620,7 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "setting", "fact": "clusterStatus", "path": "mgmt_cluster_status.status", "op": "eq", "value": "STABLE", "absent": "unknown" },
       "rationale": "A degraded management cluster risks policy realization failures and loss of quorum.",
       "mitigation": { "summary": "Restore all three manager nodes to a stable state.", "steps": ["System > Appliances"], "workPackage": "WP-NSX-MGMT" }, "vsat": true },
-    { "id": "NSX-MGR-BACKUP", "title": "Scheduled NSX backups are configured", "domain": "nsx", "assetType": "nsx-manager", "severity": "high",
+    { "id": "NSX-MGR-BACKUP", "title": "Scheduled NSX backups are configured", "domain": "nsx", "assetType": "nsx-manager", "severity": "high", "ransomware": true,
       "attack": { "mitigates": ["T1490", "T1485"], "mitigation": "M1053", "status": "proposed" },
       "check": { "type": "script", "name": "NsxBackup" },
       "rationale": "Without backups, loss of the manager cluster means rebuilding all network and security policy.",
@@ -8558,7 +8792,7 @@ $script:VsatEmbedded = [ordered]@{
     'rules/pack.json' = @'
 {
   "schemaVersion": "2.0",
-  "version": "2026.09.1",
+  "version": "2026.09.2",
   "frameworkNotes": {
     "cis": "CIS control IDs carried over from the VSAT 1.x mapping (CIS VMware ESXi 7.0 Benchmark, edition not recorded). They are marked unverified until mapped against the licensed CIS ESXi 8.0 v1.4.0 / ESXi 7.0 v1.6.0 documents. CIS publishes no vCenter or NSX benchmark.",
     "scg": "Broadcom/VMware vSphere Security Configuration Guide setting or topic name. Guide edition to be confirmed during mapping review.",
@@ -8585,14 +8819,39 @@ $script:VsatEmbedded = [ordered]@{
     { "id": "WP-HOST-ACCESS", "title": "Tighten hypervisor host access", "team": "IAM / server operations", "outcome": "Remote access requires strong authentication; privileged groups contain only approved members.", "prerequisites": ["Break-glass procedure agreed"], "impact": "Administrators may need new access paths.", "maintenanceWindow": false, "rollback": "Restore previous settings.", "validation": "Re-run VSAT." },
     { "id": "WP-MGMT-ISOLATION", "title": "Isolate management planes from workload infrastructure", "team": "Virtualization platform / network security", "outcome": "vCenter, NSX Manager and hypervisor management interfaces run on dedicated management clusters and networks; workload admins cannot control them.", "prerequisites": ["Dedicated management cluster or host group", "Management VLAN with ACLs"], "impact": "Appliance migration and IP/VLAN changes.", "maintenanceWindow": true, "rollback": "Migrate appliances back; restore previous portgroup/VLAN.", "validation": "Re-run VSAT; blast-radius paths through the management plane are closed." },
     { "id": "WP-OT-SEGMENTATION", "title": "Separate OT workloads from IT at the virtualization layer", "team": "OT engineering / virtualization / network security", "outcome": "OT workloads run on dedicated hosts, switches and management, reachable from IT only through the OT DMZ.", "prerequisites": ["Asset owner approval and plant change window", "Validated backups of OT servers"], "impact": "VM migrations and network changes in the plant: coordinate with operations; never during production-critical windows.", "maintenanceWindow": true, "rollback": "Migrate VMs back; restore previous portgroup and permission settings from the evidence package.", "validation": "Re-run VSAT; OT-* findings PASS and Blast Radius shows no IT-to-OT path." },
+    { "id": "WP-RANSOMWARE", "title": "Protect backups from a hypervisor-wide ransomware attack", "team": "Backup / virtualization platform / IAM", "outcome": "Backup systems run on their own cluster or host, have administrators of their own and are unreachable from any compromised account or workload.", "prerequisites": ["Inventory backup servers, proxies and repositories and declare them in scope backupSystems", "Confirm a restorable backup copy exists before moving backup infrastructure"], "impact": "Backup VM migrations and permission changes; schedule outside backup windows.", "maintenanceWindow": true, "rollback": "Migrate backup VMs back; restore previous permissions from the evidence package.", "validation": "Re-run VSAT; RW-* findings PASS and the Ransomware readiness page shows no path to a backup system." },
     { "id": "WP-MANUAL", "title": "Complete manual review items", "team": "Security assurance", "outcome": "Controls that cannot be automated are reviewed and evidenced.", "prerequisites": [], "impact": "None.", "maintenanceWindow": false, "rollback": "Not applicable.", "validation": "Record evidence and exceptions in the scope file." }
+  ]
+}
+'@
+    'rules/ransomware.json' = @'
+{
+  "rules": [
+    { "id": "RW-BACKUP-REACHABLE", "title": "No entry point reaches a backup system", "domain": "ransomware-readiness", "assetType": ["vm", "hyperv-vm", "kvm-vm"], "severity": "critical",
+      "attack": { "mitigates": ["T1490", "T1486"], "mitigation": "M1053", "status": "proposed" },
+      "check": { "type": "script", "name": "RwReachable" },
+      "rationale": "Ransomware operators delete or encrypt backups before they encrypt production, so recovery fails. A blast-radius path from a compromised account or workload to the backup system means one intrusion can reach both.",
+      "mitigation": { "summary": "Break every path to the backup system at the cheapest hop shown in the Blast radius view.", "steps": ["Open the path in the Blast radius view", "Remove the admin right, network rule or management exposure it uses", "Re-run VSAT to confirm no entry point reaches the backup system"], "workPackage": "WP-RANSOMWARE" },
+      "limitations": "Configuration-inferred reachability within the bounded blast-radius search. Backup systems are the assets matched by scope backupSystems; immutability and offline copies inside the backup product are not assessed.", "vsat": true },
+    { "id": "RW-BACKUP-COLOCATED", "title": "Backup systems do not share a cluster or host with production workloads", "domain": "ransomware-readiness", "assetType": ["vm", "hyperv-vm", "kvm-vm"], "severity": "high",
+      "attack": { "mitigates": ["T1486", "T1490"], "mitigation": "M1053", "status": "proposed" },
+      "check": { "type": "script", "name": "RwColocated" },
+      "rationale": "A backup VM that runs in the same vSphere cluster, Hyper-V cluster or KVM host as the workloads it protects is encrypted together with them when an attacker takes over that hypervisor layer.",
+      "mitigation": { "summary": "Run backup systems on a dedicated cluster or host, outside the production management and admin domain.", "steps": ["Provision a dedicated backup cluster or host", "Migrate the backup VMs and keep production VMs off it (affinity rules)", "Keep at least one backup copy outside the virtualization platform"], "workPackage": "WP-RANSOMWARE" },
+      "limitations": "Placement is taken from collected runs-on and cluster relationships; storage-level separation of the backup repository is not assessed.", "vsat": true },
+    { "id": "RW-BACKUP-SHARED-ADMIN", "title": "Backup hypervisors have administrators of their own", "domain": "ransomware-readiness", "assetType": ["vm", "hyperv-vm", "kvm-vm"], "severity": "high",
+      "attack": { "mitigates": ["T1490", "T1078"], "mitigation": "M1018", "status": "proposed" },
+      "check": { "type": "script", "name": "RwSharedAdmin" },
+      "rationale": "When the principal that administers the backup system's hypervisor also administers production hypervisors (directly, through a group or through a vCenter that manages both), one stolen credential is enough to encrypt production and destroy the backups.",
+      "mitigation": { "summary": "Administer backup hypervisors with dedicated accounts and groups that hold no production rights.", "steps": ["Create backup-only admin groups", "Grant them rights on the backup hosts or backup cluster only", "Remove production admin groups from the backup hosts"], "workPackage": "WP-RANSOMWARE" },
+      "limitations": "Derived from collected vCenter permissions, Hyper-V local groups and KVM admin groups; AD group nesting is followed only when declared in identityGroups.", "vsat": true }
   ]
 }
 '@
     'rules/vcenter-cluster-storage.json' = @'
 {
   "rules": [
-    { "id": "VC-PATCH-ADV", "changeCategory": "patch", "title": "vCenter build is not exposed to known security advisories", "domain": "vcenter", "assetType": "vcenter", "severity": "critical",
+    { "id": "VC-PATCH-ADV", "changeCategory": "patch", "title": "vCenter build is not exposed to known security advisories", "domain": "vcenter", "assetType": "vcenter", "severity": "critical", "ransomware": true,
       "attack": { "mitigates": ["T1190", "T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "Advisory" },
       "rationale": "vCenter is the control plane for every host and VM; exploited vCenter vulnerabilities give full infrastructure compromise.",
@@ -8602,7 +8861,7 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "script", "name": "Lifecycle" },
       "rationale": "Unsupported releases no longer receive routine security fixes.",
       "mitigation": { "summary": "Upgrade vCenter to a supported release.", "steps": ["Plan upgrade"], "workPackage": "WP-LIFECYCLE" }, "vsat": true },
-    { "id": "VC-ADMIN-USERS", "changeCategory": "access", "title": "Administrator role is granted to groups, not individual users", "domain": "vcenter", "assetType": "vcenter", "severity": "medium",
+    { "id": "VC-ADMIN-USERS", "changeCategory": "access", "title": "Administrator role is granted to groups, not individual users", "domain": "vcenter", "assetType": "vcenter", "severity": "medium", "ransomware": true,
       "attack": { "mitigates": ["T1078"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "script", "name": "VcAdminUsers" },
       "rationale": "Direct user grants bypass group lifecycle controls and complicate access reviews.",
@@ -8682,7 +8941,7 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "setting", "fact": "vsan", "path": "dataInTransitEncryption", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "Protects replication traffic on the vSAN network.",
       "mitigation": { "summary": "Enable data-in-transit encryption.", "steps": ["Cluster > Configure > vSAN > Services"], "workPackage": "WP-STORAGE" }, "vsat": true },
-    { "id": "ST-RECOVERY-EVIDENCE", "title": "Backup and restore-test evidence exists", "domain": "storage", "assetType": "vcenter", "severity": "medium",
+    { "id": "ST-RECOVERY-EVIDENCE", "title": "Backup and restore-test evidence exists", "domain": "storage", "assetType": "vcenter", "severity": "medium", "ransomware": true,
       "attack": { "mitigates": ["T1490", "T1485", "T1486"], "mitigation": "M1053", "status": "proposed" },
       "check": { "type": "manual", "guidance": "Import or attach backup job, retention and restore-test evidence with dates; snapshots and successful jobs are not proof of restore" },
       "rationale": "Recoverability is only demonstrated by tested restores.",
@@ -10560,6 +10819,7 @@ $script:VsatEmbedded = [ordered]@{
 <nav class="tabs" id="tabs" aria-label="Report sections">
   <a href="#overview" data-page="overview">Overview</a>
   <a href="#blast" data-page="blast" data-view="blast">Blast radius</a>
+  <a href="#ransomware" data-page="ransomware" title="Ransomware readiness">Ransomware</a>
   <a href="#findings" data-page="findings">Findings</a>
   <a href="#topology" data-page="topology">Topology</a>
   <a href="#nsx" data-page="nsx">NSX</a>
@@ -10634,6 +10894,7 @@ $script:VsatEmbedded = [ordered]@{
     </section>
   </div>
   </section>
+  <section id="page-ransomware" class="page" data-page="ransomware" aria-labelledby="h-ransomware" hidden></section>
   <section id="page-findings" class="page" data-page="findings" aria-labelledby="h-findings" hidden></section>
   <section id="page-topology" class="page" data-page="topology" aria-labelledby="h-topology" hidden></section>
   <section id="page-nsx" class="page" data-page="nsx" aria-labelledby="h-nsx" hidden></section>
@@ -10799,6 +11060,7 @@ main:focus { outline: none; }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .card-head h2, .card-head h3 { margin: 0; }
 .grid { display: grid; gap: 16px; }
+.grid > .card + .card { margin-top: 0; }   /* the grid gap spaces cards; a stacked-card margin would misalign rows */
 .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid-auto { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
@@ -10860,7 +11122,8 @@ main:focus { outline: none; }
 .metric { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--surface-2); min-width: 0; }
 .metric .m-val { font-size: 1.5rem; font-weight: 750; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .metric .m-lbl { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); font-weight: 650; }
-.metric.sev-tile { border-left: 4px solid; }
+.metric.sev-tile { border-left: 4px solid; padding: 8px 4px 8px 7px; }
+.metric.sev-tile .m-lbl { font-size: .62rem; letter-spacing: 0; white-space: nowrap; }
 .metric.sev-critical { border-left-color: var(--sev-critical); color: inherit; background: var(--surface-2); border-color: var(--border); border-left-color: var(--sev-critical); }
 .metric.sev-high { border-left-color: var(--sev-high); color: inherit; background: var(--surface-2); border-color: var(--border); border-left-color: var(--sev-high); }
 .metric.sev-medium { color: inherit; background: var(--surface-2); border-color: var(--border); border-left-color: var(--sev-medium); }
@@ -11096,6 +11359,18 @@ dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .timeline td.tl-change { min-width: 14rem; }
 .chk-list { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
 .chk { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+
+/* ransomware readiness */
+.rw-reach .bar { margin: 6px 0 2px; height: 8px; }
+.rw-count { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; padding-top: 2px; }
+.rw-count.bad-num { color: var(--res-fail); }
+.rw-checks { margin-top: 6px; }
+.rw-checks li { padding: 4px 0; }
+.rw-paths { list-style: decimal; padding-left: 22px; }
+.rw-paths li { display: list-item; }
+.rw-groups > .card + .card, .rw-groups > details + .card, .rw-groups > .card + details, .rw-groups > details + details { margin-top: 12px; }
+.rw-groups h3 { margin: 0 0 8px; font-size: 1rem; }
+.rw-groups summary { cursor: pointer; }
 /* blast radius (shared by the report and the local UI; the build appends this file to each host
    stylesheet). Uses only the host tokens plus --attack, --attack-soft and --safe, which each host
    aliases to its own fail / pass tokens. Every selector is scoped under .br. */
@@ -12441,7 +12716,7 @@ var VsatBlastView = (function () {
   // =====================================================================
   // Router
   // =====================================================================
-  const PAGES = ['overview', 'blast', 'findings', 'topology', 'nsx', 'changes', 'remediation', 'exports'];
+  const PAGES = ['overview', 'blast', 'ransomware', 'findings', 'topology', 'nsx', 'changes', 'remediation', 'exports'];
   const rendered = {};
   const renderers = {};
   function ensureRendered(p) {
@@ -13654,6 +13929,80 @@ var VsatBlastView = (function () {
     });
     rt.setRows(ruleAssets);
     el.appendChild(h('div', { class: 'card section' }, h('div', { class: 'card-head' }, h('h2', null, 'Distributed firewall rules (' + fmtN(ruleAssets.length) + ')'), h('span', { class: 'muted small' }, 'Ordered by category, policy sequence, rule sequence.')), rt.el));
+  };
+
+  // =====================================================================
+  // Ransomware readiness
+  // =====================================================================
+  renderers.ransomware = function (el) {
+    const rw = obj(analysis.ransomware);
+    el.appendChild(pageHead('h-ransomware', 'Ransomware readiness', 'Could one stolen account encrypt every hypervisor, and the backups too? Ransomware-relevant checks, one-account reach and the paths to your backup systems.'));
+    if (!analysis.ransomware) { el.appendChild(h('p', { class: 'muted' }, 'This results file has no ransomware readiness analysis. Re-run VSAT to add it.')); return; }
+    const tagIds = arr(obj(rw.taggedRules).ruleIds).map(str);
+    const tagSet = new Set(tagIds);
+    const counts = obj(obj(rw.taggedRules).counts);
+    const total = RESULTS.reduce(function (a, r) { return a + num(counts[r]); }, 0);
+    // One account reach: worst first, as computed by the engine.
+    const reach = arr(rw.oneAccountReach).filter(function (x) { return x && typeof x === 'object'; });
+    const top = reach.slice(0, 8);
+    const reachCard = h('div', { class: 'card' },
+      h('div', { class: 'card-head' }, h('h2', null, 'One account reach'), h('span', { class: 'muted small' }, fmtN(rw.hostTotal) + ' hypervisor hosts in scope')),
+      top.length ? h('ul', { class: 'mini-list rw-reach' }, top.map(function (x) {
+        const n = num(x.hypervisors), t = num(x.total), all = t > 0 && n >= t;
+        return h('li', null, h('span', { class: 'grow' },
+          h('span', { class: 'rw-principal' }, h('strong', { class: 'break' }, str(x.principal)), h('span', { class: 'muted small' }, ' ' + (str(x.type) === 'group' ? 'group' : 'account'))),
+          h('div', { class: 'bar', role: 'img', 'aria-label': n + ' of ' + t + ' hypervisor hosts' }, sized(h('span', { class: all ? 'b-FAIL' : 'b-UNKNOWN' }), n, t)),
+          h('span', { class: 'sub muted small' }, arr(x.platforms).map(str).join(', '))),
+        h('span', { class: 'rw-count' + (all ? ' bad-num' : '') }, fmtN(n) + ' / ' + fmtN(t)));
+      })) : h('p', { class: 'muted' }, 'No principal with admin rights on a hypervisor host was found in the collected evidence.'),
+      reach.length > top.length ? h('p', { class: 'small muted' }, 'and ' + fmtN(reach.length - top.length) + ' more principals') : null,
+      num(rw.unknownAdminHosts) ? h('p', { class: 'small muted' }, 'Administrators of ' + fmtN(rw.unknownAdminHosts) + ' host(s) could not be fully determined; counts may be low.') : null);
+    // Backup systems and their RW-* results.
+    const backups = arr(rw.backups).filter(function (b) { return b && typeof b === 'object'; });
+    const bkCard = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Backup systems'), h('span', { class: 'muted small' }, rw.declared ? fmtN(backups.length) + ' declared' : 'none declared')),
+      !rw.declared ? h('p', { class: 'small' }, 'Declare backup servers in the scope file (', h('span', { class: 'mono' }, 'backupSystems: [{ "match": "name:backup*" }]'), ') to check whether they are reachable, colocated with production or share its administrators.')
+        : backups.length ? h('ul', { class: 'mini-list' }, backups.map(function (b) {
+          const fl = (findingsByAsset.get(str(b.id)) || []).filter(function (f) { return str(f.ruleId).indexOf('RW-') === 0; }).sort(findingCmp);
+          return h('li', null, h('span', { class: 'grow' }, assetById.has(str(b.id)) ? linkBtn(str(b.name), function () { openAsset(b.id); }) : h('strong', null, str(b.name)), h('span', { class: 'muted small' }, ' ' + typeLabel(b.type)),
+            fl.length ? h('ul', { class: 'mini-list rw-checks' }, fl.map(function (f) { return h('li', null, resBadge(f.result), h('span', { class: 'grow' }, linkBtn(str(fx(f, 'title')) || str(f.ruleId), function () { openFinding(f); }), h('span', { class: 'sub muted small' }, str(f.observed)))); })) : null));
+        })) : h('p', { class: 'muted' }, 'backupSystems matched no collected asset.'));
+    const tagCard = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Ransomware-relevant checks'), h('span', { class: 'muted small' }, fmtN(tagIds.length) + ' rules')),
+      h('p', null, h('span', { class: 'big-num' + (num(counts.FAIL) ? ' bad-num' : ' ok-num') }, fmtN(counts.FAIL)), ' failing of ' + fmtN(total) + ' results'),
+      resultBar(counts, total),
+      h('p', { class: 'small muted' }, 'Patching, lockdown, shell access, admin groups, remote logging and recovery evidence on every hypervisor platform.'));
+    el.appendChild(h('div', { class: 'grid grid-3' }, reachCard, bkCard, tagCard));
+    // Blast-radius paths that end at a backup system.
+    const paths = arr(rw.backupPaths).filter(function (p) { return p && typeof p === 'object'; });
+    if (rw.declared) {
+      el.appendChild(h('div', { class: 'card section' },
+        h('div', { class: 'card-head' }, h('h2', null, 'Paths to backup systems (' + fmtN(paths.length) + ')'), btn('Open blast radius →', function () { go('blast'); }, 'btn-sm')),
+        paths.length ? h('ol', { class: 'mini-list rw-paths' }, paths.map(function (p) {
+          return h('li', null, h('span', { class: 'grow break' }, str(p.narrative), h('span', { class: 'sub muted small' }, fmtN(p.hops) + ' hop(s) · ' + arr(p.platforms).map(str).join(', '))));
+        })) : h('p', { class: 'muted' }, 'No blast-radius entry point reaches a declared backup system. Check RW-BACKUP-REACHABLE for UNKNOWN results before relying on this.')));
+    }
+    // Tagged rules grouped by status.
+    const tf = findings.filter(function (f) { return tagSet.has(str(f.ruleId)); });
+    const groups = [['FAIL', true], ['UNKNOWN', true], ['ERROR', true], ['MANUAL', true], ['PASS', false], ['NOT_APPLICABLE', false]];
+    const wrap = h('div', { class: 'section rw-groups' }, h('div', { class: 'card-head' }, h('h2', null, 'Ransomware-relevant findings by status')));
+    groups.forEach(function (g) {
+      const list = tf.filter(function (f) { return f.result === g[0]; });
+      if (!list.length) return;
+      const t = new DataTable({
+        caption: RESULT_LABEL[g[0]] + ' ransomware-relevant findings', sortKey: 'severity', sortDir: 'desc', empty: 'None.',
+        columns: [
+          { key: 'severity', label: 'Severity', defaultDir: 'desc', sort: function (f) { return SEV_RANK[f.severity] || 0; }, render: function (f) { return sevBadge(f.severity); } },
+          { key: 'title', label: 'Finding', cls: 'title-cell', sort: function (f) { return str(fx(f, 'title')); }, render: function (f) { return [linkBtn(str(fx(f, 'title')), function () { openFinding(f); }), h('span', { class: 'sub mono' }, str(f.ruleId))]; } },
+          { key: 'asset', label: 'Asset', sort: function (f) { return str(f.assetName); }, render: function (f) { return h('span', { class: 'break' }, str(f.assetName), h('span', { class: 'sub' }, typeLabel(f.assetType))); } },
+          { key: 'obs', label: 'Observed', render: function (f) { return h('span', { class: 'break small' }, trunc(f.observed, 160)); } }
+        ],
+        onRowClick: openFinding
+      });
+      t.setRows(list);
+      const head = h('span', null, resBadge(g[0]), ' ', h('strong', null, fmtN(list.length)), ' ' + (list.length === 1 ? 'result' : 'results'));
+      wrap.appendChild(g[1] ? h('div', { class: 'card' }, h('h3', null, head), t.el) : h('details', { class: 'card' }, h('summary', null, head), t.el));
+    });
+    if (!tf.length) wrap.appendChild(h('p', { class: 'muted' }, 'No ransomware-relevant findings in this assessment.'));
+    el.appendChild(wrap);
   };
 
   // =====================================================================
@@ -15448,6 +15797,16 @@ var VsatBlastView = (function () {
         h('dl', { class: 'kv' }, h('dt', null, 'Folder'), h('dd', { class: 'mono' }, str(r.outputDir) || '-'),
           h('dt', null, 'Files'), h('dd', null, arr(r.files).length ? arr(r.files).map(function (f) { return h('div', { class: 'mono' }, str(f)); }) : '-')),
         h('div', { class: 'actions' }, link, h('span', { class: 'small muted' }, 'Opens in a new tab.'))));
+      // Ransomware readiness: one-account reach (the report has the full page).
+      const rw = r.ransomware && typeof r.ransomware === 'object' ? r.ransomware : null;
+      if (rw) {
+        const reach = arr(rw.oneAccountReach).slice(0, 3);
+        const tc = obj(obj(rw.taggedRules).counts);
+        body.appendChild(h('div', { class: 'card' }, h('h2', null, 'Ransomware readiness'),
+          h('p', { class: 'small' }, String(num(tc.FAIL)) + ' ransomware-relevant check(s) failing. ' + (rw.declared ? String(num(rw.backupPaths)) + ' attack path(s) reach a declared backup system.' : 'No backup systems declared in the scope file.')),
+          reach.length ? h('h3', null, 'One account reach') : null,
+          reach.length ? h('ul', null, reach.map(function (x) { return h('li', null, h('strong', null, str(x.principal)), ' administers ' + num(x.hypervisors) + ' of ' + num(x.total) + ' hypervisor hosts'); })) : null));
+      }
       renderBlast(S.result);
     };
   };
@@ -15500,7 +15859,7 @@ var VsatBlastView = (function () {
   "schemaVersion": "2.3",
   "tool": {
     "name": "VSAT",
-    "version": "2.4.0"
+    "version": "2.5.0"
   },
   "run": {
     "id": "00000000-0000-4000-8000-000000000d30",
@@ -15618,7 +15977,12 @@ var VsatBlastView = (function () {
     "identityGroups": [],
     "identityDomains": [],
     "aiWorkloads": [],
-    "signoffs": []
+    "signoffs": [],
+    "backupSystems": [
+      {
+        "match": "name:backup01"
+      }
+    ]
   },
   "assets": [
     {

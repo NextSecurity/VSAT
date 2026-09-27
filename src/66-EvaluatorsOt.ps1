@@ -80,11 +80,19 @@ function Invoke-VsatCheckOtMix {
 }
 
 function Get-VsatOtAdminIndex {
-    # Per principal: the hosts it administers (admin-of on the host, or on a container that
-    # controls it), including rights inherited through member-of. Cached on the rule context.
+    # Host admin index of the rule context's security graph, cached on the context.
     param($Context)
     if ($Context.Contains('otAdmin')) { return $Context.otAdmin }
-    $G = (Get-VsatContextGraph -Context $Context).graph
+    $Context.otAdmin = Get-VsatHostAdminIndex -Graph (Get-VsatContextGraph -Context $Context).graph
+    return $Context.otAdmin
+}
+
+function Get-VsatHostAdminIndex {
+    # Per principal: the hosts it administers (admin-of on the host, or on a container that
+    # controls it), including rights inherited through member-of. Shared by the OT and
+    # ransomware lenses and the one-account-reach analysis.
+    param([Parameter(Mandatory)]$Graph)
+    $G = $Graph
     $hostTypes = $script:VsatGraphHostTypes
     $under = @{}
     $hostsUnder = {
@@ -122,8 +130,7 @@ function Get-VsatOtAdminIndex {
     $parents = @{}
     foreach ($e in $G.edges.Values) { if ($e.kind -eq 'controls') { if (-not $parents.ContainsKey($e.target)) { $parents[$e.target] = [System.Collections.Generic.List[string]]::new() }; $parents[$e.target].Add($e.source) } }
     $gapTargets = @{}; foreach ($x in @($G.needsEvidence | Where-Object { $_ -and $_.kind -eq 'admin-of' })) { $gapTargets[[string]$x.target] = $x }
-    $Context.otAdmin = @{ graph = $G; reach = $reach; parents = $parents; gapTargets = $gapTargets }
-    return $Context.otAdmin
+    return @{ graph = $G; reach = $reach; parents = $parents; gapTargets = $gapTargets }
 }
 
 function Invoke-VsatCheckOtAdmin {

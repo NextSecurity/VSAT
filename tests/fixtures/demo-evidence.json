@@ -2,7 +2,7 @@
   "schemaVersion": "2.3",
   "tool": {
     "name": "VSAT",
-    "version": "2.4.0"
+    "version": "2.5.0"
   },
   "run": {
     "id": "00000000-0000-4000-8000-000000000d30",
@@ -120,7 +120,12 @@
     "identityGroups": [],
     "identityDomains": [],
     "aiWorkloads": [],
-    "signoffs": []
+    "signoffs": [],
+    "backupSystems": [
+      {
+        "match": "name:backup01"
+      }
+    ]
   },
   "assets": [
     {

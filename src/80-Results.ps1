@@ -34,10 +34,11 @@ function Invoke-VsatAnalysisPipeline {
     $blast.fixPlan = @(Get-VsatFixPlan -Paths $blast.paths -Graph $graph -Bounds $blast.bounds)
     foreach ($p in @($blast.paths)) { $pathTargets[[string]$p.crown] = $true }
     Set-VsatPriority -Findings $findings -Context $eval.context -PathTargets $pathTargets
+    $ransomware = Get-VsatRansomwareAnalysis -Graph $graph -Blast $blast -Context $eval.context -Findings $findings -Rules $eval.rules
     $impact = Get-VsatImpact -Context $eval.context
     $wps = Get-VsatWorkPackages -Findings $findings
     $results = New-VsatResultsObject -Evidence $Evidence -Eval $eval -Coverage $coverage -Status $status -ProfileName $ProfileName
-    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; workPackageCatalog = @(Get-VsatWorkPackageCatalog); changes = $changes }
+    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; ransomware = $ransomware; workPackageCatalog = @(Get-VsatWorkPackageCatalog); changes = $changes }
     if ($BaselineEvidence) {
         Update-VsatProgress -Message 'Comparing with baseline'
         $saveIdx = $script:VsatAssetIndex
@@ -443,7 +444,7 @@ function Get-VsatRedactedCopy {
     $ctx = @{ map = $map; ipMap = $ipMap; nameRx = $nameRx; ipRx = $ipRx; macRx = $macRx; uuidRx = $uuidRx }
     $ev = Invoke-VsatRedactValue -Value $Evidence -Ctx $ctx
     $res = Invoke-VsatRedactValue -Value $Results -Ctx $ctx
-    if ($bare.Count) { Protect-VsatRedactBlastPrincipals -Blast (Get-VsatProp $res 'analysis.blastRadius' $null) -Bare $bare }
+    if ($bare.Count) { Protect-VsatRedactBlastPrincipals -Blast (Get-VsatProp $res 'analysis.blastRadius' $null) -Ransomware (Get-VsatProp $res 'analysis.ransomware' $null) -Bare $bare }
     $rch = Get-VsatProp $res 'analysis.changes' $null
     if ($rch -and $changeUsers.Count) { foreach ($x in @(@($rch.entries) + @($rch.accountSessions))) { if ($x -and $x.user -and $changeUsers.Contains([string]$x.user)) { $x.user = $changeUsers[[string]$x.user] } } }
     $res.redacted = [ordered]@{ pseudonyms = $map.Count; ipAddresses = $ctx.ipMap.Count; note = 'Names, addresses, UUIDs and principals replaced with consistent pseudonyms. Review before sharing.' }
@@ -453,7 +454,7 @@ function Get-VsatRedactedCopy {
 function Protect-VsatRedactBlastPrincipals {
     # Bare principal names: rewrite only the fields that name a principal (principal node names, the
     # narratives, explanations of edges leaving a principal, and revoke fix titles), never other text.
-    param($Blast, [System.Collections.IDictionary]$Bare)
+    param($Blast, [System.Collections.IDictionary]$Bare, $Ransomware)
     if (-not $Blast) { return }
     $keys = @($Bare.Keys | Sort-Object { - ([string]$_).Length })
     $rx = [regex]::new('(?<![A-Za-z0-9_.\\@-])(?:' + (($keys | ForEach-Object { [regex]::Escape([string]$_) }) -join '|') + ')(?![A-Za-z0-9_@-])')
@@ -463,6 +464,11 @@ function Protect-VsatRedactBlastPrincipals {
     foreach ($e in @($Blast.edges)) { if ($e -and $principals.ContainsKey([string]$e.source)) { $e.explanation = & $sub ([string]$e.explanation) } }
     foreach ($p in @(@($Blast.paths) + @($Blast.needsEvidence))) { if ($p) { $p.narrative = & $sub ([string]$p.narrative) } }
     foreach ($f in @($Blast.fixPlan)) { if ($f -and ([string]$f.fixId).StartsWith('revoke')) { $f.title = & $sub ([string]$f.title) } }
+    # The ransomware card repeats principal names (one-account reach) and path narratives.
+    if ($Ransomware) {
+        foreach ($r in @($Ransomware.oneAccountReach)) { if ($r -and $Bare.Contains([string]$r.principal)) { $r.principal = $Bare[[string]$r.principal] } }
+        foreach ($p in @($Ransomware.backupPaths)) { if ($p) { $p.narrative = & $sub ([string]$p.narrative); if ($Bare.Contains([string]$p.entry)) { $p.entry = $Bare[[string]$p.entry] } } }
+    }
 }
 
 function Invoke-VsatRedactValue {

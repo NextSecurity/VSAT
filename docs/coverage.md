@@ -1,6 +1,6 @@
 # Control coverage matrix
 
-Generated from rule pack **2026.09.1** for VSAT **2.3.0** by `build/New-CoverageDoc.ps1`. Do not edit by hand.
+Generated from rule pack **2026.09.2** for VSAT **2.5.0** by `build/New-CoverageDoc.ps1`. Do not edit by hand.
 
 - **Automated** checks evaluate collected evidence; missing or denied evidence yields UNKNOWN, never PASS.
 - **Manual** checks always produce MANUAL results with guidance; completion is not certification.
@@ -20,10 +20,11 @@ Generated from rule pack **2026.09.1** for VSAT **2.3.0** by `build/New-Coverage
 | kvm-network | 1 | 1 | 0 |
 | nsx | 27 | 26 | 1 |
 | ot-segmentation | 6 | 6 | 0 |
+| ransomware-readiness | 3 | 3 | 0 |
 | vcenter | 9 | 5 | 4 |
 | cluster | 4 | 4 | 0 |
 | vm | 24 | 23 | 1 |
-| **total** | **188** | **174** | **14** |
+| **total** | **191** | **177** | **14** |
 
 ## esxi
 
@@ -230,6 +231,14 @@ Generated from rule pack **2026.09.1** for VSAT **2.3.0** by `build/New-Coverage
 | `OT-IT-ADMIN` | No identity administers both OT and IT hosts | host, hyperv-host, kvm-host | high | automated | standard, strict | VSAT OT-IT-ADMIN |
 | `OT-IT-PATH` | No IT entry point reaches an OT workload | vm, hyperv-vm, kvm-vm | critical | automated | standard, strict | VSAT OT-IT-PATH |
 | `OT-DMZ-BYPASS` | IT workloads reach plant workloads only through the OT DMZ | vm, hyperv-vm, kvm-vm | high | automated | standard, strict | VSAT OT-DMZ-BYPASS |
+
+## ransomware-readiness
+
+| Rule | Title | Asset | Severity | Type | Profiles | Framework references |
+|---|---|---|---|---|---|---|
+| `RW-BACKUP-REACHABLE` | No entry point reaches a backup system | vm, hyperv-vm, kvm-vm | critical | automated | standard, strict | VSAT RW-BACKUP-REACHABLE |
+| `RW-BACKUP-COLOCATED` | Backup systems do not share a cluster or host with production workloads | vm, hyperv-vm, kvm-vm | high | automated | standard, strict | VSAT RW-BACKUP-COLOCATED |
+| `RW-BACKUP-SHARED-ADMIN` | Backup hypervisors have administrators of their own | vm, hyperv-vm, kvm-vm | high | automated | standard, strict | VSAT RW-BACKUP-SHARED-ADMIN |
 
 ## vcenter
 

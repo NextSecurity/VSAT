@@ -27,6 +27,8 @@ $scope = [ordered]@{
     criticalAssets = @([ordered]@{ match = 'name:vcsa*'; criticality = 'high' }, [ordered]@{ match = 'name:dc01*'; criticality = 'high' }, [ordered]@{ match = 'name:db0*'; criticality = 'high' }, [ordered]@{ match = 'name:web0*'; criticality = 'medium' })
     zones = @([ordered]@{ name = 'DMZ'; match = 'name:jump*' }, [ordered]@{ name = 'Web'; match = 'name:web0*' }, [ordered]@{ name = 'App'; match = 'name:app0*' }, [ordered]@{ name = 'Data'; match = 'name:db0*' }, [ordered]@{ name = 'Management'; match = 'name:vcsa*' })
     exclusions = @([ordered]@{ pattern = 'vm:lab-*'; reason = 'Disposable lab VMs out of scope' })
+    # Ransomware readiness: backup01 runs in cl-prod, reachable and administered with production.
+    backupSystems = @([ordered]@{ match = 'name:backup01' })
     exceptions = @(
         [ordered]@{ ruleId = 'ESXI-SVC-SSH'; asset = 'esx02.example.local'; owner = 'infra-team'; rationale = 'Vendor support session (ticket CHG-1042)'; expires = '2026-12-31' }
         [ordered]@{ ruleId = 'VM-PASSTHROUGH'; asset = 'ai-train01'; owner = 'ml-platform'; rationale = 'GPU passthrough for model training'; expires = '2026-06-30' }

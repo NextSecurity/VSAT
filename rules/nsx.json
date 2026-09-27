@@ -15,7 +15,7 @@
       "check": { "type": "setting", "fact": "clusterStatus", "path": "mgmt_cluster_status.status", "op": "eq", "value": "STABLE", "absent": "unknown" },
       "rationale": "A degraded management cluster risks policy realization failures and loss of quorum.",
       "mitigation": { "summary": "Restore all three manager nodes to a stable state.", "steps": ["System > Appliances"], "workPackage": "WP-NSX-MGMT" }, "vsat": true },
-    { "id": "NSX-MGR-BACKUP", "title": "Scheduled NSX backups are configured", "domain": "nsx", "assetType": "nsx-manager", "severity": "high",
+    { "id": "NSX-MGR-BACKUP", "title": "Scheduled NSX backups are configured", "domain": "nsx", "assetType": "nsx-manager", "severity": "high", "ransomware": true,
       "attack": { "mitigates": ["T1490", "T1485"], "mitigation": "M1053", "status": "proposed" },
       "check": { "type": "script", "name": "NsxBackup" },
       "rationale": "Without backups, loss of the manager cluster means rebuilding all network and security policy.",

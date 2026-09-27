@@ -160,6 +160,7 @@ The scope file is JSON and must never contain credentials. All fields are option
   "identityDomains":  [ { "dns": "example.local", "netbios": "EXAMPLE" } ],
   "identityGroups":   [ { "group": "EXAMPLE\\vi-admins", "members": [ "EXAMPLE\\jdoe" ] } ],
   "credentialStores": [ { "match": "name:backup01", "grants": "name:vc01*", "note": "backup service account" } ],
+  "backupSystems":    [ { "match": "name:backup01" } ],
   "exceptions": [
     { "ruleId": "ESXI-SVC-SSH", "asset": "esx03.example.local", "owner": "infra-team",
       "rationale": "Vendor support session", "expires": "2026-12-31" }
@@ -212,6 +213,22 @@ Every run answers one question: **if this account or VM is compromised, what can
 - Each hop carries a MITRE ATT&CK technique, and `attack-layer.json` opens in the ATT&CK Navigator.
 
 Paths are inferred from configuration. They do not account for guest firewalls or upstream ACLs VSAT did not collect.
+
+## Ransomware readiness
+
+The **Ransomware** page of the report answers: **could one stolen account encrypt every hypervisor, and the backups too?** It has three parts.
+
+- **One account reach** lists every account and group by how many hypervisor hosts (ESXi, Hyper-V, KVM) it administers out of the total, worst first. Rights count whether they are granted on the host, through a group or through a vCenter or cluster that manages the host.
+- **Ransomware-relevant checks** groups the results of 20 existing rules by status. These rules are tagged `"ransomware": true` in the rule files and cover patching, execInstalledOnly and acceptance level, the ESX Admins group, lockdown mode, SSH, ESXi Shell and SLP, remote syslog, vCenter admin users, NSX backups, recovery evidence, and Hyper-V and KVM patching and admin access.
+- **Backup systems** covers the servers you list in `backupSystems` (`[{ "match": "name:backup*" }]`, using the same match syntax as `criticalAssets`). They become blast-radius crown jewels with reason "backup infrastructure", and three rules check each backup VM:
+
+| Rule | Severity | Fails when |
+|---|---|---|
+| `RW-BACKUP-REACHABLE` | critical | A blast-radius entry point has a path to the backup system |
+| `RW-BACKUP-COLOCATED` | high | The backup VM runs in the same vSphere cluster, Hyper-V cluster or KVM host as production workloads |
+| `RW-BACKUP-SHARED-ADMIN` | high | An account that administers the backup VM's hypervisor also administers production hypervisors |
+
+Without `backupSystems` the `ransomware-readiness` domain is `NOT_APPLICABLE` ("No backup systems declared"). Missing admin or placement evidence, or a partial blast-radius search, gives `UNKNOWN`, never `PASS`. The fixes are grouped in work package `WP-RANSOMWARE`. The demo declares `backup01`, which fails all three rules.
 
 ## OT segmentation lens
 

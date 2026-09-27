@@ -1,0 +1,22 @@
+{
+  "rules": [
+    { "id": "RW-BACKUP-REACHABLE", "title": "No entry point reaches a backup system", "domain": "ransomware-readiness", "assetType": ["vm", "hyperv-vm", "kvm-vm"], "severity": "critical",
+      "attack": { "mitigates": ["T1490", "T1486"], "mitigation": "M1053", "status": "proposed" },
+      "check": { "type": "script", "name": "RwReachable" },
+      "rationale": "Ransomware operators delete or encrypt backups before they encrypt production, so recovery fails. A blast-radius path from a compromised account or workload to the backup system means one intrusion can reach both.",
+      "mitigation": { "summary": "Break every path to the backup system at the cheapest hop shown in the Blast radius view.", "steps": ["Open the path in the Blast radius view", "Remove the admin right, network rule or management exposure it uses", "Re-run VSAT to confirm no entry point reaches the backup system"], "workPackage": "WP-RANSOMWARE" },
+      "limitations": "Configuration-inferred reachability within the bounded blast-radius search. Backup systems are the assets matched by scope backupSystems; immutability and offline copies inside the backup product are not assessed.", "vsat": true },
+    { "id": "RW-BACKUP-COLOCATED", "title": "Backup systems do not share a cluster or host with production workloads", "domain": "ransomware-readiness", "assetType": ["vm", "hyperv-vm", "kvm-vm"], "severity": "high",
+      "attack": { "mitigates": ["T1486", "T1490"], "mitigation": "M1053", "status": "proposed" },
+      "check": { "type": "script", "name": "RwColocated" },
+      "rationale": "A backup VM that runs in the same vSphere cluster, Hyper-V cluster or KVM host as the workloads it protects is encrypted together with them when an attacker takes over that hypervisor layer.",
+      "mitigation": { "summary": "Run backup systems on a dedicated cluster or host, outside the production management and admin domain.", "steps": ["Provision a dedicated backup cluster or host", "Migrate the backup VMs and keep production VMs off it (affinity rules)", "Keep at least one backup copy outside the virtualization platform"], "workPackage": "WP-RANSOMWARE" },
+      "limitations": "Placement is taken from collected runs-on and cluster relationships; storage-level separation of the backup repository is not assessed.", "vsat": true },
+    { "id": "RW-BACKUP-SHARED-ADMIN", "title": "Backup hypervisors have administrators of their own", "domain": "ransomware-readiness", "assetType": ["vm", "hyperv-vm", "kvm-vm"], "severity": "high",
+      "attack": { "mitigates": ["T1490", "T1078"], "mitigation": "M1018", "status": "proposed" },
+      "check": { "type": "script", "name": "RwSharedAdmin" },
+      "rationale": "When the principal that administers the backup system's hypervisor also administers production hypervisors (directly, through a group or through a vCenter that manages both), one stolen credential is enough to encrypt production and destroy the backups.",
+      "mitigation": { "summary": "Administer backup hypervisors with dedicated accounts and groups that hold no production rights.", "steps": ["Create backup-only admin groups", "Grant them rights on the backup hosts or backup cluster only", "Remove production admin groups from the backup hosts"], "workPackage": "WP-RANSOMWARE" },
+      "limitations": "Derived from collected vCenter permissions, Hyper-V local groups and KVM admin groups; AD group nesting is followed only when declared in identityGroups.", "vsat": true }
+  ]
+}

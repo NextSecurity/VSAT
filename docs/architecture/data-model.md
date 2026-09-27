@@ -32,7 +32,8 @@ and namespaced by endpoint; names and IP addresses are never used as identity.
     "zones": [ { "name": "DMZ", "match": "tag:zone=dmz" } ],
     "exceptions": [ { "ruleId": "ESXI-SVC-SSH", "asset": "*", "owner": "infra",
                       "rationale": "…", "expires": "2026-12-31" } ],
-    "nsxDeclaredAbsent": false
+    "nsxDeclaredAbsent": false,
+    "backupSystems": [ { "match": "name:backup*" } ]         // 2.5, optional: backup infrastructure (crown jewels, RW-* rules)
   },
   // 2.4: run.engagementStartUtc (change window start) and run.collectOnly (true for -CollectOnly runs).
   // New facts: 'events' on vCenter/ESXi endpoint roots (Get-VIEvent) and on hyperv-host (Get-WinEvent),
@@ -199,11 +200,21 @@ does not expose it). Only `ok` and `absent` can yield `PASS`/`FAIL`.
       "accountSessions": [ { "endpointId", "user", "count", "firstUtc", "lastUtc", "entryIds": [] } ],   // earlier sign-ins by the account VSAT used
       "summary": { "entries": 9, "changedChecks": 30, "changedPassing": 25 }
     },
+    "ransomware": {   // 2.5: ransomware readiness, part of every run
+      "declared": true, "backups": [ { "id": "…", "name": "backup01", "type": "vm" } ],
+      "oneAccountReach": [ { "principal": "EXAMPLE\\vi-admins", "id": "ad:example\\vi-admins", "type": "group|user",
+                             "hypervisors": 5, "total": 5, "platforms": ["vmware"], "hosts": ["esx01.example.local"] } ],   // worst first, max 50
+      "hostTotal": 5, "unknownAdminHosts": 0,
+      "taggedRules": { "ruleIds": ["ESXI-PATCH-ADV"], "counts": { "PASS": 0, "FAIL": 0, "MANUAL": 0, "UNKNOWN": 0, "ERROR": 0, "NOT_APPLICABLE": 0 } },
+      "backupPaths": [ { "pathId": "BR-004", "backupId": "…", "backup": "backup01", "entryId": "…", "entry": "EXAMPLE\\j.doe",
+                         "cost": 3, "hops": 3, "platforms": ["identity","vmware"], "narrative": "…" } ],   // blastRadius paths ending at a backup system
+      "notes": []
+    },
     "drift": null  // or { "baselineRunId", "baselineUtc", "counts": { "new":0,"resolved":0,"changed":0,"unassessed":0,"unchanged":0 },
                    //       "items": [ { "key", "ruleId", "assetId", "assetName", "change": "new|resolved|changed|unassessed", "before", "after" } ],
                    //       "assets": { "added": [], "removed": [] }, "nsxRules": { "added":0, "removed":0, "modified":0 } }
   },
-  "rules": [ { "id", "title", "domain", "severity", "frameworks", "automated": true,
+  "rules": [ { "id", "title", "domain", "severity", "frameworks", "automated": true,   // rule files may also carry "ransomware": true (2.5 tag)
                "attack": { "mitigates": ["T1021.004"], "mitigation": "M1042", "status": "proposed|verified",
                            "none": "reason, when mitigates is empty" } } ],   // 2.3: IDs from data/attack/attack-catalog.json (pinned MITRE release)
   "collection": { /* copied from evidence.collection */ },

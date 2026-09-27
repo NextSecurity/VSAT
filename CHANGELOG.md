@@ -6,6 +6,23 @@ The format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-09-27
+
+Adds **Ransomware readiness**: could one stolen account encrypt every hypervisor, and the backups too?
+
+### Added
+
+- Scope key `backupSystems`: declared backup systems become blast-radius crown jewels.
+- Three rules in the new non-mandatory domain `ransomware-readiness`: `RW-BACKUP-REACHABLE` (an attacker path reaches the backup system), `RW-BACKUP-COLOCATED` (it runs in the same cluster or on the same host as production), `RW-BACKUP-SHARED-ADMIN` (production hypervisor admins also administer its host).
+- "One account reach": for every account, how many hypervisor hosts it administers across VMware, Hyper-V and KVM, worst first.
+- 20 existing rules tagged as ransomware-relevant (patching, execInstalledOnly, acceptance level, ESX Admins group, lockdown, SSH/shell/SLP, remote syslog, backups, admin rights).
+- A Ransomware page in the report and a summary card in the local UI.
+- Work package `WP-RANSOMWARE`.
+
+### Fixed
+
+- Report cards in the same row line up, and severity labels on the overview are no longer clipped.
+
 ## [2.4.0] - 2026-09-27
 
 Adds **Audit integrity** for audits the customer runs with their own rights: the auditor can see what changed during the engagement and prove the evidence package is the one from the session.
@@ -170,7 +187,8 @@ These 1.x defects are covered by regression fixtures:
 - First release: the VMware vSphere security audit script `vsat.ps1`. It had PowerCLI-based `Ensure-*` checks derived from CIS VMware ESXi benchmark controls, console output and `vsat.log`.
 - The static ESXi patch list `vmware/patches.json`.
 
-[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.5.0
 [2.4.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.4.0
 [2.3.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.3.0
 [2.2.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.2.0

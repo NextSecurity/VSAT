@@ -22,6 +22,8 @@ $script:VsatDomains = @(
     # Audit integrity: does each endpoint's own change history cover the engagement window
     # (src/78-Changes.ps1)? Never mandatory; gaps and denied reads are shown, never hidden.
     [ordered]@{ id = 'change-history'; name = 'Change history (engagement window)'; mandatory = $false; platform = 'audit'; collectors = @(); assetTypes = @() }
+    # Lens driven by scope backupSystems; never mandatory.
+    [ordered]@{ id = 'ransomware-readiness'; name = 'Ransomware readiness (backup systems)'; mandatory = $false; platform = 'cross-platform'; collectors = @(); assetTypes = @() }
 )
 
 function Update-VsatNsxDiscovery {
@@ -151,6 +153,26 @@ function Get-VsatCoverage {
             else { $d.label = 'OT SEGMENTATION ASSESSED' }
             $d.detail = "$otCount OT workload(s) (Purdue 0-3) in scope; $($checks.total) check result(s). Virtualization layer only."
             if (-not $otCount) { $d.detail += ' No workload matched a zone with Purdue level 0-3.' }
+            $domains.Add($d); continue
+        }
+        if ($def.id -eq 'ransomware-readiness') {
+            $d.mandatory = $false
+            $pats = @(Get-VsatBackupMatches -Scope $Evidence.scope)
+            if (-not $pats.Count) {
+                $d.state = 'NOT_APPLICABLE'; $d.label = 'NOT APPLICABLE: NO BACKUP SYSTEMS DECLARED'
+                $d.detail = 'The backup checks run only when the scope file declares backupSystems. This is not a ransomware readiness pass.'
+                $d.evidence = @($script:VsatRwOffText)
+                $domains.Add($d); continue
+            }
+            $bk = @($Evidence.assets | Where-Object { $a = $_; @($pats | Where-Object { Test-VsatAssetMatch -Asset $a -Match $_ }).Count })
+            $d.evidence = @("$($pats.Count) backupSystems pattern(s) declared: $($pats -join ', ')", "$($bk.Count) asset(s) matched$(if ($bk.Count) { ': ' + (Format-VsatOtNames (Get-VsatOrdinalSorted @($bk.name))) })")
+            $missing = [System.Collections.Generic.List[string]]::new()
+            if (-not @($bk | Where-Object { $_.type -in $script:VsatRwVmTypes }).Count) { $missing.Add('backupSystems matched no collected VM') }
+            $gaps = $checks.UNKNOWN + $checks.ERROR
+            if ($gaps) { $missing.Add("$gaps check(s) lack evidence (UNKNOWN/ERROR)") }
+            if ($missing.Count) { $d.state = 'PARTIAL'; $d.label = 'PARTIAL: RANSOMWARE READINESS'; $d.missing = @($missing) }
+            else { $d.label = 'RANSOMWARE READINESS ASSESSED' }
+            $d.detail = "$(@($bk | Where-Object { $_.type -in $script:VsatRwVmTypes }).Count) backup VM(s) in scope; $($checks.total) check result(s)."
             $domains.Add($d); continue
         }
         $platformEps = @(Get-VsatPlatformEndpoints -Evidence $Evidence -Platform $def.platform)

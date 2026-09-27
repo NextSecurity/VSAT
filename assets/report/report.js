@@ -505,7 +505,7 @@
   // =====================================================================
   // Router
   // =====================================================================
-  const PAGES = ['overview', 'blast', 'findings', 'topology', 'nsx', 'changes', 'remediation', 'exports'];
+  const PAGES = ['overview', 'blast', 'ransomware', 'findings', 'topology', 'nsx', 'changes', 'remediation', 'exports'];
   const rendered = {};
   const renderers = {};
   function ensureRendered(p) {
@@ -1718,6 +1718,80 @@
     });
     rt.setRows(ruleAssets);
     el.appendChild(h('div', { class: 'card section' }, h('div', { class: 'card-head' }, h('h2', null, 'Distributed firewall rules (' + fmtN(ruleAssets.length) + ')'), h('span', { class: 'muted small' }, 'Ordered by category, policy sequence, rule sequence.')), rt.el));
+  };
+
+  // =====================================================================
+  // Ransomware readiness
+  // =====================================================================
+  renderers.ransomware = function (el) {
+    const rw = obj(analysis.ransomware);
+    el.appendChild(pageHead('h-ransomware', 'Ransomware readiness', 'Could one stolen account encrypt every hypervisor, and the backups too? Ransomware-relevant checks, one-account reach and the paths to your backup systems.'));
+    if (!analysis.ransomware) { el.appendChild(h('p', { class: 'muted' }, 'This results file has no ransomware readiness analysis. Re-run VSAT to add it.')); return; }
+    const tagIds = arr(obj(rw.taggedRules).ruleIds).map(str);
+    const tagSet = new Set(tagIds);
+    const counts = obj(obj(rw.taggedRules).counts);
+    const total = RESULTS.reduce(function (a, r) { return a + num(counts[r]); }, 0);
+    // One account reach: worst first, as computed by the engine.
+    const reach = arr(rw.oneAccountReach).filter(function (x) { return x && typeof x === 'object'; });
+    const top = reach.slice(0, 8);
+    const reachCard = h('div', { class: 'card' },
+      h('div', { class: 'card-head' }, h('h2', null, 'One account reach'), h('span', { class: 'muted small' }, fmtN(rw.hostTotal) + ' hypervisor hosts in scope')),
+      top.length ? h('ul', { class: 'mini-list rw-reach' }, top.map(function (x) {
+        const n = num(x.hypervisors), t = num(x.total), all = t > 0 && n >= t;
+        return h('li', null, h('span', { class: 'grow' },
+          h('span', { class: 'rw-principal' }, h('strong', { class: 'break' }, str(x.principal)), h('span', { class: 'muted small' }, ' ' + (str(x.type) === 'group' ? 'group' : 'account'))),
+          h('div', { class: 'bar', role: 'img', 'aria-label': n + ' of ' + t + ' hypervisor hosts' }, sized(h('span', { class: all ? 'b-FAIL' : 'b-UNKNOWN' }), n, t)),
+          h('span', { class: 'sub muted small' }, arr(x.platforms).map(str).join(', '))),
+        h('span', { class: 'rw-count' + (all ? ' bad-num' : '') }, fmtN(n) + ' / ' + fmtN(t)));
+      })) : h('p', { class: 'muted' }, 'No principal with admin rights on a hypervisor host was found in the collected evidence.'),
+      reach.length > top.length ? h('p', { class: 'small muted' }, 'and ' + fmtN(reach.length - top.length) + ' more principals') : null,
+      num(rw.unknownAdminHosts) ? h('p', { class: 'small muted' }, 'Administrators of ' + fmtN(rw.unknownAdminHosts) + ' host(s) could not be fully determined; counts may be low.') : null);
+    // Backup systems and their RW-* results.
+    const backups = arr(rw.backups).filter(function (b) { return b && typeof b === 'object'; });
+    const bkCard = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Backup systems'), h('span', { class: 'muted small' }, rw.declared ? fmtN(backups.length) + ' declared' : 'none declared')),
+      !rw.declared ? h('p', { class: 'small' }, 'Declare backup servers in the scope file (', h('span', { class: 'mono' }, 'backupSystems: [{ "match": "name:backup*" }]'), ') to check whether they are reachable, colocated with production or share its administrators.')
+        : backups.length ? h('ul', { class: 'mini-list' }, backups.map(function (b) {
+          const fl = (findingsByAsset.get(str(b.id)) || []).filter(function (f) { return str(f.ruleId).indexOf('RW-') === 0; }).sort(findingCmp);
+          return h('li', null, h('span', { class: 'grow' }, assetById.has(str(b.id)) ? linkBtn(str(b.name), function () { openAsset(b.id); }) : h('strong', null, str(b.name)), h('span', { class: 'muted small' }, ' ' + typeLabel(b.type)),
+            fl.length ? h('ul', { class: 'mini-list rw-checks' }, fl.map(function (f) { return h('li', null, resBadge(f.result), h('span', { class: 'grow' }, linkBtn(str(fx(f, 'title')) || str(f.ruleId), function () { openFinding(f); }), h('span', { class: 'sub muted small' }, str(f.observed)))); })) : null));
+        })) : h('p', { class: 'muted' }, 'backupSystems matched no collected asset.'));
+    const tagCard = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Ransomware-relevant checks'), h('span', { class: 'muted small' }, fmtN(tagIds.length) + ' rules')),
+      h('p', null, h('span', { class: 'big-num' + (num(counts.FAIL) ? ' bad-num' : ' ok-num') }, fmtN(counts.FAIL)), ' failing of ' + fmtN(total) + ' results'),
+      resultBar(counts, total),
+      h('p', { class: 'small muted' }, 'Patching, lockdown, shell access, admin groups, remote logging and recovery evidence on every hypervisor platform.'));
+    el.appendChild(h('div', { class: 'grid grid-3' }, reachCard, bkCard, tagCard));
+    // Blast-radius paths that end at a backup system.
+    const paths = arr(rw.backupPaths).filter(function (p) { return p && typeof p === 'object'; });
+    if (rw.declared) {
+      el.appendChild(h('div', { class: 'card section' },
+        h('div', { class: 'card-head' }, h('h2', null, 'Paths to backup systems (' + fmtN(paths.length) + ')'), btn('Open blast radius →', function () { go('blast'); }, 'btn-sm')),
+        paths.length ? h('ol', { class: 'mini-list rw-paths' }, paths.map(function (p) {
+          return h('li', null, h('span', { class: 'grow break' }, str(p.narrative), h('span', { class: 'sub muted small' }, fmtN(p.hops) + ' hop(s) · ' + arr(p.platforms).map(str).join(', '))));
+        })) : h('p', { class: 'muted' }, 'No blast-radius entry point reaches a declared backup system. Check RW-BACKUP-REACHABLE for UNKNOWN results before relying on this.')));
+    }
+    // Tagged rules grouped by status.
+    const tf = findings.filter(function (f) { return tagSet.has(str(f.ruleId)); });
+    const groups = [['FAIL', true], ['UNKNOWN', true], ['ERROR', true], ['MANUAL', true], ['PASS', false], ['NOT_APPLICABLE', false]];
+    const wrap = h('div', { class: 'section rw-groups' }, h('div', { class: 'card-head' }, h('h2', null, 'Ransomware-relevant findings by status')));
+    groups.forEach(function (g) {
+      const list = tf.filter(function (f) { return f.result === g[0]; });
+      if (!list.length) return;
+      const t = new DataTable({
+        caption: RESULT_LABEL[g[0]] + ' ransomware-relevant findings', sortKey: 'severity', sortDir: 'desc', empty: 'None.',
+        columns: [
+          { key: 'severity', label: 'Severity', defaultDir: 'desc', sort: function (f) { return SEV_RANK[f.severity] || 0; }, render: function (f) { return sevBadge(f.severity); } },
+          { key: 'title', label: 'Finding', cls: 'title-cell', sort: function (f) { return str(fx(f, 'title')); }, render: function (f) { return [linkBtn(str(fx(f, 'title')), function () { openFinding(f); }), h('span', { class: 'sub mono' }, str(f.ruleId))]; } },
+          { key: 'asset', label: 'Asset', sort: function (f) { return str(f.assetName); }, render: function (f) { return h('span', { class: 'break' }, str(f.assetName), h('span', { class: 'sub' }, typeLabel(f.assetType))); } },
+          { key: 'obs', label: 'Observed', render: function (f) { return h('span', { class: 'break small' }, trunc(f.observed, 160)); } }
+        ],
+        onRowClick: openFinding
+      });
+      t.setRows(list);
+      const head = h('span', null, resBadge(g[0]), ' ', h('strong', null, fmtN(list.length)), ' ' + (list.length === 1 ? 'result' : 'results'));
+      wrap.appendChild(g[1] ? h('div', { class: 'card' }, h('h3', null, head), t.el) : h('details', { class: 'card' }, h('summary', null, head), t.el));
+    });
+    if (!tf.length) wrap.appendChild(h('p', { class: 'muted' }, 'No ransomware-relevant findings in this assessment.'));
+    el.appendChild(wrap);
   };
 
   // =====================================================================

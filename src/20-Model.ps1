@@ -20,8 +20,9 @@ function New-VsatEvidence {
 
 # The 2.3 Blast Radius scope keys (controller ruling P51) that get light type validation.
 # Kept as one script-scope list so New-VsatScope and the -Replay scope merge (99-Main.ps1)
-# agree on exactly which keys are validated.
-$script:VsatNewScopeArrayKeys = @('entryPoints', 'credentialStores', 'identityGroups', 'identityDomains', 'aiWorkloads', 'signoffs')
+# agree on exactly which keys are validated. Later array-shaped keys join the same list
+# (2.5 Ransomware readiness: backupSystems).
+$script:VsatNewScopeArrayKeys = @('entryPoints', 'credentialStores', 'identityGroups', 'identityDomains', 'aiWorkloads', 'signoffs', 'backupSystems')
 
 function Read-VsatScopeArrayKey {
     # Reads one array-shaped scope key and reports whether it was present, so a caller can tell
@@ -71,6 +72,8 @@ function New-VsatScope {
         identityDomains             = @()
         aiWorkloads                 = @()
         signoffs                    = @()
+        # 2.5 Ransomware readiness: [{ match }] assets that hold the backups.
+        backupSystems               = @()
     }
     # Pre-existing keys (including `exceptions`, which may now also carry optional
     # `approver`/`compensatingControl`/`ticket` fields per element) keep their original,

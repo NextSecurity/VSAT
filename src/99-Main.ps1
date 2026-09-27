@@ -511,7 +511,7 @@ function Invoke-VsatUi {
                         }
                         $r = Complete-VsatRun -Evidence $ev -ProfileName $cmd.profile -OutputDir $OutputDir -BaselineEvidence $Baseline -Redact:$A.Redact
                         $state.reportHtml = [System.IO.File]::ReadAllText((Join-Path $OutputDir 'report.html'))
-                        $state.result = @{ status = $r.results.status; summary = $r.results.summary; outputDir = $OutputDir; runId = [string]$r.results.run.id; reportUrl = '/report'; files = @($r.files); receipt = $r.receipt; blastRadius = $r.results.analysis.blastRadius; workPackageCatalog = @($r.results.analysis.workPackageCatalog); workPackages = @($r.results.analysis.workPackages | ForEach-Object { [ordered]@{ id = $_.id; title = $_.title } }) }
+                        $state.result = @{ status = $r.results.status; summary = $r.results.summary; outputDir = $OutputDir; runId = [string]$r.results.run.id; reportUrl = '/report'; files = @($r.files); receipt = $r.receipt; blastRadius = $r.results.analysis.blastRadius; workPackageCatalog = @($r.results.analysis.workPackageCatalog); workPackages = @($r.results.analysis.workPackages | ForEach-Object { [ordered]@{ id = $_.id; title = $_.title } }); ransomware = (Get-VsatRansomwareSummary $r.results.analysis.ransomware) }
                         $state.phase = $(if ($r.results.status.overall -eq 'canceled') { 'canceled' } else { 'done' })
                         $exit = $r.results.status.exitCode
                         Write-VsatSummary -Results $r.results -OutputDir $OutputDir -Files $r.files -Receipt $r.receipt

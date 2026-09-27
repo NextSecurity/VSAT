@@ -342,19 +342,20 @@ Describe 'Security graph: crown detection order (data-driven)' {
         $dc.crown | Should -BeTrue
         $dc.crownReason | Should -Be 'critical asset (operator)'
         $ev = Get-XplatEvidence
+        $ev.scope.backupSystems = @()   # the demo declares backup01 a backup system, which would win
         $a = @($ev.assets | Where-Object { $_.name -eq 'backup01' })[0]
         $a.criticality = 'high'; $a.criticalitySource = 'inferred'
         $g2 = Get-XplatGraph $ev
         $g2.nodes[$a.id].crownReason | Should -Be 'critical asset (inferred)'
     }
     It 'is an ordered list later tasks insert into before inferred high' {
-        @($script:VsatCrownRules | ForEach-Object id) | Should -Be @('management-plane', 'operator-high', 'ot-workload', 'inferred-high')
+        @($script:VsatCrownRules | ForEach-Object id) | Should -Be @('management-plane', 'backup-system', 'operator-high', 'ot-workload', 'inferred-high')
         $saved = @($script:VsatCrownRules)
         try {
-            Add-VsatCrownRule -Id 'test-ot' -Before 'inferred-high' -Test { param($a) if ($a.name -eq 'backup01') { 'OT asset (test)' } }
-            @($script:VsatCrownRules | ForEach-Object id) | Should -Be @('management-plane', 'operator-high', 'ot-workload', 'test-ot', 'inferred-high')
+            Add-VsatCrownRule -Id 'test-ot' -Before 'inferred-high' -Test { param($a) if ($a.name -eq 'mon01') { 'OT asset (test)' } }
+            @($script:VsatCrownRules | ForEach-Object id) | Should -Be @('management-plane', 'backup-system', 'operator-high', 'ot-workload', 'test-ot', 'inferred-high')
             $g = Get-XplatGraph
-            $n = @($g.nodes.Values | Where-Object { $_.name -eq 'backup01' })[0]
+            $n = @($g.nodes.Values | Where-Object { $_.name -eq 'mon01' })[0]
             $n.crown | Should -BeTrue
             $n.crownReason | Should -Be 'OT asset (test)'
         }

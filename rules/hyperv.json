@@ -1,6 +1,6 @@
 {
   "rules": [
-    { "id": "HV-OS-PATCH-AGE", "changeCategory": "patch", "title": "Hyper-V host received updates recently", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "high",
+    { "id": "HV-OS-PATCH-AGE", "changeCategory": "patch", "title": "Hyper-V host received updates recently", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "high", "ransomware": true,
       "attack": { "mitigates": ["T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "PatchAge", "fact": "hotfix", "maxDays": 45 },
       "profiles": { "strict": { "maxDays": 31 } },
@@ -77,7 +77,7 @@
       "check": { "type": "script", "name": "HvReplica" },
       "rationale": "Kerberos replication uses HTTP and does not encrypt replica traffic in transit.",
       "mitigation": { "summary": "Use certificate-based (HTTPS) replication or encrypt the path.", "steps": ["Hyper-V Settings > Replication Configuration"], "workPackage": "WP-STORAGE" }, "vsat": true },
-    { "id": "HV-ADMINS", "title": "Local and Hyper-V administrator memberships are reviewed", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "low",
+    { "id": "HV-ADMINS", "title": "Local and Hyper-V administrator memberships are reviewed", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "low", "ransomware": true,
       "attack": { "mitigates": ["T1078"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "manual", "fact": "hvAdmins", "guidance": "Confirm Administrators and Hyper-V Administrators contain only approved groups; Hyper-V Administrators effectively control all VMs" },
       "rationale": "Hyper-V Administrators can access every VM's disks and memory.",

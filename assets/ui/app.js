@@ -458,6 +458,16 @@
         h('dl', { class: 'kv' }, h('dt', null, 'Folder'), h('dd', { class: 'mono' }, str(r.outputDir) || '-'),
           h('dt', null, 'Files'), h('dd', null, arr(r.files).length ? arr(r.files).map(function (f) { return h('div', { class: 'mono' }, str(f)); }) : '-')),
         h('div', { class: 'actions' }, link, h('span', { class: 'small muted' }, 'Opens in a new tab.'))));
+      // Ransomware readiness: one-account reach (the report has the full page).
+      const rw = r.ransomware && typeof r.ransomware === 'object' ? r.ransomware : null;
+      if (rw) {
+        const reach = arr(rw.oneAccountReach).slice(0, 3);
+        const tc = obj(obj(rw.taggedRules).counts);
+        body.appendChild(h('div', { class: 'card' }, h('h2', null, 'Ransomware readiness'),
+          h('p', { class: 'small' }, String(num(tc.FAIL)) + ' ransomware-relevant check(s) failing. ' + (rw.declared ? String(num(rw.backupPaths)) + ' attack path(s) reach a declared backup system.' : 'No backup systems declared in the scope file.')),
+          reach.length ? h('h3', null, 'One account reach') : null,
+          reach.length ? h('ul', null, reach.map(function (x) { return h('li', null, h('strong', null, str(x.principal)), ' administers ' + num(x.hypervisors) + ' of ' + num(x.total) + ' hypervisor hosts'); })) : null));
+      }
       renderBlast(S.result);
     };
   };
