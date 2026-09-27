@@ -1,9 +1,9 @@
 # Cross-platform lab fixture
 
 `Get-XplatEvidence` in `tests/TestHelpers.ps1` builds this lab in memory. It is the input for the
-security graph and blast-radius tests (`tests/Graph.Tests.ps1`). No file in this folder is read at
-run time; the lab is assembled from the existing fixtures so each platform stays defined in one
-place.
+security graph and blast-radius tests (`tests/Graph.Tests.ps1`). The base lab is assembled from
+the existing fixtures so each platform stays defined in one place; only the GPU lab (below) reads
+files from this folder.
 
 | Part | Source | Endpoint |
 |---|---|---|
@@ -44,6 +44,26 @@ correlation (which resolves the NSX compute-manager registration into a `manages
 The Hyper-V and KVM endpoints are imported, not connected, so they have no recorded resolved
 address. The graph therefore lists them in `needsEvidence` as `embodies` candidates with the
 missing fact `endpoint.resolvedAddresses`. It creates no edge for them.
+
+## GPU lab
+
+`Get-XplatEvidence -Gpu` adds the AI/GPU part of the lab (used by `tests/Accel.Tests.ps1`). Unlike
+the rest of this folder, two files here are read: they are collector outputs for hosts that exist
+only in the GPU lab.
+
+| Part | Source | Endpoint |
+|---|---|---|
+| KVM host `kvm-gpu01`: IOMMU on with ACS override, H100 at 0000:3b:00.0 sharing IOMMU group 12 with a NIC (0000:3c:00.0), A100 at 0000:5e:00.0 split into two time-sliced mdevs (MIG disabled), world `rw,no_root_squash` export of `/srv/models`, NFS `sec=sys` dataset mount | `kvm-gpu01.txt` (collector output) | `ep-kvm02` |
+| Its guests: `train01` (PCI passthrough, shared group), `vgpu-a` / `vgpu-b` (one mdev each on the same GPU), `infer02` (PCI passthrough, own group, alone on `infer-net`) | same | `ep-kvm02` |
+| Hyper-V host `hvgpu01`: partitionable GPU, SR-IOV switch shared with the management OS, `datasets` share with Everyone Full and no encryption; guests `infer01` (GPU-P) and `cpu01` | `hyperv-gpu01.json` (collector output) | `ep-hv02` |
+| vSphere overlay on the demo lab: SR-IOV on esx01 `vmnic0` (management uplink) and on a spare esx03 NIC, `ai-train01` also stored on the AUTH_SYS NFS datastore `ds-nfs-01`, `app02` tagged `role=k8s-control-plane` | `Add-XplatGpuLab` in `tests/TestHelpers.ps1` | `ep-vc01` |
+
+The scope declares `train01` as `training` and `infer01` as `inference`. The base `kvm01` and
+`hv01` fixtures are output of the earlier collectors (no accelerator sections): their host-level
+AI checks stay `UNKNOWN`, which the tests use to prove that old evidence never passes.
+
+The demo lab itself runs two GPU passthrough VMs (`ai-train01` on esx01, `ai-infer01` on esx02)
+and declares them as AI workloads, so `ai-infra` is assessed on the demo, not `NOT_APPLICABLE`.
 
 ## 2.0 package
 

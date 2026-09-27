@@ -1,6 +1,6 @@
 # Control coverage matrix
 
-Generated from rule pack **2026.09.2** for VSAT **2.5.0** by `build/New-CoverageDoc.ps1`. Do not edit by hand.
+Generated from rule pack **2026.09.3** for VSAT **2.6.0** by `build/New-CoverageDoc.ps1`. Do not edit by hand.
 
 - **Automated** checks evaluate collected evidence; missing or denied evidence yields UNKNOWN, never PASS.
 - **Manual** checks always produce MANUAL results with guidance; completion is not certification.
@@ -9,6 +9,7 @@ Generated from rule pack **2026.09.2** for VSAT **2.5.0** by `build/New-Coverage
 
 | Domain | Rules | Automated | Manual |
 |---|---:|---:|---:|
+| ai-infra | 10 | 10 | 0 |
 | esxi | 37 | 35 | 2 |
 | storage | 8 | 6 | 2 |
 | network | 18 | 17 | 1 |
@@ -24,7 +25,22 @@ Generated from rule pack **2026.09.2** for VSAT **2.5.0** by `build/New-Coverage
 | vcenter | 9 | 5 | 4 |
 | cluster | 4 | 4 | 0 |
 | vm | 24 | 23 | 1 |
-| **total** | **191** | **177** | **14** |
+| **total** | **201** | **187** | **14** |
+
+## ai-infra
+
+| Rule | Title | Asset | Severity | Type | Profiles | Framework references |
+|---|---|---|---|---|---|---|
+| `AI-IOMMU-OFF` | IOMMU is enabled on KVM hosts that pass devices through | kvm-host | critical | automated | standard, strict | VSAT AI-IOMMU-OFF |
+| `AI-IOMMU-IR` | Interrupt remapping is enabled on KVM hosts that pass devices through | kvm-host | high | automated | standard, strict | VSAT AI-IOMMU-IR |
+| `AI-ACS-OVERRIDE` | PCIe ACS override is not used on KVM hosts | kvm-host | high | automated | standard, strict | VSAT AI-ACS-OVERRIDE |
+| `AI-IOMMU-GROUP-SHARED` | A passed-through device does not share its IOMMU group with another device | kvm-vm | high | automated | standard, strict | VSAT AI-IOMMU-GROUP-SHARED |
+| `AI-GPU-SHARED-NO-MIG` | A GPU shared by several guests uses MIG partitioning | kvm-host | medium | automated | standard, strict | VSAT AI-GPU-SHARED-NO-MIG |
+| `AI-SRIOV-HOST` | SR-IOV virtual functions do not share a port with host management | host, hyperv-host | medium | automated | standard, strict | VSAT AI-SRIOV-HOST |
+| `AI-SHARE-WORLD` | Model/dataset NFS exports are not world-writable or root-squash-exempt | kvm-host | critical | automated | standard, strict | VSAT AI-SHARE-WORLD |
+| `AI-SHARE-SMB` | Model/dataset SMB shares are not open to everyone and are encrypted | hyperv-host | high | automated | standard, strict | VSAT AI-SHARE-SMB |
+| `AI-SHARE-PLAINTEXT` | Model/dataset storage traffic is protected in transit | datastore, kvm-host | medium | automated | standard, strict | VSAT AI-SHARE-PLAINTEXT |
+| `AI-K8S-CP-EXPOSED` | A Kubernetes control plane is not reachable from workload networks | vm, hyperv-vm, kvm-vm | high | automated | standard, strict | VSAT AI-K8S-CP-EXPOSED |
 
 ## esxi
 

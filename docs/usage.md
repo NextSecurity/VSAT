@@ -161,6 +161,7 @@ The scope file is JSON and must never contain credentials. All fields are option
   "identityGroups":   [ { "group": "EXAMPLE\\vi-admins", "members": [ "EXAMPLE\\jdoe" ] } ],
   "credentialStores": [ { "match": "name:backup01", "grants": "name:vc01*", "note": "backup service account" } ],
   "backupSystems":    [ { "match": "name:backup01" } ],
+  "aiWorkloads":      [ { "match": "name:k8s-cp*", "role": "k8s-control-plane" } ],
   "exceptions": [
     { "ruleId": "ESXI-SVC-SSH", "asset": "esx03.example.local", "owner": "infra-team",
       "rationale": "Vendor support session", "expires": "2026-12-31" }
@@ -244,6 +245,47 @@ For OT and ICS sites, VSAT checks whether the virtualization layer keeps OT work
 | `OT-DMZ-BYPASS` | An IT VM reaches a level 0–2 OT VM directly, without passing the DMZ |
 
 Without Purdue levels the `ot-segmentation` domain is `NOT_APPLICABLE`. VSAT audits the hypervisors, virtual networks, management planes and admin rights under OT workloads. It does not scan OT networks, speak industrial protocols or assess PLCs and other field devices.
+
+## AI & GPU isolation
+
+VSAT checks the virtualization layer under AI workloads: whether GPUs and other passed-through devices are isolated from the host and from each other, whether model and dataset storage is protected, and whether a Kubernetes control plane is reachable from workload networks. The `ai-infra` domain is optional.
+
+VMs with a GPU, vGPU, passthrough device or SR-IOV function are found automatically on every platform. Declare what the workloads are with `aiWorkloads` in the scope file (a `role=<role>` tag on the VM works too):
+
+```json
+{
+  "aiWorkloads": [
+    { "match": "name:k8s-cp*",   "role": "k8s-control-plane" },
+    { "match": "tag:ml=train",   "role": "training" },
+    { "match": "name:registry01", "role": "model-registry", "criticality": "high" },
+    { "match": "name:nas-ml*",   "role": "dataset-store" }
+  ]
+}
+```
+
+| Role | Meaning |
+|---|---|
+| `k8s-control-plane` | Kubernetes API server / etcd node. Crown jewel; `AI-K8S-CP-EXPOSED` checks its network exposure. |
+| `k8s-worker` | Kubernetes worker (GPU) node |
+| `training` | Model training workload |
+| `inference` | Model serving workload |
+| `dataset-store` | Holds training data. Crown jewel. |
+| `model-registry` | Holds model weights and checkpoints. Crown jewel. |
+
+| Rule | Fails when |
+|---|---|
+| `AI-IOMMU-OFF` | A KVM host passes devices to guests without an IOMMU |
+| `AI-IOMMU-IR` | A KVM host passes devices to guests without interrupt remapping |
+| `AI-ACS-OVERRIDE` | A KVM host boots with `pcie_acs_override` |
+| `AI-IOMMU-GROUP-SHARED` | A guest's passed-through device shares its IOMMU group with a device it does not own |
+| `AI-GPU-SHARED-NO-MIG` | Several guests share one GPU through mediated devices without MIG |
+| `AI-SRIOV-HOST` | SR-IOV is enabled on a NIC (ESXi) or switch (Hyper-V) that carries host management |
+| `AI-SHARE-WORLD` | A KVM host exports model/dataset storage read-write to everyone, or with `no_root_squash` to a wildcard or subnet |
+| `AI-SHARE-SMB` | A Hyper-V host shares model/dataset storage with Everyone / Authenticated Users (Full or Change), or without SMB encryption |
+| `AI-SHARE-PLAINTEXT` | An NFS datastore that holds AI VMs uses AUTH_SYS, or a KVM host mounts model/dataset storage without encryption in transit |
+| `AI-K8S-CP-EXPOSED` | A declared Kubernetes control plane is reachable over the network from a modeled entry point |
+
+The report's **AI infra** page lists every AI workload with its role, accelerators, failing findings and blast-radius paths, and names the workloads each host or storage finding affects. `ai-infra` is `NOT_APPLICABLE` only when every VM and host reported zero accelerators and no workload is declared. If the accelerator inventory was denied or not collected (for example when replaying evidence from an earlier VSAT version), it is `UNKNOWN` with the reason.
 
 ## Result and coverage states
 

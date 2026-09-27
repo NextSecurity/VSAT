@@ -33,7 +33,8 @@ and namespaced by endpoint; names and IP addresses are never used as identity.
     "exceptions": [ { "ruleId": "ESXI-SVC-SSH", "asset": "*", "owner": "infra",
                       "rationale": "…", "expires": "2026-12-31" } ],
     "nsxDeclaredAbsent": false,
-    "backupSystems": [ { "match": "name:backup*" } ]         // 2.5, optional: backup infrastructure (crown jewels, RW-* rules)
+    "backupSystems": [ { "match": "name:backup*" } ],   // 2.5, optional: backup infrastructure (crown jewels, RW-* rules)
+    "aiWorkloads": [ { "match": "name:k8s-cp*", "role": "k8s-control-plane|k8s-worker|training|inference|dataset-store|model-registry", "criticality": "high" } ]   // 2.6, optional
   },
   // 2.4: run.engagementStartUtc (change window start) and run.collectOnly (true for -CollectOnly runs).
   // New facts: 'events' on vCenter/ESXi endpoint roots (Get-VIEvent) and on hyperv-host (Get-WinEvent),
@@ -54,6 +55,20 @@ and namespaced by endpoint; names and IP addresses are never used as identity.
         "services":   { "status": "ok",     "value": [ { "key": "TSM-SSH", "running": false, "policy": "off" } ] },
         "lockdown":   { "status": "denied", "value": null, "error": "NoPermission: Host.Config.Settings" }
       }
+      // 2.6 accelerator / AI-storage facts (additive):
+      //   host:        pciPassthru [ { id, vendorId, deviceId, vendorName, deviceName, classId, passthruCapable, passthruEnabled, passthruActive, sriovEnabled, numVirtualFunction } ],
+      //                graphics { defaultType, sharedPassthruAssignmentPolicy, devices[] }, iommu { enabled, source: "inferred-from-active-passthrough" } (else unsupported)
+      //   vm:          accel { count, devices: [ { kind: passthrough|dynamic-passthrough|vgpu|sriov-nic, id, vgpuProfile, pfId } ] }
+      //   datastore:   nas gains nfsVersion
+      //   pnic:        props.pci (PCI address)
+      //   hyperv-host: gpuPartition [ { name, partitionCount, validPartitionCounts, totalVRAM } ], assignable [ { locationPath, instanceId, dismounted } ],
+      //                sriov [ { switch, iovEnabled, iovSupport, iovSupportReasons, allowManagementOS } ], smbShares [ { name, path, scope, encryptData, folderEnumerationMode, access: [ { account, right, type } ] } ]
+      //   hyperv-vm:   accel { count, devices: [ { kind: dda|gpu-p|sriov-nic, locationPath, lowMMIO, highMMIO } ] }
+      //   kvm-host:    cmdline { raw, iommu: on|pt|off|null, acsOverride, intremapOff }, iommu { enabled, groups: [ { id, devices } ], interruptRemapping, source },
+      //                acs [ { bdf, acsCtl } ] (unsupported when lspci hides it), mdev [ { uuid, type, parent } ], gpuMig [ { index, name, migMode, migDevices } ] (absent without nvidia-smi),
+      //                exports [ { path, clients: [ { host, options } ] } ] (absent when none), mounts [ { source, target, fstype, options } ]
+      //   kvm-vm:      accel { count, devices: [ { kind: hostdev-pci|mdev|sriov-vf, bdf, managed, mdevUuid, mdevType } ] }, domain.value.ips
+      // Annotated at analysis time: aiRole, aiRoleSource (operator|tag).
     }
   ],
   "relationships": [
@@ -137,7 +152,8 @@ does not expose it). Only `ok` and `absent` can yield `PASS`/`FAIL`.
                       "workPackage": "WP-ESXI-SERVICES", "impact": "…", "maintenanceWindow": false },
       "limitations": "…",
       "confidence": "observed|inferred",
-      "exception": null   // or { owner, rationale, expires, active: true|false }
+      "exception": null,  // or { owner, rationale, expires, active: true|false }
+      "affectedWorkloads": [ "<assetId>" ]   // 2.6, ai-infra findings only: AI workload VMs the finding puts at risk
     }
   ],
   "assets": [ /* evidence assets WITHOUT raw facts, plus: "findingCounts": { "FAIL": 3 }, "worstSeverity": "high" */ ],
@@ -162,6 +178,8 @@ does not expose it). Only `ok` and `absent` can yield `PASS`/`FAIL`.
         "assetIds": ["…"], "outcome": "…", "prerequisites": ["…"], "impact": "…",
         "maintenanceWindow": true, "rollback": "…", "validation": "…", "steps": ["…"], "maxSeverity": "high" }
     ],
+    "aiWorkloads": [ { "assetId": "…", "name": "train01", "type": "kvm-vm", "role": "training|null", "roleSource": "operator|tag|null", "platform": "vmware|hyperv|kvm",
+                       "accelerators": 1, "acceleratorKinds": ["hostdev-pci"], "findings": ["F-…"], "blastPaths": ["BR-…"] } ],   // 2.6: declared AI workloads and VMs with accelerators
     "workPackageCatalog": [ { "id": "WP-MGMT-ISOLATION", "title": "…", "team": "…" } ],  // every work package in the rule pack (2.3)
     "blastRadius": {   // 2.3: cross-platform security graph search, part of every run
       "bounds":   { "maxDepth": 8, "maxPaths": 500, "maxSources": 60, "maxNodes": 250000, "budgetMs": 20000, "truncated": false, "elapsedMs": 812,

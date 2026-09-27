@@ -6,6 +6,18 @@ The format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-09-27
+
+Adds **AI & GPU isolation** across VMware, Hyper-V and KVM.
+
+### Added
+
+- Ten rules in the new non-mandatory domain `ai-infra`: `AI-IOMMU-OFF`, `AI-IOMMU-IR`, `AI-ACS-OVERRIDE`, `AI-IOMMU-GROUP-SHARED`, `AI-GPU-SHARED-NO-MIG`, `AI-SRIOV-HOST`, `AI-SHARE-WORLD`, `AI-SHARE-SMB`, `AI-SHARE-PLAINTEXT`, `AI-K8S-CP-EXPOSED`.
+- Read-only accelerator and storage evidence: ESXi PCI passthrough, graphics and SR-IOV; Hyper-V GPU partitioning, assignable devices, SR-IOV switches and SMB shares; KVM kernel command line, IOMMU groups, mediated devices, `nvidia-smi` MIG state (when installed), NFS exports and mounts; accelerators on every VM.
+- Scope key `aiWorkloads` with roles (`k8s-control-plane`, `k8s-worker`, `training`, `inference`, `dataset-store`, `model-registry`). Control planes, model registries and dataset stores become blast-radius crown jewels.
+- Findings on hosts list the AI workloads they affect. MITRE ATLAS techniques on the model and dataset storage rules.
+- An AI infra page in the report. Work packages `WP-AI-ISOLATION` and `WP-AI-STORAGE`.
+
 ## [2.5.0] - 2026-09-27
 
 Adds **Ransomware readiness**: could one stolen account encrypt every hypervisor, and the backups too?
@@ -187,7 +199,8 @@ These 1.x defects are covered by regression fixtures:
 - First release: the VMware vSphere security audit script `vsat.ps1`. It had PowerCLI-based `Ensure-*` checks derived from CIS VMware ESXi benchmark controls, console output and `vsat.log`.
 - The static ESXi patch list `vmware/patches.json`.
 
-[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.5.0...HEAD
+[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.6.0
 [2.5.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.5.0
 [2.4.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.4.0
 [2.3.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.3.0

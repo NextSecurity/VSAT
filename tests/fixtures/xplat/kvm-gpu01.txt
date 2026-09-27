@@ -1,0 +1,237 @@
+==VSAT:SECTION meta==
+collector=1
+collected_utc=2026-09-23T08:00:00Z
+hostname=kvm-gpu01.example.local
+
+==VSAT:SECTION os-release==
+NAME="Rocky Linux"
+VERSION_ID="9.4"
+ID="rocky"
+PRETTY_NAME="Rocky Linux 9.4 (Blue Onyx)"
+
+==VSAT:SECTION kernel==
+5.14.0-427.13.1.el9_4.x86_64
+
+==VSAT:SECTION virsh-version==
+Compiled against library: libvirt 10.0.0
+Using library: libvirt 10.0.0
+Using API: QEMU 10.0.0
+Running hypervisor: QEMU 8.2.0
+
+==VSAT:SECTION qemu-conf==
+user = "qemu"
+security_driver = "selinux"
+vnc_listen = "127.0.0.1"
+seccomp_sandbox = 1
+
+==VSAT:SECTION libvirtd-conf==
+
+==VSAT:SECTION services==
+libvirtd=inactive
+virtqemud=active
+firewalld=active
+nftables=inactive
+ufw=unknown
+sshd=active
+ssh=unknown
+
+==VSAT:SECTION listening==
+0.0.0.0:22
+
+==VSAT:SECTION mac==
+Enforcing
+selinux
+
+==VSAT:SECTION secureboot==
+SecureBoot enabled
+
+==VSAT:SECTION nested==
+N
+
+==VSAT:SECTION sshd==
+/etc/ssh/sshd_config:PermitRootLogin no
+/etc/ssh/sshd_config:PasswordAuthentication no
+
+==VSAT:SECTION groups==
+libvirt:x:984:mlops
+kvm:x:36:qemu
+
+==VSAT:SECTION packages==
+qemu-kvm-8.2.0-11.el9_4.x86_64
+libvirt-daemon-10.0.0-6.el9_4.x86_64
+
+==VSAT:SECTION last-update==
+rpmdb=1790035200
+
+==VSAT:SECTION now==
+1790121600
+
+==VSAT:SECTION cmdline==
+BOOT_IMAGE=(hd0,gpt2)/vmlinuz-5.14.0-427.13.1.el9_4.x86_64 root=/dev/mapper/rl-root ro intel_iommu=on iommu=pt pcie_acs_override=downstream,multifunction rd.driver.pre=vfio-pci
+
+==VSAT:SECTION iommu-groups==
+/sys/kernel/iommu_groups/12/devices/0000:3b:00.0
+/sys/kernel/iommu_groups/12/devices/0000:3b:00.1
+/sys/kernel/iommu_groups/12/devices/0000:3c:00.0
+/sys/kernel/iommu_groups/13/devices/0000:5e:00.0
+/sys/kernel/iommu_groups/14/devices/0000:86:00.0
+
+==VSAT:SECTION iommu-ecap==
+f020df
+f020df
+
+==VSAT:SECTION mdev==
+c3d1a0c2-1111-2222-3333-444455556666 nvidia-471 0000:5e:00.0
+c3d1a0c2-1111-2222-3333-444455556667 nvidia-471 0000:5e:00.0
+
+==VSAT:SECTION nvidia-smi==
+<?xml version="1.0" ?>
+<nvidia_smi_log>
+	<driver_version>550.90.05</driver_version>
+	<attached_gpus>1</attached_gpus>
+	<gpu id="00000000:5E:00.0">
+		<product_name>NVIDIA A100 80GB PCIe</product_name>
+		<mig_mode>
+			<current_mig>Disabled</current_mig>
+			<pending_mig>Disabled</pending_mig>
+		</mig_mode>
+		<mig_devices>
+			None
+		</mig_devices>
+	</gpu>
+</nvidia_smi_log>
+
+==VSAT:SECTION pci-acs==
+0000:3a:00.0 PCI bridge: Intel Corporation Sky Lake-E PCI Express Root Port A (rev 07)
+		ACSCtl:	SrcValid+ TransBlk- ReqRedir+ CmpltRedir+ UpstreamFwd+ EgressCtrl- DirectTrans-
+0000:3b:00.0 3D controller: NVIDIA Corporation GH100 [H100 PCIe] (rev a1)
+0000:5d:00.0 PCI bridge: Intel Corporation Sky Lake-E PCI Express Root Port A (rev 07)
+		ACSCtl:	SrcValid+ TransBlk- ReqRedir+ CmpltRedir+ UpstreamFwd+ EgressCtrl- DirectTrans-
+
+==VSAT:SECTION exports==
+# Model and dataset exports for the training cluster
+/srv/models     *(rw,sync,no_root_squash)
+/srv/datasets   10.8.0.0/16(ro,sync,root_squash)
+
+==VSAT:SECTION mounts==
+10.0.30.5:/datasets /mnt/datasets nfs4 rw,relatime,vers=4.2,rsize=1048576,wsize=1048576,namlen=255,hard,proto=tcp,timeo=600,retrans=2,sec=sys,clientaddr=10.0.40.21,local_lock=none,addr=10.0.30.5 0 0
+
+==VSAT:SECTION domains==
+train01
+vgpu-a
+vgpu-b
+infer02
+
+==VSAT:SECTION domain:train01==
+<domain type='kvm'>
+  <name>train01</name>
+  <uuid>7b2e0f3d-0000-4000-8000-000000000011</uuid>
+  <os firmware='efi'><type arch='x86_64' machine='q35'>hvm</type><loader secure='yes'/></os>
+  <devices>
+    <interface type='network'><mac address='52:54:00:10:00:11'/><source network='gpu-net'/><filterref filter='clean-traffic'/></interface>
+    <hostdev mode='subsystem' type='pci' managed='yes'><source><address domain='0x0000' bus='0x3b' slot='0x00' function='0x0'/></source></hostdev>
+    <console type='pty'/>
+    <tpm model='tpm-crb'><backend type='emulator' version='2.0'/></tpm>
+  </devices>
+  <seclabel type='dynamic' model='selinux' relabel='yes'/>
+</domain>
+
+==VSAT:SECTION dominfo:train01==
+Name:           train01
+State:          running
+Autostart:      enable
+Persistent:     yes
+
+==VSAT:SECTION snapshots:train01==
+
+==VSAT:SECTION domifaddr:train01==
+ Name       MAC address          Protocol     Address
+-------------------------------------------------------------------------------
+ vnet0      52:54:00:10:00:11    ipv4         10.20.40.11/24
+
+==VSAT:SECTION domain:vgpu-a==
+<domain type='kvm'>
+  <name>vgpu-a</name>
+  <uuid>7b2e0f3d-0000-4000-8000-000000000012</uuid>
+  <os firmware='efi'><type arch='x86_64' machine='q35'>hvm</type><loader secure='yes'/></os>
+  <devices>
+    <interface type='network'><mac address='52:54:00:10:00:12'/><source network='gpu-net'/><filterref filter='clean-traffic'/></interface>
+    <hostdev mode='subsystem' type='mdev' model='vfio-pci' display='off'><source><address uuid='c3d1a0c2-1111-2222-3333-444455556666'/></source></hostdev>
+    <console type='pty'/>
+  </devices>
+  <seclabel type='dynamic' model='selinux' relabel='yes'/>
+</domain>
+
+==VSAT:SECTION dominfo:vgpu-a==
+Name:           vgpu-a
+State:          running
+
+==VSAT:SECTION snapshots:vgpu-a==
+
+==VSAT:SECTION domifaddr:vgpu-a==
+ Name       MAC address          Protocol     Address
+-------------------------------------------------------------------------------
+ vnet1      52:54:00:10:00:12    ipv4         10.20.40.12/24
+
+==VSAT:SECTION domain:vgpu-b==
+<domain type='kvm'>
+  <name>vgpu-b</name>
+  <uuid>7b2e0f3d-0000-4000-8000-000000000013</uuid>
+  <os firmware='efi'><type arch='x86_64' machine='q35'>hvm</type><loader secure='yes'/></os>
+  <devices>
+    <interface type='network'><mac address='52:54:00:10:00:13'/><source network='gpu-net'/><filterref filter='clean-traffic'/></interface>
+    <hostdev mode='subsystem' type='mdev' model='vfio-pci' display='off'><source><address uuid='c3d1a0c2-1111-2222-3333-444455556667'/></source></hostdev>
+    <console type='pty'/>
+  </devices>
+  <seclabel type='dynamic' model='selinux' relabel='yes'/>
+</domain>
+
+==VSAT:SECTION dominfo:vgpu-b==
+Name:           vgpu-b
+State:          running
+
+==VSAT:SECTION snapshots:vgpu-b==
+
+==VSAT:SECTION domifaddr:vgpu-b==
+ Name       MAC address          Protocol     Address
+-------------------------------------------------------------------------------
+ vnet2      52:54:00:10:00:13    ipv4         10.20.40.13/24
+
+==VSAT:SECTION domain:infer02==
+<domain type='kvm'>
+  <name>infer02</name>
+  <uuid>7b2e0f3d-0000-4000-8000-000000000014</uuid>
+  <os firmware='efi'><type arch='x86_64' machine='q35'>hvm</type><loader secure='yes'/></os>
+  <devices>
+    <interface type='network'><mac address='52:54:00:10:00:14'/><source network='infer-net'/><filterref filter='clean-traffic'/></interface>
+    <hostdev mode='subsystem' type='pci' managed='yes'><source><address domain='0x0000' bus='0x86' slot='0x00' function='0x0'/></source></hostdev>
+    <console type='pty'/>
+  </devices>
+  <seclabel type='dynamic' model='selinux' relabel='yes'/>
+</domain>
+
+==VSAT:SECTION dominfo:infer02==
+Name:           infer02
+State:          running
+
+==VSAT:SECTION snapshots:infer02==
+
+==VSAT:SECTION domifaddr:infer02==
+ Name       MAC address          Protocol     Address
+-------------------------------------------------------------------------------
+ vnet3      52:54:00:10:00:14    ipv4         10.20.41.14/24
+
+==VSAT:SECTION networks==
+gpu-net
+infer-net
+
+==VSAT:SECTION network:gpu-net==
+<network><name>gpu-net</name><forward mode='nat'/><bridge name='virbr1'/></network>
+
+==VSAT:SECTION network:infer-net==
+<network><name>infer-net</name><forward mode='nat'/><bridge name='virbr2'/></network>
+
+==VSAT:SECTION pools==
+default
+
+==VSAT:SECTION end==

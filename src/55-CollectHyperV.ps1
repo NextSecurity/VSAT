@@ -96,6 +96,20 @@ foreach ($spec in @(
 $denied = @($evs.sources | Where-Object { $_.status -eq 'denied' })
 $f.events = @{ status = $(if ($denied.Count) { 'denied' } else { 'ok' }); value = $evs }
 if ($denied.Count) { $f.events.error = (@($denied | ForEach-Object { "$($_.log): $($_.error)" }) -join '; ') }
+# Accelerators and shares: GPU partitioning (Server 2022+ cmdlet first, then the 2019 name; neither
+# means the OS offers no GPU partitioning), DDA-assignable devices, SR-IOV switches, SMB shares.
+$f.gpuPartition = F {
+    $g = if (Get-Command Get-VMHostPartitionableGpu -ErrorAction SilentlyContinue) { @(Get-VMHostPartitionableGpu) } elseif (Get-Command Get-VMPartitionableGpu -ErrorAction SilentlyContinue) { @(Get-VMPartitionableGpu) } else { @() }
+    if ($g.Count -eq 0) { return $null }
+    @($g | ForEach-Object { @{ name = [string]$_.Name; partitionCount = [int]$_.PartitionCount; validPartitionCounts = @($_.ValidPartitionCounts | ForEach-Object { [int]$_ }); totalVRAM = [string]$_.TotalVRAM } })
+}
+$f.assignable = F { $d = @(Get-VMHostAssignableDevice); if ($d.Count -eq 0) { return $null }; @($d | ForEach-Object { @{ locationPath = [string]$_.LocationPath; instanceId = [string]$_.InstanceID; dismounted = $true } }) }
+$f.sriov = F { $w = @(Get-VMSwitch); if ($w.Count -eq 0) { return $null }; @($w | ForEach-Object { @{ switch = [string]$_.Name; iovEnabled = [bool]$_.IovEnabled; iovSupport = [bool]$_.IovSupport; iovSupportReasons = @($_.IovSupportReasons | ForEach-Object { [string]$_ }); allowManagementOS = [bool]$_.AllowManagementOS } }) }
+$f.smbShares = F {
+    $sh = @(Get-SmbShare | Where-Object { -not $_.Special })
+    if ($sh.Count -eq 0) { return $null }
+    @($sh | ForEach-Object { $x = $_; @{ name = [string]$x.Name; path = [string]$x.Path; scope = [string]$x.ScopeName; encryptData = [bool]$x.EncryptData; folderEnumerationMode = [string]$x.FolderEnumerationMode; access = @($x | Get-SmbShareAccess | ForEach-Object { @{ account = [string]$_.AccountName; right = [string]$_.AccessRight; type = [string]$_.AccessControlType } }) } })
+}
 $out.host.facts = $f
 foreach ($sw in @(Get-VMSwitch)) {
     $out.switches += @{ id = [string]$sw.Id; name = $sw.Name; type = [string]$sw.SwitchType; allowManagementOS = [bool]$sw.AllowManagementOS; embeddedTeaming = [bool]$sw.EmbeddedTeamingEnabled; iov = [bool]$sw.IovEnabled
@@ -108,6 +122,14 @@ foreach ($vm in @(Get-VM)) {
     $vf.adapters = F { @(Get-VMNetworkAdapter -VM $vm | ForEach-Object { $v = Get-VMNetworkAdapterVlan -VMNetworkAdapter $_; @{ name = $_.Name; switch = $_.SwitchName; switchId = [string]$_.SwitchId; mac = $_.MacAddress; macSpoofing = [string]$_.MacAddressSpoofing; dhcpGuard = [string]$_.DhcpGuard; routerGuard = [string]$_.RouterGuard; portMirroring = [string]$_.PortMirroringMode; vlanMode = [string]$v.OperationMode; accessVlan = $v.AccessVlanId; allowedVlans = [string]$v.AllowedVlanIdListString; ips = @($_.IPAddresses) } }) }
     $vf.integration = F { @(Get-VMIntegrationService -VM $vm | ForEach-Object { @{ name = $_.Name; enabled = [bool]$_.Enabled } }) }
     $vf.checkpoints = F { @(Get-VMSnapshot -VM $vm | ForEach-Object { @{ name = $_.Name; createdUtc = $_.CreationTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); ageDays = [int]($now - $_.CreationTime.ToUniversalTime()).TotalDays } }) }
+    $vf.accel = F {
+        $gp = if (Get-Command Get-VMGpuPartitionAdapter -ErrorAction SilentlyContinue) { @(Get-VMGpuPartitionAdapter -VM $vm) } else { @() }
+        $d = @(@(Get-VMAssignableDevice -VM $vm | ForEach-Object { @{ kind = 'dda'; locationPath = [string]$_.LocationPath } }) +
+            @($gp | Where-Object { $_ } | ForEach-Object { @{ kind = 'gpu-p'; locationPath = [string]$_.InstancePath } }) +
+            @(Get-VMNetworkAdapter -VM $vm | Where-Object { $_.IovWeight -gt 0 } | ForEach-Object { @{ kind = 'sriov-nic'; locationPath = [string]$_.Name } }))
+        foreach ($x in $d) { $x.lowMMIO = $vm.LowMemoryMappedIoSpace; $x.highMMIO = $vm.HighMemoryMappedIoSpace }
+        @{ count = $d.Count; devices = $d }
+    }
     $vf.devices = F { @(@(Get-VMDvdDrive -VM $vm | ForEach-Object { @{ type = 'dvd'; path = $_.Path } }) + @(Get-VMComPort -VM $vm | ForEach-Object { @{ type = 'com'; path = $_.Path } }) + @(Get-VMAssignableDevice -VM $vm -ErrorAction SilentlyContinue | ForEach-Object { @{ type = 'dda'; path = $_.LocationPath } }) + @(Get-VMHardDiskDrive -VM $vm | ForEach-Object { @{ type = 'disk'; path = $_.Path; controller = [string]$_.ControllerType } })) }
     $out.vms += @{ id = [string]$vm.Id; name = $vm.Name; state = [string]$vm.State; generation = $vm.Generation; configVersion = [string]$vm.Version; clustered = [bool]$vm.IsClustered; automaticStart = [string]$vm.AutomaticStartAction; checkpointType = [string]$vm.CheckpointType; facts = $vf }
 }

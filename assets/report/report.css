@@ -204,6 +204,7 @@ main:focus { outline: none; }
 .metric .m-lbl { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); font-weight: 650; }
 .metric.sev-tile { border-left: 4px solid; padding: 8px 4px 8px 7px; }
 .metric.sev-tile .m-lbl { font-size: .62rem; letter-spacing: 0; white-space: nowrap; }
+.ai-hint pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .metric.sev-critical { border-left-color: var(--sev-critical); color: inherit; background: var(--surface-2); border-color: var(--border); border-left-color: var(--sev-critical); }
 .metric.sev-high { border-left-color: var(--sev-high); color: inherit; background: var(--surface-2); border-color: var(--border); border-left-color: var(--sev-high); }
 .metric.sev-medium { color: inherit; background: var(--surface-2); border-color: var(--border); border-left-color: var(--sev-medium); }

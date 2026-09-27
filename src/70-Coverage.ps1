@@ -24,6 +24,8 @@ $script:VsatDomains = @(
     [ordered]@{ id = 'change-history'; name = 'Change history (engagement window)'; mandatory = $false; platform = 'audit'; collectors = @(); assetTypes = @() }
     # Lens driven by scope backupSystems; never mandatory.
     [ordered]@{ id = 'ransomware-readiness'; name = 'Ransomware readiness (backup systems)'; mandatory = $false; platform = 'cross-platform'; collectors = @(); assetTypes = @() }
+    # Accelerator isolation and AI storage across every platform; never mandatory.
+    [ordered]@{ id = 'ai-infra'; name = 'AI / GPU infrastructure'; mandatory = $false; platform = 'cross-platform'; collectors = @(); assetTypes = @() }
 )
 
 function Update-VsatNsxDiscovery {
@@ -173,6 +175,12 @@ function Get-VsatCoverage {
             if ($missing.Count) { $d.state = 'PARTIAL'; $d.label = 'PARTIAL: RANSOMWARE READINESS'; $d.missing = @($missing) }
             else { $d.label = 'RANSOMWARE READINESS ASSESSED' }
             $d.detail = "$(@($bk | Where-Object { $_.type -in $script:VsatRwVmTypes }).Count) backup VM(s) in scope; $($checks.total) check result(s)."
+            $domains.Add($d); continue
+        }
+        if ($def.id -eq 'ai-infra') {
+            $c = Get-VsatAiInfraCoverage -Evidence $Evidence -Checks $checks
+            foreach ($k in 'state', 'label', 'detail', 'evidence', 'missing') { $d[$k] = $c[$k] }
+            $d.mandatory = $false
             $domains.Add($d); continue
         }
         $platformEps = @(Get-VsatPlatformEndpoints -Evidence $Evidence -Platform $def.platform)

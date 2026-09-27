@@ -20,6 +20,8 @@ The Read-only role grants `System.Anonymous`, `System.View` and `System.Read`. T
 | Appliance (VAMI) settings: SSH, backup, appliance firewall | Uses separate appliance APIs and may need additional rights; otherwise reported as `UNKNOWN` |
 | SSO and identity source configuration | May need SSO administrator-level read. VSAT does not ask for administrator rights, so these checks may be `UNKNOWN`. |
 
+PCI passthrough, SR-IOV and host graphics state (`HostSystem.config.pciPassthruInfo`, `hardware.pciDevice`, the graphics manager) and VM passthrough devices are plain property reads covered by **Read-only**.
+
 **Do not** grant `Host.Config.*`, `VirtualMachine.Config.*`, `Global.Settings` or any modify privileges. VSAT has no use for them.
 
 If you decide to allow `Host.Cli` for `esxcli` reads, create a custom role by cloning **Read-only** and adding only **Host > CIM/CLI > Host.Cli** (the name varies by version). Understand that `Host.Cli` exposes the whole esxcli namespace, which includes write operations. VSAT only calls read namespaces, but the privilege itself is broader. Leaving it out is a valid choice. The affected checks will then show `UNKNOWN`.
@@ -41,6 +43,14 @@ Use the built-in **Auditor** role (read-only across NSX), assigned to a dedicate
 | Support bundles, Traceflow, any POST other than session create/destroy | Not used by VSAT |
 
 VSAT creates an API session with a POST and destroys it at the end. Every other NSX call is a GET, enforced by the allowlist described in [threat-model.md](threat-model.md).
+
+## Hyper-V
+
+The collector runs elevated on the host (or through PowerShell remoting with an administrator account) and only calls `Get-*` cmdlets. The AI & GPU reads add `Get-VMHostPartitionableGpu` (or `Get-VMPartitionableGpu` on Windows Server 2019), `Get-VMHostAssignableDevice`, `Get-VMGpuPartitionAdapter`, `Get-VMAssignableDevice`, `Get-SmbShare` and `Get-SmbShareAccess`. Share permission reads need local administrator rights; without them the `smbShares` fact is `denied` and `AI-SHARE-SMB` is `UNKNOWN`.
+
+## KVM/libvirt
+
+The collector needs no root for the AI & GPU reads: `/proc/cmdline`, `/proc/mounts`, `/etc/exports`, `/sys/kernel/iommu_groups`, `/sys/class/iommu` and `/sys/bus/mdev` are world-readable on common distributions, `virsh --readonly domifaddr` works on a read-only connection, and `nvidia-smi -q -x` runs only if it is already on the `PATH`. `lspci` hides PCIe ACS capability details from unprivileged users; VSAT then records the `acs` fact as `unsupported` instead of guessing.
 
 ## Missing privileges in results
 

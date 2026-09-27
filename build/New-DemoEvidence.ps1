@@ -33,6 +33,7 @@ $scope = [ordered]@{
         [ordered]@{ ruleId = 'ESXI-SVC-SSH'; asset = 'esx02.example.local'; owner = 'infra-team'; rationale = 'Vendor support session (ticket CHG-1042)'; expires = '2026-12-31' }
         [ordered]@{ ruleId = 'VM-PASSTHROUGH'; asset = 'ai-train01'; owner = 'ml-platform'; rationale = 'GPU passthrough for model training'; expires = '2026-06-30' }
     )
+    aiWorkloads = @([ordered]@{ match = 'name:ai-train01'; role = 'training' }, [ordered]@{ match = 'name:ai-infer01'; role = 'inference' })
 }
 $ev = New-VsatEvidence -Mode demo -Scope $scope
 $ev.run.id = '00000000-0000-4000-8000-000000000d30'
@@ -140,6 +141,19 @@ foreach ($d in $hostDefs) {
     Set-VsatFact $h 'acceptance' -Value $d.acc
     Set-VsatFact $h 'kernel' -Value ([ordered]@{ execInstalledOnly = $d.eio })
     Set-VsatFact $h 'modules' -Value @([ordered]@{ name = 'vmkernel'; loaded = $true; enabled = $true })
+    # Accelerators: esx01 and esx02 each pass one GPU through (to ai-train01 / ai-infer01); the
+    # uplink NICs are passthrough-capable but not enabled. No SR-IOV in the lab.
+    $pt = @(0..1 | Where-Object { $d.n -ne 5 -or $_ -eq 0 } | ForEach-Object { [ordered]@{ id = "0000:18:00.$_"; vendorId = '8086'; deviceId = '159b'; vendorName = 'Intel(R) Corporation'; deviceName = 'Ethernet Controller E810-XXV for SFP'; classId = '0200'; passthruCapable = $true; passthruEnabled = $false; passthruActive = $false; sriovEnabled = $false; numVirtualFunction = 0 } })
+    if ($d.n -le 2) {
+        $pt = @([ordered]@{ id = '0000:3b:00.0'; vendorId = '10de'; deviceId = '2331'; vendorName = 'NVIDIA Corporation'; deviceName = 'GH100 [H100 PCIe]'; classId = '0302'; passthruCapable = $true; passthruEnabled = $true; passthruActive = $true; sriovEnabled = $false; numVirtualFunction = 0 }) + $pt
+        Set-VsatFact $h 'graphics' -Value ([ordered]@{ defaultType = 'shared'; sharedPassthruAssignmentPolicy = 'performance'; devices = @([ordered]@{ pciId = '0000:3b:00.0'; graphicsType = 'direct'; vmCount = 0 }) })
+        Set-VsatFact $h 'iommu' -Value ([ordered]@{ enabled = $true; source = 'inferred-from-active-passthrough' })
+    }
+    else {
+        Set-VsatFact $h 'graphics' -Status absent -Value $null
+        Set-VsatFact $h 'iommu' -Status unsupported -Value $null -ErrorMessage 'ESXi does not report IOMMU state; it is inferred only from active passthrough devices'
+    }
+    Set-VsatFact $h 'pciPassthru' -Value @($pt)
     Set-VsatFact $h 'coredump' -Value ([ordered]@{ networkEnabled = ($d.n -ne 5); networkServer = $(if ($d.n -ne 5) { '10.0.0.41' } else { $null }); fileActive = 1 })
     Set-VsatFact $h 'syslog' -Value ([ordered]@{ remoteHost = $adv['Syslog.global.logHost']; logDir = '/scratch/log'; logDirUnique = $true })
     if ($d.iscsi) { Set-VsatFact $h 'iscsiAdapters' -Value @([ordered]@{ adapter = 'vmhba64'; chapLevel = $d.iscsi; mutualChapLevel = 'prohibited' }) } else { Set-VsatFact $h 'iscsiAdapters' -Value @() }
@@ -151,7 +165,7 @@ foreach ($d in $hostDefs) {
     $pids = @()
     for ($i = 0; $i -lt $pn.Count; $i++) {
         $pid2 = "$hid/pnic/$($pn[$i])"
-        $pa = Add-VsatAsset -Evidence $ev -Id $pid2 -Type pnic -Name "$name $($pn[$i])" -Endpoint $E -Props ([ordered]@{ device = $pn[$i]; mac = ('00:50:56:0{0}:00:0{1}' -f $d.n, $i); linkUp = $true; speedMb = 25000 })
+        $pa = Add-VsatAsset -Evidence $ev -Id $pid2 -Type pnic -Name "$name $($pn[$i])" -Endpoint $E -Props ([ordered]@{ device = $pn[$i]; mac = ('00:50:56:0{0}:00:0{1}' -f $d.n, $i); pci = "0000:18:00.$i"; linkUp = $true; speedMb = 25000 })
         Add-VsatRelationship -Evidence $ev -Source $hid -Target $pid2 -Type contains
         $tor = $d.tor[[Math]::Min($i, $d.tor.Count - 1)]
         $nid = "physical:$tor.example.local"
@@ -199,7 +213,7 @@ foreach ($pg in @(
 $ds = @{}
 foreach ($d in @(@{ id = 'datastore-11'; n = 'ds-prod-01'; t = 'VMFS' }, @{ id = 'datastore-12'; n = 'ds-nfs-01'; t = 'NFS' }, @{ id = 'datastore-13'; n = 'vsanDatastore'; t = 'vsan' })) {
     $a = Add-VsatAsset -Evidence $ev -Id "${E}:$($d.id)" -Type datastore -Name $d.n -Endpoint $E -Props ([ordered]@{ type = $d.t; capacityGB = 20480; freeGB = 6120; accessible = $true; multipleHostAccess = $true; hostCount = 5 })
-    if ($d.t -eq 'NFS') { Set-VsatFact $a 'nas' -Value ([ordered]@{ remoteHost = '10.0.30.5'; remoteHosts = @('10.0.30.5'); type = 'NFS'; securityType = 'AUTH_SYS' }) }
+    if ($d.t -eq 'NFS') { Set-VsatFact $a 'nas' -Value ([ordered]@{ remoteHost = '10.0.30.5'; remoteHosts = @('10.0.30.5'); type = 'NFS'; securityType = 'AUTH_SYS'; nfsVersion = '3' }) }
     if ($d.t -eq 'vsan') { Set-VsatFact $a 'vsan' -Value ([ordered]@{ cluster = 'cl-prod'; encryption = $false; dataInTransitEncryption = $false; stretched = $false }) }
     foreach ($n in 1..5) { Add-VsatRelationship -Evidence $ev -Source $hosts[$n].id -Target $a.id -Type depends -Props ([ordered]@{ kind = 'mount' }) }
     $ds[$d.n] = $a
@@ -256,6 +270,7 @@ foreach ($d in $vmDefs) {
         Add-VsatRelationship -Evidence $ev -Source $vid -Target $dvpgs[$d.seg2].id -Type connects -Props ([ordered]@{ nic = 'Network adapter 2' })
     }
     Set-VsatFact $v 'devices' -Value @($devs)
+    Set-VsatFact $v 'accel' -Value ([ordered]@{ count = $(if ($d.gpu) { 1 } else { 0 }); devices = @($(if ($d.gpu) { [ordered]@{ kind = 'passthrough'; id = '0000:3b:00.0'; vgpuProfile = $null; pfId = $null } })) })
     Set-VsatFact $v 'snapshots' -Value @($(if ($d.snap) { [ordered]@{ name = 'pre-upgrade'; createdUtc = '2026-08-20T09:00:00Z'; ageDays = $d.snap } }) | Where-Object { $_ })
 }
 

@@ -51,6 +51,7 @@ function Get-VsatCrownReason {
 Add-VsatCrownRule -Id 'management-plane' -Test { param($a) if ($a.type -in $script:VsatManagementPlaneTypes) { "management plane ($($a.type))" } }
 Add-VsatCrownRule -Id 'operator-high' -Test { param($a) if ($a.criticality -eq 'high' -and $a.criticalitySource -eq 'operator') { 'critical asset (operator)' } }
 Add-VsatCrownRule -Id 'ot-workload' -Test { param($a) if ($a.type -in $script:VsatGraphVmTypes -and (Get-VsatOtClass $a) -eq 'ot') { "OT workload (Purdue L$($a.purdueLevel))" } }
+Add-VsatCrownRule -Id 'ai-control-plane' -Test { param($a) if ($a.aiRole -in $script:VsatAiCrownRoles) { "AI control plane / data ($($a.aiRole))" } }
 Add-VsatCrownRule -Id 'inferred-high' -Test { param($a) if ($a.criticality -eq 'high') { "critical asset ($(if ($a.criticalitySource) { $a.criticalitySource } else { 'inferred' }))" } }
 
 function ConvertTo-VsatIpString {

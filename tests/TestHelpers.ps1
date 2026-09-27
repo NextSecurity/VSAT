@@ -42,12 +42,14 @@ function Get-XplatEvidence {
     # Cross-platform lab (see tests/fixtures/xplat/README.md): the demo VMware + NSX lab, the
     # Hyper-V fixture and the KVM fixture in ONE evidence object, plus the cross-platform hop
     # under test: the vCenter appliance runs as a Hyper-V VM (correlated by recorded IP only).
-    param([string]$VcenterIp = '10.0.0.99')
+    # -Gpu adds the AI/GPU part of the lab (tests/fixtures/xplat/README.md, "GPU lab").
+    param([string]$VcenterIp = '10.0.0.99', [switch]$Gpu)
     $ev = Get-TestEvidence
     $hvEp = Add-VsatEndpoint -Evidence $ev -Type hyperv -Address 'hv01.example.local'
     Invoke-VsatHyperVCollection -Evidence $ev -Endpoint $hvEp -ImportedJson ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'fixtures/hyperv-collector.json')))
     $kvmEp = Add-VsatEndpoint -Evidence $ev -Type kvm -Address 'kvm01.example.local'
     Invoke-VsatKvmCollection -Evidence $ev -Endpoint $kvmEp -ImportedText ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'fixtures/kvm-collector.txt')))
+    if ($Gpu) { Add-XplatGpuLab -Evidence $ev }
     # vCenter's address lives on the scope endpoint (a hostname); the resolved IP is recorded
     # at connect time. 10.0.0.99 is unused by the demo lab (dc01 is .10, vSphere vcsa01 is .20).
     $vcEp = @($ev.scope.endpoints | Where-Object type -eq 'vcenter')[0]
@@ -65,6 +67,29 @@ function Get-XplatEvidence {
     $ev.nsx.correlated = $true
     Set-VsatScopeAnnotations -Evidence $ev
     return $ev
+}
+
+function Add-XplatGpuLab {
+    # GPU hosts on Hyper-V and KVM (collector fixtures in tests/fixtures/xplat) plus a vSphere
+    # overlay on the demo lab: SR-IOV on the esx01 management NIC and on a spare esx03 NIC,
+    # ai-train01 on the AUTH_SYS NFS datastore and app02 tagged as a Kubernetes control plane.
+    param([Parameter(Mandatory)]$Evidence)
+    $ev = $Evidence
+    $hvEp = Add-VsatEndpoint -Evidence $ev -Type hyperv -Address 'hvgpu01.example.local'
+    Invoke-VsatHyperVCollection -Evidence $ev -Endpoint $hvEp -ImportedJson ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'fixtures/xplat/hyperv-gpu01.json')))
+    $kvmEp = Add-VsatEndpoint -Evidence $ev -Type kvm -Address 'kvm-gpu01.example.local'
+    Invoke-VsatKvmCollection -Evidence $ev -Endpoint $kvmEp -ImportedText ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'fixtures/xplat/kvm-gpu01.txt')))
+    $sriov = { param($Id) [ordered]@{ id = $Id; vendorId = '15b3'; deviceId = '1021'; vendorName = 'Mellanox Technologies'; deviceName = 'MT2910 Family [ConnectX-7]'; classId = '0200'; passthruCapable = $true; passthruEnabled = $false; passthruActive = $false; sriovEnabled = $true; numVirtualFunction = 8 } }
+    foreach ($x in @(@{ h = 'esx01.example.local'; pci = '0000:18:00.0' }, @{ h = 'esx03.example.local'; pci = '0000:af:00.0' })) {
+        $h = @($ev.assets | Where-Object { $_.type -eq 'host' -and $_.name -eq $x.h })[0]
+        $h.facts.pciPassthru.value = @(@($h.facts.pciPassthru.value) + (& $sriov $x.pci))
+    }
+    $nfs = @($ev.assets | Where-Object { $_.type -eq 'datastore' -and $_.name -eq 'ds-nfs-01' })[0]
+    $train = @($ev.assets | Where-Object { $_.type -eq 'vm' -and $_.name -eq 'ai-train01' })[0]
+    Add-VsatRelationship -Evidence $ev -Source $train.id -Target $nfs.id -Type stores -Provenance 'vsphere.vms'
+    $cp = @($ev.assets | Where-Object { $_.type -eq 'vm' -and $_.name -eq 'app02' })[0]
+    $cp.tags = @(@($cp.tags) + 'role=k8s-control-plane')
+    $ev.scope.aiWorkloads = @(@{ match = 'name:train01'; role = 'training' }, @{ match = 'name:infer01'; role = 'inference' })
 }
 
 function Get-XplatGraph {

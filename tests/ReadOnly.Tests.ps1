@@ -90,3 +90,33 @@ Describe 'Change-history reads stay read-only (2.4)' {
         { Assert-VsatRestAllowed -Method POST -Path '/api/v1/administration/audit-logs' } | Should -Throw '*read-only guard*'
     }
 }
+
+Describe 'Platform collector scripts use only allowlisted read commands' {
+    It 'the Hyper-V collector calls only allowlisted read cmdlets' {
+        $allowed = @('Get-CimInstance', 'Get-Cluster', 'Get-ClusterNode', 'Get-Command', 'Get-HotFix', 'Get-ItemProperty', 'Get-LocalGroupMember', 'Get-NetFirewallProfile', 'Get-Service',
+            'Get-SmbServerConfiguration', 'Get-SmbShare', 'Get-SmbShareAccess', 'Get-Tpm', 'Get-VM', 'Get-VMAssignableDevice', 'Get-VMComPort', 'Get-VMDvdDrive', 'Get-VMFirmware',
+            'Get-VMGpuPartitionAdapter', 'Get-VMHardDiskDrive', 'Get-VMHost', 'Get-VMHostAssignableDevice', 'Get-VMHostPartitionableGpu', 'Get-VMIntegrationService', 'Get-VMNetworkAdapter',
+            'Get-VMNetworkAdapterVlan', 'Get-VMPartitionableGpu', 'Get-VMReplicationServer', 'Get-VMSecurity', 'Get-VMSnapshot', 'Get-VMSwitch', 'Get-VMSwitchExtension',
+            'Confirm-SecureBootUEFI', 'ConvertTo-Json', 'ForEach-Object', 'Where-Object', 'Sort-Object', 'F',
+            'Get-WinEvent', 'W')   # W wraps Get-WinEvent for the 2.4 change history
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($script:VsatHyperVCollector, [ref]$null, [ref]$null)
+        $cmds = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() } | Select-Object -Unique)
+        @($cmds | Where-Object { $null -eq $_ }) | Should -BeNullOrEmpty -Because 'every command is named literally (no dynamic invocation)'
+        @($cmds | Where-Object { $_ -notin $allowed }) | Should -BeNullOrEmpty
+    }
+    It 'the KVM collector runs only allowlisted read commands, virsh only through the read-only alias' {
+        $allowed = @('awk', 'basename', 'cat', 'command', 'date', 'dpkg-query', 'echo', 'getenforce', 'getent', 'grep', 'head', 'hostname', 'id', 'last', 'ls', 'lspci', 'mokutil', 'netstat', 'nvidia-smi', 'od', 'printf', 'readlink', 'rpm', 'sec', 'sed', 'ss', 'stat', 'systemctl', 'tail', 'uname')
+        $keywords = @('if', 'then', 'else', 'fi', 'for', 'in', 'do', 'done', 'export')
+        $code = @($script:VsatKvmCollector -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+        $code = [regex]::Replace($code, "'[^']*'", "''")   # quoted arguments are data, not commands
+        $words = foreach ($seg in [regex]::Split($code, '\n|;|\|\||&&|\||\$\(|\(|\)|\bthen\b|\bdo\b|\belse\b')) {
+            $t = ($seg.Trim() -replace '^!\s*', '')
+            if ($t) { ($t -split '\s+')[0] }
+        }
+        $named = @($words | Where-Object { $_ -match '^[a-z][a-z0-9_-]*$' -and $_ -notin $keywords } | Select-Object -Unique)
+        @($named | Where-Object { $_ -notin $allowed }) | Should -BeNullOrEmpty
+        @($words | Where-Object { $_ -like 'virsh*' }) | Should -BeNullOrEmpty -Because 'virsh runs only as $V (virsh --readonly)'
+        $code | Should -Match 'V="virsh --readonly -c qemu:///system"'
+        foreach ($m in [regex]::Matches($code, '\bsystemctl\s+\S+')) { $m.Value | Should -Be 'systemctl is-active' }
+    }
+}

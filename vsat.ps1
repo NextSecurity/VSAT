@@ -1,6 +1,6 @@
 ﻿<#PSScriptInfo
 
-.VERSION 2.5.0
+.VERSION 2.6.0
 
 .GUID 228b4d14-2c3e-4ace-b07f-9151849e54c6
 
@@ -152,8 +152,8 @@ $ErrorActionPreference = 'Stop'
 # Build: pwsh ./build/Build-Vsat.ps1
 # ---------------------------------------------------------------------------
 
-$script:VsatVersion = '2.5.0'
-$script:VsatBuildCommit = 'src-f9fa9ac7f78efefa'
+$script:VsatVersion = '2.6.0'
+$script:VsatBuildCommit = 'src-43d1f1a34f6d659e'
 
 # ---- src/10-Util.ps1 ----
 #region Util
@@ -1049,7 +1049,7 @@ $script:VsatEsxcliAllowed = @(
 
 # Every per-host configuration fact the vSphere collector records (used to mark all of them
 # when a host is unreachable or its collection fails part-way).
-$script:VsatHostFactNames = @('lockdown', 'advanced', 'services', 'ntp', 'firewall', 'certificate', 'secureBoot', 'attestation', 'acceptance', 'kernel', 'modules', 'coredump', 'syslog', 'iscsiAdapters', 'network', 'neighbors', 'vmkernel')
+$script:VsatHostFactNames = @('lockdown', 'advanced', 'services', 'ntp', 'firewall', 'certificate', 'secureBoot', 'attestation', 'acceptance', 'kernel', 'modules', 'coredump', 'syslog', 'iscsiAdapters', 'network', 'neighbors', 'vmkernel', 'pciPassthru', 'graphics', 'iommu')
 
 function Import-VsatPowerCli {
     # Loads the core PowerCLI module process-locally (offline package ./modules first).
@@ -1201,7 +1201,7 @@ function Invoke-VsatVSphereCollection {
     }
 
     Invoke-VsatCollector -Evidence $Evidence -Name 'vsphere.hosts' -Endpoint $ep -Affects @('ESXI-*') -Script {
-        $props = 'Name', 'Parent', 'Runtime', 'Summary.Config.Product', 'Config.LockdownMode', 'Config.AdminDisabled', 'Config.Certificate', 'Config.Network', 'Config.DateTimeInfo', 'Config.Option', 'Config.Service', 'Config.Firewall', 'Config.StorageDevice', 'Capability', 'ConfigManager', 'Datastore', 'Hardware.SystemInfo'
+        $props = 'Name', 'Parent', 'Runtime', 'Summary.Config.Product', 'Config.LockdownMode', 'Config.AdminDisabled', 'Config.Certificate', 'Config.Network', 'Config.DateTimeInfo', 'Config.Option', 'Config.Service', 'Config.Firewall', 'Config.StorageDevice', 'Config.PciPassthruInfo', 'Capability', 'ConfigManager', 'Datastore', 'Hardware.SystemInfo', 'Hardware.PciDevice'
         $hosts = Get-View -Server $srv -ViewType HostSystem -Property $props
         $n = 0; $total = 0; $down = 0; $broken = 0
         foreach ($h in $hosts) {
@@ -1252,6 +1252,19 @@ function Invoke-VsatVSphereCollection {
                     if ($null -eq $t) { return $null }
                     [ordered]@{ status = [string]$t.Status; message = $(if ($t.Message) { $t.Message.Message } else { $null }) }
                 }
+                # Accelerators: passthrough / SR-IOV state and host graphics. ESXi reports no IOMMU
+                # flag; active passthrough requires VT-d/AMD-Vi, so that is the only IOMMU evidence.
+                Invoke-VsatFact $a 'pciPassthru' {
+                    if ($null -eq $h.Config.PciPassthruInfo) { throw 'PciPassthruInfo is not supported by this host' }
+                    , @(ConvertTo-VsatPciPassthru -PassthruInfo @($h.Config.PciPassthruInfo) -PciDevice @($h.Hardware.PciDevice))
+                }
+                Invoke-VsatFact $a 'graphics' {
+                    if (-not $h.ConfigManager.GraphicsManager) { return $null }
+                    $gm = Get-View -Server $srv -Id $h.ConfigManager.GraphicsManager -Property GraphicsInfo, GraphicsConfig -ErrorAction Stop
+                    [ordered]@{ defaultType = [string]$gm.GraphicsConfig.HostDefaultGraphicsType; sharedPassthruAssignmentPolicy = [string]$gm.GraphicsConfig.SharedPassthruAssignmentPolicy; devices = @($gm.GraphicsInfo | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ pciId = [string]$_.PciId; graphicsType = [string]$_.GraphicsType; vmCount = @($_.Vm).Count } }) }
+                }
+                if ($a.facts.pciPassthru.status -eq 'ok' -and @($a.facts.pciPassthru.value | Where-Object { $_.passthruActive }).Count) { Set-VsatFact -Asset $a -Name 'iommu' -Value ([ordered]@{ enabled = $true; source = 'inferred-from-active-passthrough' }) }
+                else { Set-VsatFact -Asset $a -Name 'iommu' -Status unsupported -Value $null -ErrorMessage 'ESXi does not report IOMMU state; it is inferred only from active passthrough devices' }
                 $esx = $null
                 try { $esx = Get-EsxCli -Server $srv -VMHost (Get-VMHost -Server $srv -Id $h.MoRef -ErrorAction Stop) -V2 -ErrorAction Stop }
                 catch { foreach ($f in 'acceptance', 'coredump', 'syslog', 'kernel', 'modules', 'iscsiAdapters') { Set-VsatFact -Asset $a -Name $f -Status (Get-VsatErrorClass $_) -Value $null -ErrorMessage $_.Exception.Message } }
@@ -1371,7 +1384,7 @@ function Invoke-VsatVSphereCollection {
         foreach ($d in $dss) {
             $did = "${ep}:" + (Get-VsatMoRef $d)
             $info = $d.Info
-            $nas = if ($info.PSObject.Properties['Nas'] -and $info.Nas) { [ordered]@{ remoteHost = $info.Nas.RemoteHost; remoteHosts = @($info.Nas.RemoteHostNames); type = $info.Nas.Type; securityType = $info.Nas.SecurityType } } else { $null }
+            $nas = if ($info.PSObject.Properties['Nas'] -and $info.Nas) { [ordered]@{ remoteHost = $info.Nas.RemoteHost; remoteHosts = @($info.Nas.RemoteHostNames); type = $info.Nas.Type; securityType = $info.Nas.SecurityType; nfsVersion = $(if ([string]$info.Nas.Type -eq 'NFS41') { '4.1' } elseif ([string]$info.Nas.Type -eq 'NFS') { '3' } else { $null }) } } else { $null }
             $a = Add-VsatAsset -Evidence $Evidence -Id $did -Type 'datastore' -Name $d.Name -Endpoint $ep -Props ([ordered]@{ type = [string]$d.Summary.Type; capacityGB = [math]::Round($d.Summary.Capacity / 1GB, 1); freeGB = [math]::Round($d.Summary.FreeSpace / 1GB, 1); accessible = [bool]$d.Summary.Accessible; multipleHostAccess = $d.Summary.MultipleHostAccess; hostCount = @($d.Host).Count })
             if ($nas) { Set-VsatFact -Asset $a -Name 'nas' -Value $nas }
             if ([string]$d.Summary.Type -eq 'vsan') {
@@ -1397,7 +1410,7 @@ function Invoke-VsatVSphereCollection {
             $c = $v.Config
             if ($null -eq $c) {
                 $a = Add-VsatAsset -Evidence $Evidence -Id $vid -Type 'vm' -Name $v.Name -Endpoint $ep
-                foreach ($f in 'extraConfig', 'devices', 'security') { Set-VsatFact -Asset $a -Name $f -Status error -Value $null -ErrorMessage 'VM configuration unavailable (orphaned or inaccessible)' }
+                foreach ($f in 'extraConfig', 'devices', 'security', 'accel') { Set-VsatFact -Asset $a -Name $f -Status error -Value $null -ErrorMessage 'VM configuration unavailable (orphaned or inaccessible)' }
                 continue
             }
             $ips = @($v.Guest.Net | Where-Object { $null -ne $_ } | ForEach-Object { $_.IpAddress } | Where-Object { $_ })
@@ -1435,6 +1448,7 @@ function Invoke-VsatVSphereCollection {
                         }
                     })
             }
+            Invoke-VsatFact $a 'accel' { ConvertTo-VsatVmAccel @($c.Hardware.Device) }
             foreach ($d in @($a.facts.devices.value | Where-Object { $null -ne $_ -and $_.Contains('mac') })) {
                 if ($d.network) { Add-VsatRelationship -Evidence $Evidence -Source $vid -Target $d.network -Type connects -Provenance 'vsphere.vms' -Props ([ordered]@{ nic = $d.label }) }
                 elseif ($d.portgroupKey) {
@@ -1469,7 +1483,7 @@ function Add-VsatHostNetwork {
     $pnicIds = @{}
     foreach ($p in $net.Pnic) {
         $pid2 = "${hid}/pnic/" + $p.Device
-        $pa = Add-VsatAsset -Evidence $Evidence -Id $pid2 -Type 'pnic' -Name ("{0} {1}" -f $Asset.name, $p.Device) -Endpoint $ep -Props ([ordered]@{ device = $p.Device; mac = $p.Mac; linkUp = [bool]$p.LinkSpeed; speedMb = $(if ($p.LinkSpeed) { $p.LinkSpeed.SpeedMb } else { 0 }) })
+        $pa = Add-VsatAsset -Evidence $Evidence -Id $pid2 -Type 'pnic' -Name ("{0} {1}" -f $Asset.name, $p.Device) -Endpoint $ep -Props ([ordered]@{ device = $p.Device; mac = $p.Mac; pci = [string]$p.Pci; linkUp = [bool]$p.LinkSpeed; speedMb = $(if ($p.LinkSpeed) { $p.LinkSpeed.SpeedMb } else { 0 }) })
         Add-VsatRelationship -Evidence $Evidence -Source $hid -Target $pid2 -Type contains -Provenance 'vsphere.hosts'
         $pnicIds[$p.Key] = $pid2
     }
@@ -1927,6 +1941,20 @@ foreach ($spec in @(
 $denied = @($evs.sources | Where-Object { $_.status -eq 'denied' })
 $f.events = @{ status = $(if ($denied.Count) { 'denied' } else { 'ok' }); value = $evs }
 if ($denied.Count) { $f.events.error = (@($denied | ForEach-Object { "$($_.log): $($_.error)" }) -join '; ') }
+# Accelerators and shares: GPU partitioning (Server 2022+ cmdlet first, then the 2019 name; neither
+# means the OS offers no GPU partitioning), DDA-assignable devices, SR-IOV switches, SMB shares.
+$f.gpuPartition = F {
+    $g = if (Get-Command Get-VMHostPartitionableGpu -ErrorAction SilentlyContinue) { @(Get-VMHostPartitionableGpu) } elseif (Get-Command Get-VMPartitionableGpu -ErrorAction SilentlyContinue) { @(Get-VMPartitionableGpu) } else { @() }
+    if ($g.Count -eq 0) { return $null }
+    @($g | ForEach-Object { @{ name = [string]$_.Name; partitionCount = [int]$_.PartitionCount; validPartitionCounts = @($_.ValidPartitionCounts | ForEach-Object { [int]$_ }); totalVRAM = [string]$_.TotalVRAM } })
+}
+$f.assignable = F { $d = @(Get-VMHostAssignableDevice); if ($d.Count -eq 0) { return $null }; @($d | ForEach-Object { @{ locationPath = [string]$_.LocationPath; instanceId = [string]$_.InstanceID; dismounted = $true } }) }
+$f.sriov = F { $w = @(Get-VMSwitch); if ($w.Count -eq 0) { return $null }; @($w | ForEach-Object { @{ switch = [string]$_.Name; iovEnabled = [bool]$_.IovEnabled; iovSupport = [bool]$_.IovSupport; iovSupportReasons = @($_.IovSupportReasons | ForEach-Object { [string]$_ }); allowManagementOS = [bool]$_.AllowManagementOS } }) }
+$f.smbShares = F {
+    $sh = @(Get-SmbShare | Where-Object { -not $_.Special })
+    if ($sh.Count -eq 0) { return $null }
+    @($sh | ForEach-Object { $x = $_; @{ name = [string]$x.Name; path = [string]$x.Path; scope = [string]$x.ScopeName; encryptData = [bool]$x.EncryptData; folderEnumerationMode = [string]$x.FolderEnumerationMode; access = @($x | Get-SmbShareAccess | ForEach-Object { @{ account = [string]$_.AccountName; right = [string]$_.AccessRight; type = [string]$_.AccessControlType } }) } })
+}
 $out.host.facts = $f
 foreach ($sw in @(Get-VMSwitch)) {
     $out.switches += @{ id = [string]$sw.Id; name = $sw.Name; type = [string]$sw.SwitchType; allowManagementOS = [bool]$sw.AllowManagementOS; embeddedTeaming = [bool]$sw.EmbeddedTeamingEnabled; iov = [bool]$sw.IovEnabled
@@ -1939,6 +1967,14 @@ foreach ($vm in @(Get-VM)) {
     $vf.adapters = F { @(Get-VMNetworkAdapter -VM $vm | ForEach-Object { $v = Get-VMNetworkAdapterVlan -VMNetworkAdapter $_; @{ name = $_.Name; switch = $_.SwitchName; switchId = [string]$_.SwitchId; mac = $_.MacAddress; macSpoofing = [string]$_.MacAddressSpoofing; dhcpGuard = [string]$_.DhcpGuard; routerGuard = [string]$_.RouterGuard; portMirroring = [string]$_.PortMirroringMode; vlanMode = [string]$v.OperationMode; accessVlan = $v.AccessVlanId; allowedVlans = [string]$v.AllowedVlanIdListString; ips = @($_.IPAddresses) } }) }
     $vf.integration = F { @(Get-VMIntegrationService -VM $vm | ForEach-Object { @{ name = $_.Name; enabled = [bool]$_.Enabled } }) }
     $vf.checkpoints = F { @(Get-VMSnapshot -VM $vm | ForEach-Object { @{ name = $_.Name; createdUtc = $_.CreationTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); ageDays = [int]($now - $_.CreationTime.ToUniversalTime()).TotalDays } }) }
+    $vf.accel = F {
+        $gp = if (Get-Command Get-VMGpuPartitionAdapter -ErrorAction SilentlyContinue) { @(Get-VMGpuPartitionAdapter -VM $vm) } else { @() }
+        $d = @(@(Get-VMAssignableDevice -VM $vm | ForEach-Object { @{ kind = 'dda'; locationPath = [string]$_.LocationPath } }) +
+            @($gp | Where-Object { $_ } | ForEach-Object { @{ kind = 'gpu-p'; locationPath = [string]$_.InstancePath } }) +
+            @(Get-VMNetworkAdapter -VM $vm | Where-Object { $_.IovWeight -gt 0 } | ForEach-Object { @{ kind = 'sriov-nic'; locationPath = [string]$_.Name } }))
+        foreach ($x in $d) { $x.lowMMIO = $vm.LowMemoryMappedIoSpace; $x.highMMIO = $vm.HighMemoryMappedIoSpace }
+        @{ count = $d.Count; devices = $d }
+    }
     $vf.devices = F { @(@(Get-VMDvdDrive -VM $vm | ForEach-Object { @{ type = 'dvd'; path = $_.Path } }) + @(Get-VMComPort -VM $vm | ForEach-Object { @{ type = 'com'; path = $_.Path } }) + @(Get-VMAssignableDevice -VM $vm -ErrorAction SilentlyContinue | ForEach-Object { @{ type = 'dda'; path = $_.LocationPath } }) + @(Get-VMHardDiskDrive -VM $vm | ForEach-Object { @{ type = 'disk'; path = $_.Path; controller = [string]$_.ControllerType } })) }
     $out.vms += @{ id = [string]$vm.Id; name = $vm.Name; state = [string]$vm.State; generation = $vm.Generation; configVersion = [string]$vm.Version; clustered = [bool]$vm.IsClustered; automaticStart = [string]$vm.AutomaticStartAction; checkpointType = [string]$vm.CheckpointType; facts = $vf }
 }
@@ -2033,6 +2069,8 @@ function Invoke-VsatHyperVCollection {
 # key authentication and a pinned host key, or exported with -ExportCollector kvm for
 # air-gapped hosts) and prints delimited sections. virsh is always used with --readonly;
 # domain XML is dumped WITHOUT --security-info so console passwords are never collected.
+# Accelerator sections read /proc and /sys only; nvidia-smi runs (as a query) only when it is
+# already installed, and an unprivileged lspci that hides ACS capabilities is reported as such.
 
 $script:VsatKvmCollector = @'
 #!/bin/sh
@@ -2075,11 +2113,20 @@ done
 sec logins
 L=$(command -v last 2>/dev/null)
 if [ -n "$L" ]; then last -F -w 2>&1 | awk 'NR<=5000 || /^wtmp begins/'; else echo 'unsupported=last'; fi
+sec cmdline; cat /proc/cmdline 2>/dev/null
+sec iommu-groups; ls -d /sys/kernel/iommu_groups/*/devices/* 2>/dev/null
+sec iommu-ecap; cat /sys/class/iommu/*/intel-iommu/ecap 2>/dev/null
+sec mdev; for m in /sys/bus/mdev/devices/*; do [ -e "$m" ] && printf '%s %s %s\n' "$(basename "$m")" "$(basename "$(readlink "$m/mdev_type")")" "$(basename "$(readlink -f "$m/..")")"; done 2>/dev/null
+sec nvidia-smi; if [ -n "$(command -v nvidia-smi 2>/dev/null)" ]; then nvidia-smi -q -x 2>&1; else echo not-installed; fi
+sec pci-acs; if [ -n "$(command -v lspci 2>/dev/null)" ]; then lspci -D -vvv 2>/dev/null | grep -E '^[0-9a-f]{4}:|ACSCtl'; else echo not-installed; fi
+sec exports; cat /etc/exports /etc/exports.d/*.exports 2>/dev/null
+sec mounts; grep -E ' (nfs4?|cifs|smb3|fuse\.(s3fs|goofys|mountpoint-s3|rclone)) ' /proc/mounts 2>/dev/null
 sec domains; $V list --all --name 2>&1
 for d in $($V list --all --name 2>/dev/null); do
   sec "domain:$d"; $V dumpxml "$d" 2>&1
   sec "dominfo:$d"; $V dominfo "$d" 2>&1
   sec "snapshots:$d"; $V snapshot-list "$d" --parent 2>/dev/null
+  sec "domifaddr:$d"; $V domifaddr "$d" --source lease 2>/dev/null; $V domifaddr "$d" --source arp 2>/dev/null
 done
 sec networks; $V net-list --all --name 2>&1
 for n in $($V net-list --all --name 2>/dev/null); do sec "network:$n"; $V net-dumpxml "$n" 2>&1; done
@@ -2216,6 +2263,7 @@ function Add-VsatKvmEvidence {
     $chg = ConvertFrom-VsatKvmChanges -Sections $s
     if ($chg) { Set-VsatFact $ha 'changes' -Status $chg.status -Value $chg.value -ErrorMessage $chg.error }
     Set-VsatFact $ha 'libvirt' -Status $(if ([string]$s['virsh-version'] -match 'library|Using') { 'ok' } else { 'error' }) -Value ([string]$s['virsh-version']) -ErrorMessage $(if ([string]$s['virsh-version'] -notmatch 'library|Using') { [string]$s['virsh-version'] } else { $null })
+    $mdevType = Add-VsatKvmAccelEvidence -Asset $ha -Sections $s
 
     foreach ($key in @($s.Keys | Where-Object { $_ -like 'network:*' })) {
         $n = $key.Substring(8)
@@ -2232,7 +2280,11 @@ function Add-VsatKvmEvidence {
         $info = ConvertFrom-VsatKeyValue ([string]$s["dominfo:$d"]) ':'
         $va = Add-VsatAsset -Evidence $Evidence -Id $vid -Type 'kvm-vm' -Name $d -Endpoint $ep -Props ([ordered]@{ uuid = $(if ($x) { [string]$x.domain.uuid } else { $null }); state = [string]$info['State']; autostart = [string]$info['Autostart']; persistent = [string]$info['Persistent'] })
         Add-VsatRelationship -Evidence $Evidence -Source $vid -Target $hid -Type runs-on -Provenance 'kvm.vms'
-        if (-not $x) { Set-VsatFact $va 'domain' -Status error -Value $null -ErrorMessage "Domain XML unavailable: $([string]$s[$key])"; continue }
+        if (-not $x) {
+            Set-VsatFact $va 'domain' -Status error -Value $null -ErrorMessage "Domain XML unavailable: $([string]$s[$key])"
+            Set-VsatFact $va 'accel' -Status error -Value $null -ErrorMessage 'Domain XML unavailable'
+            continue
+        }
         $dom = $x.domain
         $seclabels = @($dom.SelectNodes('seclabel') | ForEach-Object { [ordered]@{ type = $_.GetAttribute('type'); model = $_.GetAttribute('model'); relabel = $_.GetAttribute('relabel') } })
         $loader = $dom.SelectSingleNode('os/loader')
@@ -2253,6 +2305,10 @@ function Add-VsatKvmEvidence {
                 redirdevs = @($dom.SelectNodes('devices/redirdev')).Count
                 memoryBacking = [bool]$dom.SelectSingleNode('memoryBacking')
             })
+        if ($s.Contains("domifaddr:$d")) { $va.facts.domain.value.ips = @([regex]::Matches([string]$s["domifaddr:$d"], 'ipv4\s+(\d{1,3}(?:\.\d{1,3}){3})/') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique) }
+        $acc = Get-VsatKvmAccelFromXml $x
+        foreach ($dv in @($acc.devices | Where-Object { $_.mdevUuid -and $mdevType.ContainsKey($_.mdevUuid) })) { $dv.mdevType = $mdevType[$dv.mdevUuid] }
+        Set-VsatFact $va 'accel' -Value $acc
         foreach ($i in $ifaces) { if ($i.type -eq 'network' -and $i.source) { Add-VsatRelationship -Evidence $Evidence -Source $vid -Target "${ep}:net/$($i.source)" -Type connects -Provenance 'kvm.vms' -Props ([ordered]@{ mac = $i.mac }) } }
         $snaps = @(([string]$s["snapshots:$d"]) -split "`r?`n" | Where-Object { $_ -match '^\s*\S+\s+\d{4}-\d{2}-\d{2}' } | ForEach-Object {
                 $p = ($_.Trim() -split '\s{2,}')
@@ -2261,6 +2317,51 @@ function Add-VsatKvmEvidence {
             })
         Set-VsatFact $va 'snapshots' -Status $(if ($snaps.Count) { 'ok' } else { 'absent' }) -Value @($snaps)
     }
+}
+
+function Add-VsatKvmAccelEvidence {
+    # Accelerator and AI-storage sections (collector 2.6 and later). Output of an earlier collector
+    # has none of them: those facts stay uncollected (checks report UNKNOWN), never empty.
+    # Returns mdev uuid -> mdev type, used to label the guests' mediated devices.
+    param([Parameter(Mandatory)]$Asset, [Parameter(Mandatory)]$Sections)
+    $s = $Sections; $ha = $Asset
+    $types = @{}
+    $cmd = $null
+    if ($s.Contains('cmdline')) {
+        $cmd = ConvertFrom-VsatKernelCmdline $s['cmdline']
+        if ($cmd.raw) { Set-VsatFact $ha 'cmdline' -Value $cmd } else { Set-VsatFact $ha 'cmdline' -Status error -Value $null -ErrorMessage '/proc/cmdline was not readable' }
+    }
+    if ($s.Contains('iommu-groups')) {
+        # /sys/kernel/iommu_groups is world-readable; an empty listing means no IOMMU groups.
+        $groups = @(ConvertFrom-VsatIommuGroups $s['iommu-groups'])
+        $ir = ConvertFrom-VsatIommuEcap $s['iommu-ecap']
+        if ($ir -and $cmd -and $cmd.intremapOff) { $ir = $false }
+        Set-VsatFact $ha 'iommu' -Value ([ordered]@{ enabled = ($groups.Count -gt 0); groups = $groups; interruptRemapping = $ir; source = 'sysfs' })
+    }
+    if ($s.Contains('mdev')) {
+        $md = @(ConvertFrom-VsatMdevList $s['mdev'])
+        foreach ($m in $md) { $types[$m.uuid] = $m.type }
+        Set-VsatFact $ha 'mdev' -Value $md
+    }
+    if ($s.Contains('nvidia-smi')) {
+        $t = ([string]$s['nvidia-smi']).Trim()
+        if (-not $t -or $t -eq 'not-installed') { Set-VsatFact $ha 'gpuMig' -Status absent -Value $null }
+        else {
+            try { Set-VsatFact $ha 'gpuMig' -Value @(ConvertFrom-VsatNvidiaSmi $t) }
+            catch { Set-VsatFact $ha 'gpuMig' -Status error -Value $null -ErrorMessage $(if ($t.StartsWith('<')) { $_.Exception.Message } else { "nvidia-smi: $(@($t -split "`r?`n")[0])" }) }
+        }
+    }
+    if ($s.Contains('pci-acs')) {
+        $acs = @(ConvertFrom-VsatLspciAcs $s['pci-acs'])
+        if ($acs.Count) { Set-VsatFact $ha 'acs' -Value $acs }
+        else { Set-VsatFact $ha 'acs' -Status unsupported -Value $null -ErrorMessage 'PCIe ACS control not readable (lspci missing, or capabilities hidden from an unprivileged user)' }
+    }
+    if ($s.Contains('exports')) {
+        $ex = @(ConvertFrom-VsatExports $s['exports'])
+        if ($ex.Count) { Set-VsatFact $ha 'exports' -Value $ex } else { Set-VsatFact $ha 'exports' -Status absent -Value $null }
+    }
+    if ($s.Contains('mounts')) { Set-VsatFact $ha 'mounts' -Value @(ConvertFrom-VsatProcMounts $s['mounts']) }
+    return $types
 }
 
 function Invoke-VsatKvmCollection {
@@ -2281,6 +2382,185 @@ function Invoke-VsatKvmCollection {
 }
 
 #endregion KVM / libvirt collector
+
+# ---- src/58-AccelParse.ps1 ----
+#region Accelerator parsers
+# Pure functions (no I/O) that turn read-only collector output into the accelerator and
+# AI-storage facts: kernel command line, IOMMU groups, nvidia-smi XML, NFS exports, network
+# mounts, mediated devices, and the vSphere passthrough / Hyper-V / libvirt device lists.
+
+function ConvertFrom-VsatKernelCmdline {
+    # /proc/cmdline -> iommu 'on'|'pt'|'off'|$null, ACS override and interrupt remapping opt-out.
+    param([string]$Text)
+    $raw = ([string]$Text).Trim()
+    $io = $null
+    foreach ($t in ($raw -split '\s+')) {
+        if ($t -match '^(intel|amd)_iommu=(on|off)\b') { if ($io -ne 'pt') { $io = $Matches[2] } }
+        if ($t -eq 'iommu=pt') { $io = 'pt' }
+        if ($t -eq 'iommu=off') { $io = 'off' }
+    }
+    return [ordered]@{ raw = $raw; iommu = $io; acsOverride = [bool]($raw -match '(^|\s)pcie_acs_override='); intremapOff = [bool]($raw -match '(^|\s)intremap=off\b') }
+}
+
+function ConvertFrom-VsatIommuGroups {
+    # `ls -d /sys/kernel/iommu_groups/*/devices/*` -> [{ id, devices:[bdf] }], ordered by id.
+    param([string]$Text)
+    $g = @{}
+    foreach ($l in ([string]$Text -split "`r?`n")) {
+        if ($l -match '/iommu_groups/(\d+)/devices/([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7])\s*$') {
+            $id = [int]$Matches[1]
+            if (-not $g.ContainsKey($id)) { $g[$id] = [System.Collections.Generic.List[string]]::new() }
+            $g[$id].Add($Matches[2].ToLowerInvariant())
+        }
+    }
+    return @($g.Keys | Sort-Object | ForEach-Object { [ordered]@{ id = $_; devices = @($g[$_]) } })
+}
+
+function ConvertFrom-VsatIommuEcap {
+    # Intel VT-d extended capability registers (one hex value per IOMMU unit). Bit 3 = interrupt
+    # remapping support. True only when every unit supports it; $null when nothing was readable.
+    param([string]$Text)
+    $vals = @(([string]$Text -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^(0x)?[0-9a-fA-F]+$' })
+    if (-not $vals.Count) { return $null }
+    foreach ($v in $vals) {
+        $n = [Convert]::ToUInt64(($v -replace '^0x', ''), 16)
+        if (-not ($n -band 8)) { return $false }
+    }
+    return $true
+}
+
+function ConvertFrom-VsatNvidiaSmi {
+    # `nvidia-smi -q -x` -> [{ index (PCI address), name, migMode, migDevices }]. Untrusted XML
+    # goes through the hardened reader; a DTD or malformed document throws.
+    param([string]$Xml)
+    $doc = Read-VsatXml $Xml
+    if (-not $doc) { throw 'nvidia-smi output rejected: not well-formed XML, or it contains a DTD / external entity.' }
+    return @(foreach ($gpu in @($doc.SelectNodes('/nvidia_smi_log/gpu'))) {
+            $id = [string]$gpu.GetAttribute('id')
+            if ($id -match '^([0-9a-fA-F]{4,8}):([0-9a-fA-F]{2}):([0-9a-fA-F]{2})\.([0-7])$') { $id = ('{0}:{1}:{2}.{3}' -f $Matches[1].Substring($Matches[1].Length - 4), $Matches[2], $Matches[3], $Matches[4]).ToLowerInvariant() }
+            $mig = $gpu.SelectSingleNode('mig_mode/current_mig')
+            [ordered]@{ index = $id; name = [string]$gpu.SelectSingleNode('product_name').InnerText; migMode = $(if ($mig) { $mig.InnerText.Trim() } else { 'N/A' }); migDevices = @($gpu.SelectNodes('mig_devices/mig_device')).Count }
+        })
+}
+
+function ConvertFrom-VsatExports {
+    # /etc/exports -> [{ path, clients:[{ host, options }] }]. "path(opts)" with no host means everyone.
+    param([string]$Text)
+    $out = [System.Collections.Generic.List[object]]::new()
+    $joined = ([string]$Text -replace '\\\r?\n', ' ')
+    foreach ($l in ($joined -split "`r?`n")) {
+        $l = ($l -replace '#.*$', '').Trim()
+        if (-not $l) { continue }
+        $parts = @($l -split '\s+')
+        $path = $parts[0]
+        $clients = [System.Collections.Generic.List[object]]::new()
+        if ($path -match '^(?<p>[^(]+)\((?<o>[^)]*)\)$') { $path = $Matches.p; $clients.Add([ordered]@{ host = '*'; options = $Matches.o }) }
+        foreach ($c in @($parts | Select-Object -Skip 1)) {
+            if ($c -match '^(?<h>[^(]*)\((?<o>[^)]*)\)$') { $clients.Add([ordered]@{ host = $(if ($Matches.h) { $Matches.h } else { '*' }); options = $Matches.o }) }
+            else { $clients.Add([ordered]@{ host = $c; options = '' }) }
+        }
+        $out.Add([ordered]@{ path = $path; clients = @($clients) })
+    }
+    return @($out)
+}
+
+function ConvertFrom-VsatProcMounts {
+    # /proc/mounts lines (already filtered to network filesystems) -> [{ source, target, fstype, options }].
+    param([string]$Text)
+    return @(foreach ($l in ([string]$Text -split "`r?`n")) {
+            $p = @($l.Trim() -split '\s+')
+            if ($p.Count -ge 4) { [ordered]@{ source = $p[0]; target = $p[1]; fstype = $p[2]; options = $p[3] } }
+        })
+}
+
+function ConvertFrom-VsatMdevList {
+    # "<uuid> <mdev_type> <parent bdf>" per mediated device -> [{ uuid, type, parent }].
+    param([string]$Text)
+    return @(foreach ($l in ([string]$Text -split "`r?`n")) {
+            if ($l.Trim() -match '^([0-9a-fA-F-]{36})\s+(\S+)\s+(\S+)$') { [ordered]@{ uuid = $Matches[1].ToLowerInvariant(); type = $Matches[2]; parent = $Matches[3].ToLowerInvariant() } }
+        })
+}
+
+function ConvertFrom-VsatLspciAcs {
+    # `lspci -D -vvv` filtered to device and ACSCtl lines -> [{ bdf, acsCtl }]. Unprivileged lspci
+    # hides capabilities, so an empty result means "not readable", not "no ACS".
+    param([string]$Text)
+    $cur = $null
+    return @(foreach ($l in ([string]$Text -split "`r?`n")) {
+            if ($l -match '^([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7])\s') { $cur = $Matches[1].ToLowerInvariant(); continue }
+            if ($cur -and $l -match 'ACSCtl:\s*(.+)$') { [ordered]@{ bdf = $cur; acsCtl = $Matches[1].Trim() } }
+        })
+}
+
+function ConvertTo-VsatPciAddress {
+    # libvirt <address domain= bus= slot= function=/> -> 0000:3b:00.0, or $null when incomplete.
+    param($Address)
+    if (-not $Address) { return $null }
+    $v = foreach ($k in 'domain', 'bus', 'slot', 'function') { [string]$Address.GetAttribute($k) }
+    if (@($v | Where-Object { $_ -notmatch '^0x[0-9a-fA-F]+$' }).Count) { return $null }
+    return ('{0:x4}:{1:x2}:{2:x2}.{3:x1}' -f [Convert]::ToInt32($v[0], 16), [Convert]::ToInt32($v[1], 16), [Convert]::ToInt32($v[2], 16), [Convert]::ToInt32($v[3], 16))
+}
+
+function Get-VsatKvmAccelFromXml {
+    # Domain XML -> { count, devices:[{ kind 'hostdev-pci'|'mdev'|'sriov-vf', bdf, managed, mdevUuid, mdevType }] }.
+    param([Parameter(Mandatory)][xml]$Xml)
+    $dev = [System.Collections.Generic.List[object]]::new()
+    foreach ($h in @($Xml.SelectNodes('/domain/devices/hostdev'))) {
+        $t = $h.GetAttribute('type')
+        if ($t -eq 'pci') { $dev.Add([ordered]@{ kind = 'hostdev-pci'; bdf = (ConvertTo-VsatPciAddress $h.SelectSingleNode('source/address')); managed = ($h.GetAttribute('managed') -eq 'yes'); mdevUuid = $null; mdevType = $null }) }
+        elseif ($t -eq 'mdev') {
+            $a = $h.SelectSingleNode('source/address')
+            $dev.Add([ordered]@{ kind = 'mdev'; bdf = $null; managed = $false; mdevUuid = $(if ($a) { ([string]$a.GetAttribute('uuid')).ToLowerInvariant() } else { $null }); mdevType = $null })
+        }
+    }
+    foreach ($i in @($Xml.SelectNodes("/domain/devices/interface[@type='hostdev']"))) { $dev.Add([ordered]@{ kind = 'sriov-vf'; bdf = (ConvertTo-VsatPciAddress $i.SelectSingleNode('source/address')); managed = ($i.GetAttribute('managed') -eq 'yes'); mdevUuid = $null; mdevType = $null }) }
+    return [ordered]@{ count = $dev.Count; devices = @($dev) }
+}
+
+function Get-VsatVimTypeName {
+    # Short vSphere API type name of a PowerCLI view object (VMware.Vim.X -> X).
+    param($Object)
+    if ($null -eq $Object) { return $null }
+    return ([string]$Object.PSObject.TypeNames[0] -split '\.')[-1]
+}
+
+function ConvertTo-VsatVmAccel {
+    # VM Config.Hardware.Device -> { count, devices:[{ kind, id, vgpuProfile, pfId }] }.
+    param([AllowNull()][object[]]$Devices)
+    $dev = [System.Collections.Generic.List[object]]::new()
+    foreach ($d in @($Devices | Where-Object { $null -ne $_ })) {
+        $t = Get-VsatVimTypeName $d
+        if ($t -eq 'VirtualPCIPassthrough') {
+            $b = $d.Backing
+            $kind = switch (Get-VsatVimTypeName $b) { 'VirtualPCIPassthroughDynamicBackingInfo' { 'dynamic-passthrough' } 'VirtualPCIPassthroughVmiopBackingInfo' { 'vgpu' } default { 'passthrough' } }
+            $dev.Add([ordered]@{ kind = $kind; id = $(if ($kind -eq 'passthrough' -and $b) { [string](Get-VsatProp $b 'Id' '') } else { $null }); vgpuProfile = $(if ($kind -eq 'vgpu') { [string](Get-VsatProp $b 'Vgpu' '') } else { $null }); pfId = $null })
+        }
+        elseif ($t -eq 'VirtualSriovEthernetCard') {
+            $dev.Add([ordered]@{ kind = 'sriov-nic'; id = $null; vgpuProfile = $null; pfId = [string](Get-VsatProp $d 'SriovBacking.PhysicalFunctionBacking.Id' '') })
+        }
+    }
+    return [ordered]@{ count = $dev.Count; devices = @($dev) }
+}
+
+function ConvertTo-VsatPciPassthru {
+    # HostSystem Config.PciPassthruInfo + Hardware.PciDevice -> passthrough/SR-IOV state of every
+    # device that is passthrough-capable, enabled, active or has SR-IOV enabled.
+    param([AllowNull()][object[]]$PassthruInfo, [AllowNull()][object[]]$PciDevice)
+    $pci = @{}; foreach ($p in @($PciDevice | Where-Object { $null -ne $_ })) { $pci[[string]$p.Id] = $p }
+    $hex = { param($v) if ($null -eq $v) { $null } else { '{0:x4}' -f ([int]$v -band 0xffff) } }
+    return @(foreach ($i in @($PassthruInfo | Where-Object { $null -ne $_ })) {
+            $sriov = [bool](Get-VsatProp $i 'SriovEnabled' $false)
+            if (-not ($i.PassthruCapable -or $i.PassthruEnabled -or $i.PassthruActive -or $sriov)) { continue }
+            $p = $pci[[string]$i.Id]
+            [ordered]@{
+                id = [string]$i.Id; vendorId = (& $hex (Get-VsatProp $p 'VendorId')); deviceId = (& $hex (Get-VsatProp $p 'DeviceId'))
+                vendorName = [string](Get-VsatProp $p 'VendorName' ''); deviceName = [string](Get-VsatProp $p 'DeviceName' ''); classId = (& $hex (Get-VsatProp $p 'ClassId'))
+                passthruCapable = [bool]$i.PassthruCapable; passthruEnabled = [bool]$i.PassthruEnabled; passthruActive = [bool]$i.PassthruActive
+                sriovEnabled = $sriov; numVirtualFunction = [int](Get-VsatProp $i 'NumVirtualFunction' 0)
+            }
+        })
+}
+#endregion Accelerator parsers
 
 # ---- src/60-RuleEngine.ps1 ----
 #region Rule engine
@@ -3724,6 +4004,475 @@ function Invoke-VsatCheckKvm {
 
 #endregion KVM evaluators
 
+# ---- src/69-EvaluatorsAccel.ps1 ----
+#region AI / accelerator evaluators
+# Isolation of GPUs and other passthrough devices (IOMMU, interrupt remapping, ACS, IOMMU
+# groups, MIG, SR-IOV), protection of model and dataset storage, and network exposure of
+# declared Kubernetes control planes. PASS and NOT_APPLICABLE need positive evidence: an
+# uncollected guest inventory or host fact makes a check UNKNOWN, never a pass.
+
+$script:VsatAiRoles = @('k8s-control-plane', 'k8s-worker', 'training', 'inference', 'dataset-store', 'model-registry')
+# Roles that become blast-radius crown jewels (see the 'ai-control-plane' crown rule in 76-Graph.ps1).
+$script:VsatAiCrownRoles = @('k8s-control-plane', 'model-registry', 'dataset-store')
+# Share, export, mount and datastore names that hold models or training data (check.namePattern overrides it).
+$script:VsatAiNamePattern = '(?i)model|dataset|ckpt|checkpoint|weights|train'
+$script:VsatAiVmTypes = @('vm', 'hyperv-vm', 'kvm-vm')
+
+function Get-VsatAccelInfo {
+    # Passthrough / accelerator devices of a VM: @{ state = ok|denied|error|unsupported|no-fact; count; devices }.
+    # Evidence collected before the accel fact existed is read from the device list where that list
+    # is complete (vSphere devices, libvirt domain XML); Hyper-V DDA entries count only when present,
+    # because GPU partitions were not collected then.
+    param($Asset)
+    if (-not $Asset -or -not $Asset.facts) { return @{ state = 'no-fact'; count = 0; devices = @() } }
+    if ($Asset.facts.Contains('accel')) {
+        $f = $Asset.facts.accel
+        if ($f.status -eq 'absent') { return @{ state = 'ok'; count = 0; devices = @() } }
+        if ($f.status -ne 'ok') { return @{ state = [string]$f.status; count = 0; devices = @(); error = (Get-VsatProp $f 'error') } }
+        return @{ state = 'ok'; count = [int](Get-VsatProp $f.value 'count' 0); devices = @(Get-VsatProp $f.value 'devices' @()) }
+    }
+    switch ($Asset.type) {
+        'vm' {
+            $r = Resolve-VsatFactValue -Asset $Asset -Fact 'devices'
+            if ($r.state -eq 'ok') {
+                $d = @(@($r.value) | Where-Object { $_ -and $_.type -in @('VirtualPCIPassthrough', 'VirtualSriovEthernetCard') } | ForEach-Object { @{ kind = $(if ($_.type -eq 'VirtualSriovEthernetCard') { 'sriov-nic' } else { 'passthrough' }) } })
+                return @{ state = 'ok'; count = $d.Count; devices = $d; derived = $true }
+            }
+        }
+        'kvm-vm' {
+            $r = Resolve-VsatFactValue -Asset $Asset -Fact 'domain'
+            if ($r.state -eq 'ok') {
+                $d = @(@(Get-VsatProp $r.value 'hostdevs' @()) | Where-Object { $_ -and $_.type -in @('pci', 'mdev') } | ForEach-Object { @{ kind = $(if ($_.type -eq 'mdev') { 'mdev' } else { 'hostdev-pci' }) } })
+                $d += @(@(Get-VsatProp $r.value 'interfaces' @()) | Where-Object { $_ -and $_.type -eq 'hostdev' } | ForEach-Object { @{ kind = 'sriov-vf' } })
+                return @{ state = 'ok'; count = $d.Count; devices = $d; derived = $true }
+            }
+        }
+        'hyperv-vm' {
+            $r = Resolve-VsatFactValue -Asset $Asset -Fact 'devices'
+            $d = @(@($r.value) | Where-Object { $_ -and $_.type -eq 'dda' } | ForEach-Object { @{ kind = 'dda' } })
+            if ($r.state -eq 'ok' -and $d.Count) { return @{ state = 'ok'; count = $d.Count; devices = $d; derived = $true } }
+        }
+    }
+    return @{ state = 'no-fact'; count = 0; devices = @() }
+}
+
+function Test-VsatAiWorkload {
+    # A declared/tagged AI workload, or a VM with at least one accelerator or passthrough device.
+    param($Asset)
+    if (-not $Asset) { return $false }
+    if ($Asset.aiRole) { return $true }
+    return ($Asset.type -in $script:VsatAiVmTypes -and (Get-VsatAccelInfo $Asset).count -gt 0)
+}
+
+function Get-VsatHostGuests {
+    param($Context, $HostAsset)
+    return @($Context.in[$HostAsset.id] | Where-Object { $_ -and $_.type -eq 'runs-on' } | ForEach-Object { $Context.assets[$_.source] } | Where-Object { $_ -and $_.type -in $script:VsatAiVmTypes } | Sort-Object { $_.id } -Unique)
+}
+
+function Get-VsatAiHostState {
+    # 'ai' when the host or a guest is an AI workload, 'none' with positive evidence that no guest
+    # is, otherwise 'unknown' (guest accelerator inventory incomplete).
+    param($Context, $HostAsset)
+    $vms = @(Get-VsatHostGuests $Context $HostAsset)
+    $ai = @($vms | Where-Object { Test-VsatAiWorkload $_ })
+    if ($HostAsset.aiRole -or $ai.Count) { return @{ state = 'ai'; workloads = $ai } }
+    $gaps = @($vms | Where-Object { (Get-VsatAccelInfo $_).state -ne 'ok' })
+    if ($gaps.Count) { return @{ state = 'unknown'; workloads = @(); reason = "accelerator inventory incomplete for $($gaps.Count) guest(s)" } }
+    return @{ state = 'none'; workloads = @() }
+}
+
+function Get-VsatAiPattern {
+    param($Check)
+    $p = [string](Get-VsatProp $Check 'namePattern' '')
+    if ($p) { return $p }
+    return $script:VsatAiNamePattern
+}
+
+function New-VsatGapFinding {
+    # UNKNOWN/ERROR finding for a fact that is not ok/absent.
+    param($Rule, $Asset, $Resolved, [string]$Fact, [string]$Expected)
+    return (New-VsatFinding -Rule $Rule -Asset $Asset -Result (Get-VsatEvidenceGapResult $Resolved.state) -Observed (Get-VsatGapText $Resolved $Fact) -Expected $Expected -Facts @($Fact))
+}
+
+function Invoke-VsatCheckAccelIommu {
+    # AI-IOMMU-OFF (IOMMU on) and AI-IOMMU-IR (check.requireIR: interrupt remapping) on KVM hosts.
+    param($Rule, $Asset, $Check, $Context)
+    $ir = [bool](Get-VsatProp $Check 'requireIR' $false)
+    $exp = if ($ir) { 'Interrupt remapping enabled on hosts that pass devices through' } else { 'IOMMU (VT-d / AMD-Vi) enabled on hosts that pass devices through' }
+    $vms = @(Get-VsatHostGuests $Context $Asset)
+    $info = @($vms | ForEach-Object { Get-VsatAccelInfo $_ })
+    $used = @($info | Where-Object { $_.count -gt 0 }).Count
+    if (-not $used) {
+        $gap = @($info | Where-Object { $_.state -ne 'ok' }).Count
+        if ($gap) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "Passthrough inventory incomplete for $gap of $($vms.Count) guest(s)" -Expected $exp -Facts @('accel')) }
+        return (New-VsatFinding -Rule $Rule -Asset $Asset -Result NOT_APPLICABLE -Observed "No guest uses PCI passthrough, mediated devices or SR-IOV VFs ($($vms.Count) guest(s) checked)" -Expected $exp)
+    }
+    $c = Resolve-VsatFactValue -Asset $Asset -Fact 'cmdline'
+    $g = Resolve-VsatFactValue -Asset $Asset -Fact 'iommu'
+    if ($ir) {
+        if ($g.state -ne 'ok') { return (New-VsatGapFinding $Rule $Asset $g 'iommu' $exp) }
+        $v = Get-VsatProp $g.value 'interruptRemapping'
+        if ($null -eq $v) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed 'Interrupt remapping capability not readable (no Intel VT-d capability register exposed)' -Expected $exp -Facts @('iommu')) }
+        return (New-VsatFinding -Rule $Rule -Asset $Asset -Result $(if ([bool]$v) { 'PASS' } else { 'FAIL' }) -Observed "interrupt remapping $(if ([bool]$v) { 'supported and not disabled' } else { 'unavailable or disabled (intremap=off)' }); $used guest(s) with passthrough devices" -Expected $exp -Facts @('iommu', 'cmdline'))
+    }
+    if ($g.state -eq 'ok') {
+        $n = @(Get-VsatProp $g.value 'groups' @()).Count
+        return (New-VsatFinding -Rule $Rule -Asset $Asset -Result $(if ($n) { 'PASS' } else { 'FAIL' }) -Observed "$n IOMMU group(s)$(if ($c.state -eq 'ok') { "; kernel iommu=$(if ($c.value.iommu) { $c.value.iommu } else { 'default' })" }); $used guest(s) with passthrough devices" -Expected $exp -Facts @('iommu', 'cmdline'))
+    }
+    if ($c.state -ne 'ok') { return (New-VsatGapFinding $Rule $Asset $g 'iommu' $exp) }
+    switch ([string]$c.value.iommu) {
+        'off' { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result FAIL -Observed "Kernel command line disables the IOMMU; $used guest(s) with passthrough devices" -Expected $exp -Facts @('cmdline')) }
+        { $_ -in @('on', 'pt') } { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed "Kernel command line enables the IOMMU (iommu=$($c.value.iommu)); IOMMU groups not readable" -Expected $exp -Facts @('cmdline') -Confidence inferred) }
+    }
+    return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "IOMMU groups not readable and the kernel command line uses the distribution default ($(Get-VsatGapText $g 'iommu'))" -Expected $exp -Facts @('cmdline', 'iommu'))
+}
+
+function Invoke-VsatCheckAccelAcsOverride {
+    param($Rule, $Asset, $Check, $Context)
+    $exp = 'No pcie_acs_override on the kernel command line'
+    $r = Resolve-VsatFactValue -Asset $Asset -Fact 'cmdline'
+    if ($r.state -ne 'ok') { return (New-VsatGapFinding $Rule $Asset $r 'cmdline' $exp) }
+    $bad = [bool]$r.value.acsOverride
+    return (New-VsatFinding -Rule $Rule -Asset $Asset -Result $(if ($bad) { 'FAIL' } else { 'PASS' }) -Observed $(if ($bad) { (@([string]$r.value.raw -split '\s+' | Where-Object { $_ -like 'pcie_acs_override*' }) -join ' ') } else { 'pcie_acs_override not set' }) -Expected $exp -Facts @('cmdline'))
+}
+
+function Invoke-VsatCheckAccelIommuGroup {
+    # A guest's PCI device must not share its IOMMU group with a device the guest does not own
+    # (other functions of the same slot count as its own).
+    param($Rule, $Asset, $Check, $Context)
+    $exp = 'Each passed-through device alone in its IOMMU group (apart from other functions of the same slot)'
+    $a = Get-VsatAccelInfo $Asset
+    if ($a.state -ne 'ok') { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result (Get-VsatEvidenceGapResult $a.state) -Observed "Guest passthrough devices not collected ($($a.state))" -Expected $exp -Facts @('accel')) }
+    $pci = @($a.devices | Where-Object { $_.kind -in @('hostdev-pci', 'sriov-vf') })
+    if (-not $pci.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result NOT_APPLICABLE -Observed 'No PCI device passed through to this guest' -Expected $exp -Facts @('accel')) }
+    $mine = @($pci | Where-Object { $_.bdf } | ForEach-Object { ([string]$_.bdf).ToLowerInvariant() })
+    if ($mine.Count -lt $pci.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed 'A passed-through PCI device has no source address in the domain XML' -Expected $exp -Facts @('accel')) }
+    $h = @($Context.out[$Asset.id] | Where-Object { $_ -and $_.type -eq 'runs-on' } | ForEach-Object { $Context.assets[$_.target] } | Where-Object { $_ })[0]
+    $g = if ($h) { Resolve-VsatFactValue -Asset $h -Fact 'iommu' } else { @{ state = 'no-fact'; value = $null } }
+    if ($g.state -ne 'ok') { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result (Get-VsatEvidenceGapResult $g.state) -Observed "Host IOMMU groups: $(Get-VsatGapText $g 'iommu')" -Expected $exp -Facts @('accel')) }
+    $slots = @($mine | ForEach-Object { $_ -replace '\.[0-7]$', '' })
+    $viol = [System.Collections.Generic.List[string]]::new()
+    $found = 0
+    foreach ($grp in @(Get-VsatProp $g.value 'groups' @())) {
+        $devs = @($grp.devices | ForEach-Object { ([string]$_).ToLowerInvariant() })
+        if (-not @($devs | Where-Object { $mine -contains $_ }).Count) { continue }
+        $found++
+        $others = @($devs | Where-Object { $mine -notcontains $_ -and ($_ -replace '\.[0-7]$', '') -notin $slots })
+        if ($others.Count) { $viol.Add("IOMMU group $($grp.id) also contains $($others -join ', ')") }
+    }
+    if ($viol.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result FAIL -Observed "$($mine -join ', '): $($viol -join '; ')" -Expected $exp -Facts @('accel')) }
+    if (-not $found) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "$($mine -join ', ') not found in any host IOMMU group" -Expected $exp -Facts @('accel')) }
+    return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed "Isolated IOMMU group(s) for $($mine -join ', ')" -Expected $exp -Facts @('accel'))
+}
+
+function Invoke-VsatCheckAccelMigIsolation {
+    # A GPU shared by several guests through mediated devices needs MIG (hardware partitioning);
+    # time-sliced vGPU gives no memory or fault isolation between tenants.
+    param($Rule, $Asset, $Check, $Context)
+    $exp = 'A GPU shared by several guests runs in MIG mode (or each GPU serves one guest)'
+    $vms = @(Get-VsatHostGuests $Context $Asset)
+    $byUuid = @{}
+    $gap = 0
+    foreach ($v in $vms) {
+        $i = Get-VsatAccelInfo $v
+        if ($i.state -ne 'ok') { $gap++; continue }
+        foreach ($d in @($i.devices | Where-Object { $_.kind -eq 'mdev' })) {
+            $u = [string](Get-VsatProp $d 'mdevUuid' '')
+            if (-not $byUuid.ContainsKey($u)) { $byUuid[$u] = [System.Collections.Generic.List[string]]::new() }
+            if (-not $byUuid[$u].Contains($v.name)) { $byUuid[$u].Add([string]$v.name) }
+        }
+    }
+    if (-not $byUuid.Count) {
+        if ($gap) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "Guest device inventory incomplete for $gap guest(s)" -Expected $exp -Facts @('accel')) }
+        return (New-VsatFinding -Rule $Rule -Asset $Asset -Result NOT_APPLICABLE -Observed "No guest uses a mediated (shared) GPU device ($($vms.Count) guest(s) checked)" -Expected $exp)
+    }
+    $md = Resolve-VsatFactValue -Asset $Asset -Fact 'mdev'
+    if ($md.state -ne 'ok') { return (New-VsatGapFinding $Rule $Asset $md 'mdev' $exp) }
+    $parentOf = @{}; $typeOf = @{}
+    foreach ($m in @($md.value)) { $parentOf[[string]$m.uuid] = [string]$m.parent; $typeOf[[string]$m.parent] = [string]$m.type }
+    $tenants = @{}
+    foreach ($u in $byUuid.Keys) {
+        $p = if ($parentOf.ContainsKey($u)) { $parentOf[$u] } else { '(unknown parent)' }
+        if (-not $tenants.ContainsKey($p)) { $tenants[$p] = [System.Collections.Generic.List[string]]::new() }
+        foreach ($n in $byUuid[$u]) { if (-not $tenants[$p].Contains($n)) { $tenants[$p].Add($n) } }
+    }
+    $mig = Resolve-VsatFactValue -Asset $Asset -Fact 'gpuMig'
+    $gpus = @{}; if ($mig.state -eq 'ok') { foreach ($x in @($mig.value)) { $gpus[[string]$x.index] = $x } }
+    $fail = [System.Collections.Generic.List[string]]::new(); $unk = [System.Collections.Generic.List[string]]::new(); $ok = [System.Collections.Generic.List[string]]::new()
+    foreach ($p in (Get-VsatOrdinalSorted $tenants.Keys)) {
+        $names = @($tenants[$p])
+        if ($names.Count -lt 2) { $ok.Add("$p serves one guest"); continue }
+        $who = "$p shared by $($names -join ', ')"
+        if ($gpus.ContainsKey($p)) {
+            if ([string]$gpus[$p].migMode -eq 'Enabled') { $ok.Add("$p in MIG mode") } else { $fail.Add("$who; MIG $($gpus[$p].migMode)") }
+        }
+        elseif ($p -ne '(unknown parent)' -and $mig.state -in @('ok', 'absent') -and $typeOf[$p] -notlike 'nvidia-*') { $fail.Add("$who; $($typeOf[$p]) is time-sliced (no MIG)") }
+        else { $unk.Add("$who; MIG mode not readable ($(if ($mig.state -eq 'ok') { 'GPU not listed by nvidia-smi' } else { "nvidia-smi: $($mig.state)" }))") }
+    }
+    if ($fail.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result FAIL -Observed ($fail -join '; ') -Expected $exp -Facts @('mdev', 'gpuMig')) }
+    if ($unk.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed ($unk -join '; ') -Expected $exp -Facts @('mdev', 'gpuMig')) }
+    return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed ($ok -join '; ') -Expected $exp -Facts @('mdev', 'gpuMig'))
+}
+
+function Invoke-VsatCheckAccelSriov {
+    # SR-IOV virtual functions bypass the virtual switch; they must not share a physical port with
+    # host management (ESXi management vmknic uplink; Hyper-V switch shared with the management OS).
+    param($Rule, $Asset, $Check, $Context)
+    $exp = 'SR-IOV virtual functions not enabled on a NIC or switch that carries host management'
+    if ($Asset.type -eq 'hyperv-host') {
+        $r = Resolve-VsatFactValue -Asset $Asset -Fact 'sriov'
+        $fact = 'sriov'
+        if ($r.state -eq 'no-fact') {
+            # Earlier collectors recorded IovEnabled / AllowManagementOS on the switch assets.
+            $sw = @($Context.out[$Asset.id] | Where-Object { $_ -and $_.type -eq 'contains' } | ForEach-Object { $Context.assets[$_.target] } | Where-Object { $_ -and $_.type -eq 'hyperv-vswitch' })
+            if (-not $sw.Count) { return (New-VsatGapFinding $Rule $Asset $r 'sriov' $exp) }
+            $list = @($sw | ForEach-Object { @{ switch = [string]$_.name; iovEnabled = [bool](Get-VsatProp $_ 'props.iov' $false); allowManagementOS = [bool](Get-VsatProp $_ 'props.allowManagementOS' $false) } })
+            $fact = 'props'
+        }
+        elseif ($r.state -eq 'absent') { $list = @() }
+        elseif ($r.state -ne 'ok') { return (New-VsatGapFinding $Rule $Asset $r 'sriov' $exp) }
+        else { $list = @($r.value | Where-Object { $_ }) }
+        $iov = @($list | Where-Object { [bool]$_.iovEnabled })
+        if (-not $iov.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result NOT_APPLICABLE -Observed "No virtual switch has SR-IOV enabled ($($list.Count) switch(es))" -Expected $exp -Facts @($fact)) }
+        $bad = @($iov | Where-Object { [bool]$_.allowManagementOS } | ForEach-Object { [string]$_.switch })
+        if ($bad.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result FAIL -Observed "SR-IOV switch shared with the management OS: $($bad -join ', ')" -Expected $exp -Facts @($fact)) }
+        return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed "SR-IOV switch(es) not shared with the management OS: $(@($iov | ForEach-Object { [string]$_.switch }) -join ', ')" -Expected $exp -Facts @($fact))
+    }
+    $r = Resolve-VsatFactValue -Asset $Asset -Fact 'pciPassthru'
+    if ($r.state -notin @('ok', 'absent')) { return (New-VsatGapFinding $Rule $Asset $r 'pciPassthru' $exp) }
+    $sr = @(@($r.value) | Where-Object { $_ -and [bool]$_.sriovEnabled -and [int](Get-VsatProp $_ 'numVirtualFunction' 0) -gt 0 })
+    if (-not $sr.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result NOT_APPLICABLE -Observed 'No SR-IOV virtual functions enabled on this host' -Expected $exp -Facts @('pciPassthru')) }
+    $pnics = @($Context.out[$Asset.id] | Where-Object { $_ -and $_.type -eq 'contains' } | ForEach-Object { $Context.assets[$_.target] } | Where-Object { $_ -and $_.type -eq 'pnic' })
+    $byPci = @{}; foreach ($p in $pnics) { $pci = [string](Get-VsatProp $p 'props.pci' ''); if ($pci) { $byPci[$pci.ToLowerInvariant()] = $p } }
+    if ($pnics.Count -and -not $byPci.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed 'Physical NIC PCI addresses not collected (evidence from an earlier VSAT version)' -Expected $exp -Facts @('pciPassthru')) }
+    $srNics = @($sr | ForEach-Object { $n = $byPci[([string]$_.id).ToLowerInvariant()]; if ($n) { @{ nic = [string]$n.props.device; id = $n.id; vfs = [int]$_.numVirtualFunction } } })
+    $desc = @($sr | ForEach-Object { "$($_.id) ($([int]$_.numVirtualFunction) VFs)" }) -join ', '
+    if (-not $srNics.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed "SR-IOV enabled on $desc, which is not a host uplink NIC" -Expected $exp -Facts @('pciPassthru')) }
+    $vmk = Resolve-VsatFactValue -Asset $Asset -Fact 'vmkernel'
+    if ($vmk.state -ne 'ok') { return (New-VsatGapFinding $Rule $Asset $vmk 'vmkernel' $exp) }
+    $mgmtNics = @{}; $onVds = @()
+    foreach ($m in @(@($vmk.value) | Where-Object { $_ -and @($_.services) -contains 'management' })) {
+        if ($m.dvPortgroup) { $onVds += [string]$m.device; continue }
+        $pg = $Context.assets["$($Asset.id)/pg/$($m.portgroup)"]
+        $vs = if ($pg) { $Context.assets["$($Asset.id)/vss/$(Get-VsatProp $pg 'props.vswitch' '')"] } else { $null }
+        foreach ($u in @(Get-VsatProp $vs 'props.uplinks' @())) { $mgmtNics[[string]$u] = [string]$m.device }
+    }
+    $hit = @($srNics | Where-Object { $mgmtNics.ContainsKey($_.id) } | ForEach-Object { "$($_.nic) ($($_.vfs) VFs) carries management $($mgmtNics[$_.id])" })
+    if ($hit.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result FAIL -Observed "SR-IOV on a management uplink: $($hit -join '; ')" -Expected $exp -Facts @('pciPassthru', 'vmkernel')) }
+    if ($onVds.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "SR-IOV on $(@($srNics | ForEach-Object { $_.nic }) -join ', '); management $($onVds -join ', ') runs on a distributed switch whose per-host uplinks are not collected" -Expected $exp -Facts @('pciPassthru', 'vmkernel')) }
+    return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed "SR-IOV on $(@($srNics | ForEach-Object { $_.nic }) -join ', '); management uses $(@($mgmtNics.Keys | ForEach-Object { $Context.assets[$_].props.device } | Sort-Object -Unique) -join ', ')" -Expected $exp -Facts @('pciPassthru', 'vmkernel'))
+}
+
+function Invoke-VsatCheckAccelShare {
+    # Model / dataset shares on AI hosts: NFS exports (check.kind = exports, KVM) or SMB shares
+    # (check.kind = smb, Hyper-V). Relevant shares: all of them on a host that runs an AI workload,
+    # otherwise those whose name or path matches the model/dataset pattern.
+    param($Rule, $Asset, $Check, $Context)
+    $pat = Get-VsatAiPattern $Check
+    $smb = ([string]$Check.kind -eq 'smb')
+    $fact = if ($smb) { 'smbShares' } else { 'exports' }
+    $exp = if ($smb) { 'Model/dataset SMB shares grant no Full/Change to Everyone or Authenticated Users and encrypt data in transit' } else { 'Model/dataset NFS exports are not read-write to everyone and never no_root_squash for wildcard, subnet or netgroup clients' }
+    $r = Resolve-VsatFactValue -Asset $Asset -Fact $fact
+    if ($r.state -eq 'absent') { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result NOT_APPLICABLE -Observed $(if ($smb) { 'No non-administrative SMB shares' } else { 'No NFS exports' }) -Expected $exp -Facts @($fact)) }
+    if ($r.state -ne 'ok') { return (New-VsatGapFinding $Rule $Asset $r $fact $exp) }
+    $items = @(@($r.value) | Where-Object { $_ })
+    $hs = Get-VsatAiHostState $Context $Asset
+    $rel = if ($hs.state -eq 'ai') { $items } else { @($items | Where-Object { "$($_.path) $(Get-VsatProp $_ 'name' '')" -match $pat }) }
+    if (-not $rel.Count) {
+        if ($hs.state -eq 'unknown') { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "No share is named like model/dataset storage, but the $($hs.reason)" -Expected $exp -Facts @($fact, 'accel')) }
+        return (New-VsatFinding -Rule $Rule -Asset $Asset -Result NOT_APPLICABLE -Observed "No AI workload on this host and no share named like model/dataset storage ($($items.Count) share(s))" -Expected $exp -Facts @($fact))
+    }
+    $issues = [System.Collections.Generic.List[string]]::new()
+    $unk = [System.Collections.Generic.List[string]]::new()
+    if ($smb) {
+        $srv = Resolve-VsatFactValue -Asset $Asset -Fact 'smb'
+        $srvEnc = if ($srv.state -eq 'ok') { [bool](Get-VsatProp $srv.value 'encryptData' $false) } else { $null }
+        foreach ($s in $rel) {
+            foreach ($ac in @(Get-VsatProp $s 'access' @())) {
+                if ([string](Get-VsatProp $ac 'type' 'Allow') -ne 'Allow') { continue }
+                if ([string]$ac.account -match '^(Everyone|(NT AUTHORITY\\)?Authenticated Users|(BUILTIN\\)?Users)$' -and [string]$ac.right -in @('Full', 'Change')) { $issues.Add("share '$($s.name)': $($ac.account) has $($ac.right)") }
+            }
+            if ("$($s.name) $($s.path)" -match $pat -and -not [bool]$s.encryptData) {
+                if ($srvEnc -eq $true) { continue }
+                if ($null -eq $srvEnc) { $unk.Add("share '$($s.name)' is not encrypted and the server-wide SMB encryption setting was not collected") }
+                else { $issues.Add("share '$($s.name)' is not encrypted in transit (EncryptData off)") }
+            }
+        }
+    }
+    else {
+        foreach ($e in $rel) {
+            foreach ($c in @(Get-VsatProp $e 'clients' @())) {
+                $opts = @(([string]$c.options) -split ',' | ForEach-Object { $_.Trim() })
+                $world = [string]$c.host -in @('*', '0.0.0.0/0', '0.0.0.0/0.0.0.0', '::/0')
+                $single = -not $world -and [string]$c.host -notmatch '[*?/@\[]'
+                if ($world -and $opts -contains 'rw') { $issues.Add("$($e.path) is exported read-write to $($c.host)") }
+                if ($opts -contains 'no_root_squash' -and -not $single) { $issues.Add("$($e.path) exports no_root_squash to $($c.host)") }
+            }
+        }
+    }
+    if ($issues.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result FAIL -Observed ($issues -join '; ') -Expected $exp -Facts @($fact)) }
+    if ($unk.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed ($unk -join '; ') -Expected $exp -Facts @($fact, 'smb')) }
+    if ($hs.state -eq 'unknown') { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "Model/dataset-named shares are restricted, but the $($hs.reason), so other shares may serve AI workloads" -Expected $exp -Facts @($fact, 'accel')) }
+    return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed "$($rel.Count) relevant share(s) restricted: $(@($rel | ForEach-Object { if ($smb) { $_.name } else { $_.path } }) -join ', ')" -Expected $exp -Facts @($fact))
+}
+
+function Invoke-VsatCheckAccelNfsSec {
+    # Model/dataset storage traffic protected in transit: NFS datastores behind AI VMs (Kerberos
+    # integrity or privacy), and network mounts on KVM hosts that run AI guests (NFS sec=krb5p,
+    # SMB seal, no plain-HTTP object storage endpoint).
+    param($Rule, $Asset, $Check, $Context)
+    $pat = Get-VsatAiPattern $Check
+    if ($Asset.type -eq 'datastore') {
+        $exp = 'NFS datastores that hold AI workloads use Kerberos with integrity or privacy (SEC_KRB5I / SEC_KRB5P)'
+        if ([string](Get-VsatProp $Asset 'props.type' '') -notmatch '^NFS') { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result NOT_APPLICABLE -Observed "Not an NFS datastore ($(Get-VsatProp $Asset 'props.type' 'unknown type'))" -Expected $exp) }
+        $vms = @($Context.in[$Asset.id] | Where-Object { $_ -and $_.type -eq 'stores' } | ForEach-Object { $Context.assets[$_.source] } | Where-Object { $_ } | Sort-Object { $_.id } -Unique)
+        $ai = @($vms | Where-Object { Test-VsatAiWorkload $_ })
+        if (-not $ai.Count -and $Asset.name -notmatch $pat) {
+            $gaps = @($vms | Where-Object { (Get-VsatAccelInfo $_).state -ne 'ok' })
+            if ($gaps.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "Accelerator inventory incomplete for $($gaps.Count) VM(s) stored here" -Expected $exp -Facts @('nas')) }
+            return (New-VsatFinding -Rule $Rule -Asset $Asset -Result NOT_APPLICABLE -Observed "No AI workload stored on this datastore ($($vms.Count) VM(s))" -Expected $exp)
+        }
+        $n = Resolve-VsatFactValue -Asset $Asset -Fact 'nas'
+        if ($n.state -ne 'ok') { return (New-VsatGapFinding $Rule $Asset $n 'nas' $exp) }
+        $sec = [string](Get-VsatProp $n.value 'securityType' '')
+        $who = if ($ai.Count) { "stores $(Format-VsatOtNames @($ai.name) 3)" } else { 'named like model/dataset storage' }
+        if ($sec -in @('SEC_KRB5I', 'SEC_KRB5P')) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed "securityType=$sec; $who" -Expected $exp -Facts @('nas')) }
+        return (New-VsatFinding -Rule $Rule -Asset $Asset -Result FAIL -Observed "securityType=$(if ($sec) { $sec } else { 'AUTH_SYS (NFS 3 default)' }): no integrity or encryption in transit; $who" -Expected $exp -Facts @('nas'))
+    }
+    $exp = 'Network mounts of model/dataset storage are encrypted in transit (NFS sec=krb5p, SMB seal, HTTPS object storage)'
+    $r = Resolve-VsatFactValue -Asset $Asset -Fact 'mounts'
+    if ($r.state -notin @('ok', 'absent')) { return (New-VsatGapFinding $Rule $Asset $r 'mounts' $exp) }
+    $mounts = @(@($r.value) | Where-Object { $_ })
+    $hs = Get-VsatAiHostState $Context $Asset
+    $rel = if ($hs.state -eq 'ai') { $mounts } else { @($mounts | Where-Object { "$($_.source) $($_.target)" -match $pat }) }
+    if (-not $rel.Count) {
+        if ($hs.state -eq 'unknown' -and $mounts.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "Network mounts present, but the $($hs.reason)" -Expected $exp -Facts @('mounts', 'accel')) }
+        return (New-VsatFinding -Rule $Rule -Asset $Asset -Result NOT_APPLICABLE -Observed $(if ($mounts.Count) { "No AI workload on this host and no mount named like model/dataset storage ($($mounts.Count) network mount(s))" } else { 'No network file system or object storage mounts' }) -Expected $exp -Facts @('mounts'))
+    }
+    $issues = [System.Collections.Generic.List[string]]::new()
+    foreach ($m in $rel) {
+        $o = @(([string]$m.options) -split ',')
+        $what = "$($m.source) on $($m.target)"
+        switch -Regex ([string]$m.fstype) {
+            '^nfs' { $sec = @($o | Where-Object { $_ -like 'sec=*' } | ForEach-Object { $_.Substring(4) })[0]; if ($sec -ne 'krb5p') { $issues.Add("${what}: NFS sec=$(if ($sec) { $sec } else { 'sys' }) (not encrypted)") } }
+            '^(cifs|smb3)$' { if ($o -notcontains 'seal') { $issues.Add("${what}: SMB without seal (not encrypted)") } }
+            '^fuse\.' { if ([string]$m.options -match '(^|,)(url|endpoint|endpoint-url)=http://') { $issues.Add("${what}: object storage endpoint over plain HTTP") } }
+        }
+    }
+    if ($issues.Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result FAIL -Observed ($issues -join '; ') -Expected $exp -Facts @('mounts')) }
+    return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed "$($rel.Count) relevant mount(s) encrypted in transit or not assessable as plaintext: $(@($rel | ForEach-Object { $_.target }) -join ', ')" -Expected $exp -Facts @('mounts'))
+}
+
+function Invoke-VsatCheckAccelK8sExposure {
+    # A declared or tagged Kubernetes control plane is a crown jewel; FAIL when a blast-radius path
+    # from a modeled entry point reaches it over a network-allow hop (API 6443, etcd 2379, kubelet 10250).
+    param($Rule, $Asset, $Check, $Context)
+    $exp = 'Control plane reachable only from admin and worker networks (no network path from modeled entry points)'
+    if ($Asset.aiRole -ne 'k8s-control-plane') { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result NOT_APPLICABLE -Observed 'Not a declared or tagged Kubernetes control plane' -Expected '') }
+    $cg = Get-VsatContextGraph -Context $Context
+    $hits = @($cg.blast.paths | Where-Object { [string]$_.crown -eq $Asset.id -and @(@($_.edgeIds) | ForEach-Object { $cg.graph.edges[$_].kind }) -contains 'network-allow' })
+    if ($hits.Count) {
+        $from = @($hits | ForEach-Object { Get-VsatGraphNodeName $cg.graph ([string]$_.entry) } | Select-Object -Unique)
+        return (New-VsatFinding -Rule $Rule -Asset $Asset -Result FAIL -Observed "Reachable over the network from $(Format-VsatOtNames $from 3): $($hits[0].narrative)" -Expected $exp -Facts @('props') -Confidence inferred)
+    }
+    if ($Asset.type -eq 'vm' -and $Context.nsxState -ne 'ASSESSED') { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed "No network path found, but NSX policy was not assessed (NSX coverage: $($Context.nsxState))" -Expected $exp) }
+    if ($cg.blast.bounds.truncated) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed 'No network path found, but blast-radius search bounds were hit (results partial)' -Expected $exp) }
+    if (@($cg.blast.needsEvidence | Where-Object { $_ -and [string](Get-VsatProp $_ 'gap.kind' '') -eq 'network-allow' -and @($_.crowns) -contains $Asset.id }).Count) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result UNKNOWN -Observed 'No confirmed network path, but a network route to this control plane needs evidence VSAT could not collect' -Expected $exp) }
+    return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed 'No network path from modeled entry points' -Expected $exp -Facts @('props') -Confidence inferred)
+}
+
+function Set-VsatAiAffectedWorkloads {
+    # finding.affectedWorkloads = AI workload VMs an ai-infra finding puts at risk: guests of a host,
+    # AI VMs stored on a datastore, the VM itself for VM findings.
+    param([AllowEmptyCollection()][object[]]$Findings, $Context)
+    foreach ($f in @($Findings | Where-Object { $_ -and $_.domain -eq 'ai-infra' })) {
+        $a = $Context.assets[$f.assetId]
+        if (-not $a) { continue }
+        $ids = if ($a.type -in $script:VsatGraphHostTypes) { @(Get-VsatHostGuests $Context $a | Where-Object { Test-VsatAiWorkload $_ } | ForEach-Object { $_.id }) }
+        elseif ($a.type -eq 'datastore') { @($Context.in[$a.id] | Where-Object { $_ -and $_.type -eq 'stores' } | ForEach-Object { $Context.assets[$_.source] } | Where-Object { Test-VsatAiWorkload $_ } | ForEach-Object { $_.id } | Select-Object -Unique) }
+        else { @($a.id) }
+        $f.affectedWorkloads = [string[]](Get-VsatOrdinalSorted @($ids))
+    }
+}
+
+function Get-VsatAiWorkloads {
+    # analysis.aiWorkloads: every declared/tagged AI workload and every VM with accelerators, with
+    # its open findings (on the VM, or on infrastructure that affects it) and blast-radius paths.
+    param([AllowEmptyCollection()][object[]]$Findings, $Context, $Blast)
+    $byWl = @{}
+    foreach ($f in @($Findings | Where-Object { $_ -and $_.result -in @('FAIL', 'UNKNOWN', 'ERROR') })) {
+        $ids = @($f.assetId) + @(Get-VsatProp $f 'affectedWorkloads' @())
+        foreach ($id in ($ids | Select-Object -Unique)) { if (-not $byWl.ContainsKey($id)) { $byWl[$id] = [System.Collections.Generic.List[string]]::new() }; $byWl[$id].Add([string]$f.id) }
+    }
+    $out = [System.Collections.Generic.List[object]]::new()
+    foreach ($a in @($Context.evidence.assets | Where-Object { $_.type -in $script:VsatAiVmTypes -or $_.aiRole } | Sort-Object { [string]$_.id })) {
+        $i = Get-VsatAccelInfo $a
+        if (-not $a.aiRole -and $i.count -le 0) { continue }
+        $paths = @(@($Blast.paths) | Where-Object { $_ -and ([string]$_.crown -eq $a.id -or [string]$_.entry -eq $a.id) } | ForEach-Object { [string]$_.id })
+        $out.Add([ordered]@{
+                assetId = $a.id; name = $a.name; type = $a.type; role = $(if ($a.aiRole) { [string]$a.aiRole } else { $null }); roleSource = $(if ($a.aiRole) { [string]$a.aiRoleSource } else { $null })
+                platform = (Get-VsatAssetPlatform $a.type); accelerators = $(if ($i.state -eq 'ok') { $i.count } else { $null }); acceleratorKinds = @($i.devices | ForEach-Object { [string]$_.kind } | Select-Object -Unique)
+                findings = @($(if ($byWl.ContainsKey($a.id)) { $byWl[$a.id] })); blastPaths = $paths
+            })
+    }
+    return @($out)
+}
+
+function Get-VsatAiInfraCoverage {
+    # ai-infra domain state. NOT_APPLICABLE only with positive evidence: every VM accelerator fact and
+    # every host passthrough / GPU-partition fact collected with zero devices, no AI workload declared,
+    # and no failing ai-infra check. Gaps with no accelerator in sight are UNKNOWN; once accelerators
+    # are found the domain applies and gaps make it PARTIAL.
+    param([Parameter(Mandatory)]$Evidence, $Checks)
+    $devices = 0; $gpuHosts = 0; $checked = 0
+    $gaps = [System.Collections.Generic.List[string]]::new()
+    $notCollected = [System.Collections.Generic.List[string]]::new()
+    foreach ($a in $Evidence.assets) {
+        if ($a.type -in $script:VsatAiVmTypes) {
+            if ([bool](Get-VsatProp $a 'props.template' $false)) { continue }
+            $i = Get-VsatAccelInfo $a
+            $checked++
+            if ($i.state -eq 'ok') { $devices += $i.count }
+            elseif ($i.state -eq 'no-fact') { $notCollected.Add($a.name) }
+            else { $gaps.Add("$($a.name): accelerator inventory $($i.state)") }
+            continue
+        }
+        $fact = switch ($a.type) { 'host' { 'pciPassthru' } 'hyperv-host' { 'gpuPartition' } default { $null } }
+        if (-not $fact) { continue }
+        $checked++
+        $r = Resolve-VsatFactValue -Asset $a -Fact $fact
+        switch ($r.state) {
+            'ok' {
+                $n = if ($fact -eq 'pciPassthru') { @(@($r.value) | Where-Object { $_ -and ($_.passthruEnabled -or $_.passthruActive -or $_.sriovEnabled) }).Count } else { @(@($r.value) | Where-Object { $_ }).Count }
+                if ($n) { $gpuHosts++ }
+            }
+            'absent' { }
+            'no-fact' { $notCollected.Add($a.name) }
+            default { $gaps.Add("$($a.name): $fact $($r.state)") }
+        }
+    }
+    $declared = @($Evidence.assets | Where-Object { $_.aiRole }).Count
+    $scopeN = @(@(Get-VsatProp $Evidence.scope 'aiWorkloads' @()) | Where-Object { $_ }).Count
+    $fails = [int](Get-VsatProp $Checks 'FAIL' 0)
+    $gapN = [int](Get-VsatProp $Checks 'UNKNOWN' 0) + [int](Get-VsatProp $Checks 'ERROR' 0)
+    $applies = ($devices -gt 0 -or $gpuHosts -gt 0 -or $declared -gt 0 -or $scopeN -gt 0 -or $fails -gt 0)
+    $missing = [System.Collections.Generic.List[string]]::new()
+    foreach ($g in @($gaps | Select-Object -First 5)) { $missing.Add($g) }
+    if ($gaps.Count -gt 5) { $missing.Add("... and $($gaps.Count - 5) more") }
+    if ($notCollected.Count) { $missing.Add("Accelerator inventory not collected for $($notCollected.Count) asset(s) (evidence from an earlier VSAT version or collector); re-collect to assess: $(Format-VsatOtNames @($notCollected) 3)") }
+    $summary = "$devices accelerator/passthrough device(s) on VMs, $gpuHosts host(s) with passthrough, SR-IOV or GPU partitioning, $declared declared or tagged AI workload(s); $checked asset(s) checked."
+    if (-not $applies) {
+        if ($gaps.Count -or $notCollected.Count) {
+            return [ordered]@{ state = 'UNKNOWN'; label = 'UNKNOWN: ACCELERATOR INVENTORY INCOMPLETE'; detail = "Whether AI/GPU checks apply cannot be decided: $summary"; evidence = @(); missing = @($missing) }
+        }
+        return [ordered]@{ state = 'NOT_APPLICABLE'; label = 'NOT APPLICABLE: NO ACCELERATORS OR AI WORKLOADS'; detail = "$summary This is not an AI infrastructure pass."; evidence = @('No accelerators, passthrough devices or declared AI workloads observed'); missing = @() }
+    }
+    if ($gapN) { $missing.Add("$gapN check(s) lack evidence (UNKNOWN/ERROR)") }
+    $state = if ($missing.Count) { 'PARTIAL' } else { 'ASSESSED' }
+    return [ordered]@{ state = $state; label = $(if ($state -eq 'PARTIAL') { 'PARTIAL: AI / GPU INFRASTRUCTURE' } else { 'AI / GPU INFRASTRUCTURE ASSESSED' }); detail = $summary; evidence = @($summary); missing = @($missing) }
+}
+#endregion AI / accelerator evaluators
+
 # ---- src/70-Coverage.ps1 ----
 #region Coverage and status
 # Coverage is computed per domain from collector outcomes and check results. UNKNOWN
@@ -3751,6 +4500,8 @@ $script:VsatDomains = @(
     [ordered]@{ id = 'change-history'; name = 'Change history (engagement window)'; mandatory = $false; platform = 'audit'; collectors = @(); assetTypes = @() }
     # Lens driven by scope backupSystems; never mandatory.
     [ordered]@{ id = 'ransomware-readiness'; name = 'Ransomware readiness (backup systems)'; mandatory = $false; platform = 'cross-platform'; collectors = @(); assetTypes = @() }
+    # Accelerator isolation and AI storage across every platform; never mandatory.
+    [ordered]@{ id = 'ai-infra'; name = 'AI / GPU infrastructure'; mandatory = $false; platform = 'cross-platform'; collectors = @(); assetTypes = @() }
 )
 
 function Update-VsatNsxDiscovery {
@@ -3900,6 +4651,12 @@ function Get-VsatCoverage {
             if ($missing.Count) { $d.state = 'PARTIAL'; $d.label = 'PARTIAL: RANSOMWARE READINESS'; $d.missing = @($missing) }
             else { $d.label = 'RANSOMWARE READINESS ASSESSED' }
             $d.detail = "$(@($bk | Where-Object { $_.type -in $script:VsatRwVmTypes }).Count) backup VM(s) in scope; $($checks.total) check result(s)."
+            $domains.Add($d); continue
+        }
+        if ($def.id -eq 'ai-infra') {
+            $c = Get-VsatAiInfraCoverage -Evidence $Evidence -Checks $checks
+            foreach ($k in 'state', 'label', 'detail', 'evidence', 'missing') { $d[$k] = $c[$k] }
+            $d.mandatory = $false
             $domains.Add($d); continue
         }
         $platformEps = @(Get-VsatPlatformEndpoints -Evidence $Evidence -Platform $def.platform)
@@ -4081,9 +4838,24 @@ function Set-VsatScopeAnnotations {
     param([Parameter(Mandatory)]$Evidence)
     # OT lens: on only when at least one zone declares a valid Purdue level (0-5 or 'dmz').
     $script:VsatOtLens = Test-VsatOtLensDeclared -Scope $Evidence.scope
+    foreach ($w in @(Get-VsatProp $Evidence.scope 'aiWorkloads' @())) {
+        $role = [string](Get-VsatProp $w 'role' '')
+        if ($w -and $role -notin $script:VsatAiRoles) { Write-VsatLog -Level warn -Source 'scope' -Message "aiWorkloads entry '$(Get-VsatProp $w 'match' '')' has unknown role '$role'; expected one of $($script:VsatAiRoles -join ', ')" }
+    }
     foreach ($a in $Evidence.assets) {
         # A level from an earlier scope (replay with an updated scope file) never lingers.
         if ($a -is [System.Collections.IDictionary] -and $a.Contains('purdueLevel')) { $a.Remove('purdueLevel') }
+        # AI workload role: a role=<ai role> tag, overridden by scope aiWorkloads (never lingers across scopes).
+        if ($a -is [System.Collections.IDictionary]) { foreach ($k in 'aiRole', 'aiRoleSource') { if ($a.Contains($k)) { $a.Remove($k) } } }
+        $tagRole = @(@($a.tags) | Where-Object { $_ -like 'role=*' } | ForEach-Object { ([string]$_ -split '=', 2)[1] } | Where-Object { $_ -in $script:VsatAiRoles })[0]
+        if ($tagRole) { $a.aiRole = $tagRole; $a.aiRoleSource = 'tag' }
+        foreach ($w in @(Get-VsatProp $Evidence.scope 'aiWorkloads' @())) {
+            if (-not $w -or -not (Test-VsatAssetMatch -Asset $a -Match ([string](Get-VsatProp $w 'match' '')))) { continue }
+            $role = [string](Get-VsatProp $w 'role' '')
+            if ($role -in $script:VsatAiRoles) { $a.aiRole = $role; $a.aiRoleSource = 'operator' }
+            $wc = [string](Get-VsatProp $w 'criticality' '')
+            if ($wc -in @('high', 'medium', 'low')) { $a.criticality = $wc; $a.criticalitySource = 'operator' }
+        }
         foreach ($c in @($Evidence.scope.criticalAssets)) {
             if (Test-VsatAssetMatch -Asset $a -Match ([string]$c.match)) { $a.criticality = [string]$c.criticality; $a.criticalitySource = 'operator' }
         }
@@ -4537,6 +5309,7 @@ function Get-VsatCrownReason {
 Add-VsatCrownRule -Id 'management-plane' -Test { param($a) if ($a.type -in $script:VsatManagementPlaneTypes) { "management plane ($($a.type))" } }
 Add-VsatCrownRule -Id 'operator-high' -Test { param($a) if ($a.criticality -eq 'high' -and $a.criticalitySource -eq 'operator') { 'critical asset (operator)' } }
 Add-VsatCrownRule -Id 'ot-workload' -Test { param($a) if ($a.type -in $script:VsatGraphVmTypes -and (Get-VsatOtClass $a) -eq 'ot') { "OT workload (Purdue L$($a.purdueLevel))" } }
+Add-VsatCrownRule -Id 'ai-control-plane' -Test { param($a) if ($a.aiRole -in $script:VsatAiCrownRoles) { "AI control plane / data ($($a.aiRole))" } }
 Add-VsatCrownRule -Id 'inferred-high' -Test { param($a) if ($a.criticality -eq 'high') { "critical asset ($(if ($a.criticalitySource) { $a.criticalitySource } else { 'inferred' }))" } }
 
 function ConvertTo-VsatIpString {
@@ -6620,6 +7393,7 @@ function Invoke-VsatAnalysisPipeline {
     Update-VsatProgress -Message 'Evaluating rules'
     $eval = Invoke-VsatRules -Evidence $Evidence -ProfileName $ProfileName
     $findings = $eval.findings
+    Set-VsatAiAffectedWorkloads -Findings $findings -Context $eval.context
     Set-VsatExceptions -Evidence $Evidence -Findings $findings
     Update-VsatProgress -Message 'Building the engagement change timeline'
     $changes = Get-VsatChangeAnalysis -Evidence $Evidence
@@ -6641,7 +7415,7 @@ function Invoke-VsatAnalysisPipeline {
     $impact = Get-VsatImpact -Context $eval.context
     $wps = Get-VsatWorkPackages -Findings $findings
     $results = New-VsatResultsObject -Evidence $Evidence -Eval $eval -Coverage $coverage -Status $status -ProfileName $ProfileName
-    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; ransomware = $ransomware; workPackageCatalog = @(Get-VsatWorkPackageCatalog); changes = $changes }
+    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; ransomware = $ransomware; workPackageCatalog = @(Get-VsatWorkPackageCatalog); changes = $changes; aiWorkloads = @(Get-VsatAiWorkloads -Findings $findings -Context $eval.context -Blast $blast) }
     if ($BaselineEvidence) {
         Update-VsatProgress -Message 'Comparing with baseline'
         $saveIdx = $script:VsatAssetIndex
@@ -7999,6 +8773,72 @@ function Get-VsatFriendlyError {
 
 #region Embedded resources (plain text; data only, never executed)
 $script:VsatEmbedded = [ordered]@{
+    'rules/accel.json' = @'
+{
+  "rules": [
+    { "id": "AI-IOMMU-OFF", "title": "IOMMU is enabled on KVM hosts that pass devices through", "domain": "ai-infra", "assetType": "kvm-host", "severity": "critical",
+      "attack": { "mitigates": ["T1611"], "mitigation": "M1048", "status": "proposed" },
+      "check": { "type": "script", "name": "AccelIommu" },
+      "rationale": "Without an IOMMU (Intel VT-d / AMD-Vi) a GPU or other device passed to a guest can DMA into any host memory. One compromised training or inference guest then reads or rewrites the hypervisor and every other tenant.",
+      "mitigation": { "summary": "Enable the IOMMU in firmware and on the kernel command line before assigning devices to guests.", "steps": ["Enable VT-d / AMD-Vi in the server firmware", "Add intel_iommu=on (Intel) to GRUB_CMDLINE_LINUX, regenerate the grub config and reboot", "Confirm /sys/kernel/iommu_groups is populated before starting passthrough guests"], "workPackage": "WP-AI-ISOLATION" },
+      "limitations": "Reads /sys/kernel/iommu_groups and /proc/cmdline; dmesg is not read. Applies only when a guest on the host uses PCI passthrough, a mediated device or an SR-IOV VF.", "vsat": true },
+    { "id": "AI-IOMMU-IR", "title": "Interrupt remapping is enabled on KVM hosts that pass devices through", "domain": "ai-infra", "assetType": "kvm-host", "severity": "high",
+      "attack": { "mitigates": ["T1611", "T1068"], "mitigation": "M1048", "status": "proposed" },
+      "check": { "type": "script", "name": "AccelIommu", "requireIR": true },
+      "rationale": "Without interrupt remapping a passed-through device can forge MSI interrupts into the host, a known guest-to-host escalation path. It is a separate IOMMU capability from DMA remapping.",
+      "mitigation": { "summary": "Use hardware with interrupt remapping and do not disable it on the kernel command line.", "steps": ["Remove intremap=off or allow_unsafe_interrupts from the kernel and vfio module options", "Move passthrough workloads to hosts whose IOMMU supports interrupt remapping", "Re-run VSAT"], "workPackage": "WP-AI-ISOLATION" },
+      "limitations": "Reads the Intel VT-d extended capability register in /sys/class/iommu; hosts that do not expose it (AMD) report UNKNOWN.", "vsat": true },
+    { "id": "AI-ACS-OVERRIDE", "title": "PCIe ACS override is not used on KVM hosts", "domain": "ai-infra", "assetType": "kvm-host", "severity": "high",
+      "attack": { "mitigates": ["T1611"], "mitigation": "M1048", "status": "proposed" },
+      "check": { "type": "script", "name": "AccelAcsOverride" },
+      "rationale": "pcie_acs_override splits IOMMU groups the hardware cannot actually isolate. Devices passed to different guests can then reach each other by peer-to-peer DMA, which breaks tenant isolation between GPU workloads.",
+      "mitigation": { "summary": "Remove pcie_acs_override from the kernel command line and use hardware with proper ACS.", "steps": ["Edit GRUB_CMDLINE_LINUX to remove pcie_acs_override", "Regenerate the grub config and reboot", "Reassign passthrough devices per real IOMMU group"], "workPackage": "WP-AI-ISOLATION" },
+      "limitations": "Reads /proc/cmdline only; PCIe ACS capability bits are hidden from an unprivileged lspci and are recorded only when readable.", "vsat": true },
+    { "id": "AI-IOMMU-GROUP-SHARED", "title": "A passed-through device does not share its IOMMU group with another device", "domain": "ai-infra", "assetType": "kvm-vm", "severity": "high",
+      "attack": { "mitigates": ["T1611"], "mitigation": "M1048", "status": "proposed" },
+      "check": { "type": "script", "name": "AccelIommuGroup" },
+      "rationale": "The IOMMU isolates groups, not devices. A guest that owns one device of a group can reach every other device in it, such as a host NIC or a GPU assigned to another tenant.",
+      "mitigation": { "summary": "Pass through whole IOMMU groups, or move the device to a slot with its own group.", "steps": ["List /sys/kernel/iommu_groups/<n>/devices for the device", "Move the GPU to a slot behind an ACS-capable root port", "Assign every function of the slot to the same guest, and nothing else from the group"], "workPackage": "WP-AI-ISOLATION" },
+      "limitations": "Other functions of the same PCI slot count as the guest's own device. Bridges listed in the group are reported as shared devices.", "vsat": true },
+    { "id": "AI-GPU-SHARED-NO-MIG", "title": "A GPU shared by several guests uses MIG partitioning", "domain": "ai-infra", "assetType": "kvm-host", "severity": "medium",
+      "attack": { "mitigates": ["T1611"], "mitigation": "M1048", "status": "proposed" },
+      "check": { "type": "script", "name": "AccelMigIsolation" },
+      "rationale": "Time-sliced vGPU gives guests no memory or fault isolation on the GPU: a tenant can probe residual memory or crash the GPU for every other tenant. MIG partitions memory and compute in hardware.",
+      "mitigation": { "summary": "Enable MIG on GPUs shared between tenants, or give each tenant a dedicated GPU.", "steps": ["Enable MIG mode on the GPU (nvidia-smi, in a maintenance window)", "Recreate the vGPU/mdev devices from MIG-backed profiles", "Keep untrusted tenants on separate physical GPUs where MIG is unavailable"], "workPackage": "WP-AI-ISOLATION" },
+      "limitations": "Reads mediated devices from /sys/bus/mdev and MIG mode from nvidia-smi when it is installed. Non-NVIDIA mediated devices are treated as time-sliced.", "vsat": true },
+    { "id": "AI-SRIOV-HOST", "title": "SR-IOV virtual functions do not share a port with host management", "domain": "ai-infra", "assetType": ["host", "hyperv-host"], "severity": "medium",
+      "attack": { "mitigates": ["T1599", "T1557"], "mitigation": "M1037", "status": "proposed" },
+      "check": { "type": "script", "name": "AccelSriov" },
+      "rationale": "SR-IOV virtual functions bypass the virtual switch, its port security and its filters. On a NIC or Hyper-V switch that also carries host management, a guest with a VF sits next to the management network with no virtual-switch control in between.",
+      "mitigation": { "summary": "Keep SR-IOV on dedicated data NICs and switches that do not carry host management.", "steps": ["Move the management vmknic (or management OS vNIC) to NICs without SR-IOV", "On Hyper-V, set AllowManagementOS to false on SR-IOV switches", "Re-run VSAT"], "workPackage": "WP-AI-ISOLATION" },
+      "limitations": "ESXi: NIC-to-management mapping is derived for standard switches; management on a distributed switch is reported UNKNOWN. Hyper-V: switch-level setting only.", "vsat": true },
+    { "id": "AI-SHARE-WORLD", "title": "Model/dataset NFS exports are not world-writable or root-squash-exempt", "domain": "ai-infra", "assetType": "kvm-host", "severity": "critical",
+      "attack": { "mitigates": ["T1565.001", "AML.T0020", "AML.T0035"], "mitigation": "M1022", "status": "proposed" },
+      "check": { "type": "script", "name": "AccelShare", "kind": "exports" },
+      "rationale": "Training data and model weights are high-value targets (theft, poisoning, backdoored checkpoints). A world read-write or no_root_squash export lets any reachable client replace them.",
+      "mitigation": { "summary": "Restrict exports to named clients, keep root_squash and prefer sec=krb5p.", "steps": ["Edit /etc/exports: replace * with the GPU node subnet", "Remove no_root_squash", "Re-export with exportfs -ra"], "workPackage": "WP-AI-STORAGE" },
+      "limitations": "Reads /etc/exports and /etc/exports.d. All exports count on a host that runs an AI workload; elsewhere only exports whose path looks like model or dataset storage.", "vsat": true },
+    { "id": "AI-SHARE-SMB", "title": "Model/dataset SMB shares are not open to everyone and are encrypted", "domain": "ai-infra", "assetType": "hyperv-host", "severity": "high",
+      "attack": { "mitigates": ["T1565.001", "AML.T0020", "AML.T0035"], "mitigation": "M1022", "status": "proposed" },
+      "check": { "type": "script", "name": "AccelShare", "kind": "smb" },
+      "rationale": "An SMB share with Everyone or Authenticated Users at Full or Change lets any domain account read or replace training data and model weights; without SMB encryption the data crosses the network in clear text.",
+      "mitigation": { "summary": "Grant share access to named groups only and enable SMB encryption on model and dataset shares.", "steps": ["Revoke Everyone / Authenticated Users with Revoke-SmbShareAccess", "Grant the AI platform groups the rights they need", "Set-SmbShare -EncryptData $true on model and dataset shares"], "workPackage": "WP-AI-STORAGE" },
+      "limitations": "Share permissions only; NTFS permissions under the share are not read. Encryption is required for shares whose name or path looks like model or dataset storage.", "vsat": true },
+    { "id": "AI-SHARE-PLAINTEXT", "title": "Model/dataset storage traffic is protected in transit", "domain": "ai-infra", "assetType": ["datastore", "kvm-host"], "severity": "medium",
+      "attack": { "mitigates": ["T1040", "T1557", "AML.T0035"], "mitigation": "M1041", "status": "proposed" },
+      "check": { "type": "script", "name": "AccelNfsSec" },
+      "rationale": "Model weights and training data read over plain NFS (AUTH_SYS), unsealed SMB or plain-HTTP object storage can be copied or altered by anyone on the storage path.",
+      "mitigation": { "summary": "Use Kerberos NFS (krb5p, or krb5i on vSphere), SMB encryption and HTTPS object storage for AI data.", "steps": ["vSphere: remount the datastore as NFS 4.1 with Kerberos (SEC_KRB5I)", "KVM: mount model/dataset NFS exports with sec=krb5p, SMB shares with seal", "Point object storage mounts at HTTPS endpoints"], "workPackage": "WP-AI-STORAGE" },
+      "limitations": "vSphere NFS 4.1 offers Kerberos integrity (krb5i) but no encryption; krb5i passes. KVM mounts are read from /proc/mounts; object storage endpoints are judged only when the mount options show them.", "vsat": true },
+    { "id": "AI-K8S-CP-EXPOSED", "title": "A Kubernetes control plane is not reachable from workload networks", "domain": "ai-infra", "assetType": ["vm", "hyperv-vm", "kvm-vm"], "severity": "high",
+      "attack": { "mitigates": ["T1609", "T1610", "T1613"], "mitigation": "M1035", "status": "proposed" },
+      "check": { "type": "script", "name": "AccelK8sExposure" },
+      "rationale": "The Kubernetes API server, etcd and kubelet schedule and reconfigure every AI workload in the cluster. A network path from an ordinary workload to the control plane is one step from taking over the cluster and its GPUs.",
+      "mitigation": { "summary": "Allow control-plane ports (6443, 2379-2380, 10250) only from admin and worker networks.", "steps": ["Open the path in the Blast radius view", "Add a firewall rule that limits control-plane ports to admin and worker sources", "Re-run VSAT to confirm the path is gone"], "workPackage": "WP-AI-ISOLATION" },
+      "limitations": "Applies to VMs declared in scope aiWorkloads with role k8s-control-plane or tagged role=k8s-control-plane. Configuration-inferred reachability within the bounded blast-radius search.", "vsat": true }
+  ]
+}
+'@
     'rules/esxi.json' = @'
 {
   "rules": [
@@ -8792,7 +9632,7 @@ $script:VsatEmbedded = [ordered]@{
     'rules/pack.json' = @'
 {
   "schemaVersion": "2.0",
-  "version": "2026.09.2",
+  "version": "2026.09.3",
   "frameworkNotes": {
     "cis": "CIS control IDs carried over from the VSAT 1.x mapping (CIS VMware ESXi 7.0 Benchmark, edition not recorded). They are marked unverified until mapped against the licensed CIS ESXi 8.0 v1.4.0 / ESXi 7.0 v1.6.0 documents. CIS publishes no vCenter or NSX benchmark.",
     "scg": "Broadcom/VMware vSphere Security Configuration Guide setting or topic name. Guide edition to be confirmed during mapping review.",
@@ -8820,6 +9660,8 @@ $script:VsatEmbedded = [ordered]@{
     { "id": "WP-MGMT-ISOLATION", "title": "Isolate management planes from workload infrastructure", "team": "Virtualization platform / network security", "outcome": "vCenter, NSX Manager and hypervisor management interfaces run on dedicated management clusters and networks; workload admins cannot control them.", "prerequisites": ["Dedicated management cluster or host group", "Management VLAN with ACLs"], "impact": "Appliance migration and IP/VLAN changes.", "maintenanceWindow": true, "rollback": "Migrate appliances back; restore previous portgroup/VLAN.", "validation": "Re-run VSAT; blast-radius paths through the management plane are closed." },
     { "id": "WP-OT-SEGMENTATION", "title": "Separate OT workloads from IT at the virtualization layer", "team": "OT engineering / virtualization / network security", "outcome": "OT workloads run on dedicated hosts, switches and management, reachable from IT only through the OT DMZ.", "prerequisites": ["Asset owner approval and plant change window", "Validated backups of OT servers"], "impact": "VM migrations and network changes in the plant: coordinate with operations; never during production-critical windows.", "maintenanceWindow": true, "rollback": "Migrate VMs back; restore previous portgroup and permission settings from the evidence package.", "validation": "Re-run VSAT; OT-* findings PASS and Blast Radius shows no IT-to-OT path." },
     { "id": "WP-RANSOMWARE", "title": "Protect backups from a hypervisor-wide ransomware attack", "team": "Backup / virtualization platform / IAM", "outcome": "Backup systems run on their own cluster or host, have administrators of their own and are unreachable from any compromised account or workload.", "prerequisites": ["Inventory backup servers, proxies and repositories and declare them in scope backupSystems", "Confirm a restorable backup copy exists before moving backup infrastructure"], "impact": "Backup VM migrations and permission changes; schedule outside backup windows.", "maintenanceWindow": true, "rollback": "Migrate backup VMs back; restore previous permissions from the evidence package.", "validation": "Re-run VSAT; RW-* findings PASS and the Ransomware readiness page shows no path to a backup system." },
+    { "id": "WP-AI-ISOLATION", "title": "Enforce GPU and accelerator tenant isolation", "team": "AI platform / virtualization", "outcome": "IOMMU and interrupt remapping on, no ACS override, passthrough devices in isolated IOMMU groups, MIG or dedicated GPUs for shared use, SR-IOV off management ports, Kubernetes control planes reachable only from admin and worker networks.", "prerequisites": ["Hardware ACS and IOMMU capability review", "GPU tenancy model agreed with the AI platform owners"], "impact": "Host reboots for kernel and firmware changes; possible guest re-placement and GPU profile changes.", "maintenanceWindow": true, "rollback": "Restore the previous kernel command line, device assignment and firewall rules from the evidence package values.", "validation": "Re-run VSAT; ai-infra isolation findings PASS." },
+    { "id": "WP-AI-STORAGE", "title": "Protect model and dataset storage", "team": "Storage / AI platform", "outcome": "Model and dataset shares restricted to GPU nodes, root-squashed and encrypted in transit (Kerberos NFS, SMB encryption, HTTPS object storage).", "prerequisites": ["Inventory of the consumers of each share"], "impact": "Clients outside the allowed set lose access; Kerberos NFS needs keytabs on every client.", "maintenanceWindow": false, "rollback": "Restore the previous export options, share permissions and mount options.", "validation": "Re-run VSAT; ai-infra storage findings PASS." },
     { "id": "WP-MANUAL", "title": "Complete manual review items", "team": "Security assurance", "outcome": "Controls that cannot be automated are reviewed and evidenced.", "prerequisites": [], "impact": "None.", "maintenanceWindow": false, "rollback": "Not applicable.", "validation": "Record evidence and exceptions in the scope file." }
   ]
 }
@@ -10823,6 +11665,7 @@ $script:VsatEmbedded = [ordered]@{
   <a href="#findings" data-page="findings">Findings</a>
   <a href="#topology" data-page="topology">Topology</a>
   <a href="#nsx" data-page="nsx">NSX</a>
+  <a href="#ai" data-page="ai">AI infra</a>
   <a href="#changes" data-page="changes">Changes</a>
   <a href="#remediation" data-page="remediation">Remediation</a>
   <a href="#exports" data-page="exports">Exports</a>
@@ -10898,6 +11741,7 @@ $script:VsatEmbedded = [ordered]@{
   <section id="page-findings" class="page" data-page="findings" aria-labelledby="h-findings" hidden></section>
   <section id="page-topology" class="page" data-page="topology" aria-labelledby="h-topology" hidden></section>
   <section id="page-nsx" class="page" data-page="nsx" aria-labelledby="h-nsx" hidden></section>
+  <section id="page-ai" class="page" data-page="ai" aria-labelledby="h-ai" hidden></section>
   <section id="page-changes" class="page" data-page="changes" aria-labelledby="h-changes" hidden></section>
   <section id="page-remediation" class="page" data-page="remediation" aria-labelledby="h-remediation" hidden></section>
   <section id="page-exports" class="page" data-page="exports" aria-labelledby="h-exports" hidden></section>
@@ -11124,6 +11968,7 @@ main:focus { outline: none; }
 .metric .m-lbl { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); font-weight: 650; }
 .metric.sev-tile { border-left: 4px solid; padding: 8px 4px 8px 7px; }
 .metric.sev-tile .m-lbl { font-size: .62rem; letter-spacing: 0; white-space: nowrap; }
+.ai-hint pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .metric.sev-critical { border-left-color: var(--sev-critical); color: inherit; background: var(--surface-2); border-color: var(--border); border-left-color: var(--sev-critical); }
 .metric.sev-high { border-left-color: var(--sev-high); color: inherit; background: var(--surface-2); border-color: var(--border); border-left-color: var(--sev-high); }
 .metric.sev-medium { color: inherit; background: var(--surface-2); border-color: var(--border); border-left-color: var(--sev-medium); }
@@ -12716,7 +13561,7 @@ var VsatBlastView = (function () {
   // =====================================================================
   // Router
   // =====================================================================
-  const PAGES = ['overview', 'blast', 'ransomware', 'findings', 'topology', 'nsx', 'changes', 'remediation', 'exports'];
+  const PAGES = ['overview', 'blast', 'ransomware', 'findings', 'topology', 'nsx', 'ai', 'changes', 'remediation', 'exports'];
   const rendered = {};
   const renderers = {};
   function ensureRendered(p) {
@@ -14003,6 +14848,67 @@ var VsatBlastView = (function () {
     });
     if (!tf.length) wrap.appendChild(h('p', { class: 'muted' }, 'No ransomware-relevant findings in this assessment.'));
     el.appendChild(wrap);
+  };
+
+  // =====================================================================
+  // AI infra page
+  // =====================================================================
+  const AI_ROLE_LABEL = { 'k8s-control-plane': 'Kubernetes control plane', 'k8s-worker': 'Kubernetes worker', training: 'Training', inference: 'Inference', 'dataset-store': 'Dataset store', 'model-registry': 'Model registry' };
+  const AI_PLATFORM_LABEL = { vmware: 'vSphere', hyperv: 'Hyper-V', kvm: 'KVM' };
+  renderers.ai = function (el) {
+    const dom = coverageDomains().find(function (d) { return d.id === 'ai-infra'; }) ||
+      { id: 'ai-infra', name: 'AI / GPU infrastructure', mandatory: false, state: 'UNKNOWN', label: 'UNKNOWN: NOT IN THIS RESULTS FILE', detail: 'These results were produced before the AI / GPU checks existed. Replay the evidence package with this VSAT version.', checks: { total: 0 } };
+    const wls = arr(analysis.aiWorkloads).filter(function (w) { return w && typeof w === 'object'; });
+    const af = findings.filter(function (f) { return f.domain === 'ai-infra'; });
+    const byId = new Map(); findings.forEach(function (f) { byId.set(str(f.id), f); });
+    el.appendChild(pageHead('h-ai', 'AI infra', 'GPU and passthrough isolation, model and dataset storage, and Kubernetes control-plane exposure for AI workloads.'));
+    const withAcc = wls.filter(function (w) { return num(w.accelerators) > 0; }).length;
+    const declared = wls.filter(function (w) { return w.role; }).length;
+    const crowns = wls.filter(function (w) { return ['k8s-control-plane', 'model-registry', 'dataset-store'].indexOf(str(w.role)) >= 0; }).length;
+    const failN = af.filter(function (f) { return f.result === 'FAIL'; }).length;
+    const gapN = af.filter(function (f) { return f.result === 'UNKNOWN' || f.result === 'ERROR'; }).length;
+    const tile = function (v, l, s) { return h('div', { class: 'metric' }, h('div', { class: 'm-val' }, fmtN(v)), h('div', { class: 'm-lbl' }, l), s ? h('div', { class: 'small muted' }, s) : null); };
+    el.appendChild(h('div', { class: 'metric-row' },
+      tile(wls.length, 'AI workloads', declared + ' declared or tagged'), tile(withAcc, 'With accelerators', 'GPU, vGPU, passthrough or SR-IOV'),
+      tile(crowns, 'Crown jewels', 'control planes, registries, dataset stores'), tile(failN, 'Failing AI checks', 'ai-infra rules'), tile(gapN, 'Lacking evidence', 'UNKNOWN or ERROR, never a pass')));
+    const hint = h('div', { class: 'card ai-hint' }, h('h2', null, 'Declare AI workloads'),
+      h('p', { class: 'small' }, 'VMs with GPUs or passthrough devices are found automatically. Declare roles in the scope file so control planes, model registries and dataset stores become crown jewels in the Blast radius view (a ', h('span', { class: 'mono' }, 'role=<role>'), ' tag on the VM works too):'),
+      h('pre', { class: 'mono small' }, '"aiWorkloads": [\n  { "match": "name:k8s-cp*", "role": "k8s-control-plane" },\n  { "match": "tag:ml=train", "role": "training" }\n]'));
+    el.appendChild(h('div', { class: 'grid grid-2 section' }, coverageCard(dom), hint));
+    const openFails = function (w) { return arr(w.findings).map(function (id) { return byId.get(str(id)); }).filter(function (f) { return f && f.result === 'FAIL'; }); };
+    const wt = new DataTable({
+      caption: 'AI workloads', sortKey: 'fails', sortDir: 'desc', empty: 'No AI workloads: no VM has an accelerator or passthrough device and none is declared in scope aiWorkloads.',
+      columns: [
+        { key: 'name', label: 'Workload', cls: 'title-cell', sort: function (w) { return str(w.name); }, render: function (w) { return [assetById.has(str(w.assetId)) ? linkBtn(str(w.name), function () { openAsset(w.assetId); }) : h('span', null, str(w.name)), h('span', { class: 'sub' }, typeLabel(w.type))]; } },
+        { key: 'role', label: 'Role', sort: function (w) { return str(w.role); }, render: function (w) { return w.role ? h('span', null, AI_ROLE_LABEL[str(w.role)] || str(w.role), w.roleSource ? h('span', { class: 'sub' }, str(w.roleSource) === 'tag' ? 'from tag' : 'declared') : null) : h('span', { class: 'muted' }, '-'); } },
+        { key: 'platform', label: 'Platform', sort: function (w) { return str(w.platform); }, render: function (w) { return AI_PLATFORM_LABEL[str(w.platform)] || str(w.platform); } },
+        { key: 'acc', label: 'Accelerators', num: true, sort: function (w) { return num(w.accelerators); }, render: function (w) { return w.accelerators === null || w.accelerators === undefined ? h('span', { class: 'muted' }, 'not collected') : h('span', null, fmtN(w.accelerators), arr(w.acceleratorKinds).length ? h('span', { class: 'sub' }, arr(w.acceleratorKinds).join(', ')) : null); } },
+        { key: 'fails', label: 'Failing findings', defaultDir: 'desc', sort: function (w) { return openFails(w).length * 10 + (SEV_RANK[worstOf(openFails(w))] || 0); }, render: function (w) { const l = openFails(w); return l.length ? h('span', null, sevBadge(worstOf(l)), ' ', fmtN(l.length)) : h('span', { class: 'muted' }, 'none'); } },
+        { key: 'paths', label: 'Attack paths', num: true, sort: function (w) { return arr(w.blastPaths).length; }, render: function (w) { const n = arr(w.blastPaths).length; return n ? linkBtn(fmtN(n) + ' path' + (n === 1 ? '' : 's'), function () { go('blast'); }) : h('span', { class: 'muted' }, '0'); } }
+      ],
+      onRowClick: function (w) { if (assetById.has(str(w.assetId))) openAsset(w.assetId); }
+    });
+    wt.setRows(wls);
+    el.appendChild(h('div', { class: 'card section' }, h('h2', null, 'AI workloads (' + fmtN(wls.length) + ')'), wt.el));
+    const ft = new DataTable({
+      caption: 'AI and GPU findings', sortKey: 'result', sortDir: 'desc', empty: 'No applicable AI or GPU findings.',
+      columns: [
+        { key: 'result', label: 'Result', defaultDir: 'desc', sort: function (f) { return (RESULT_RANK[f.result] || 0) * 10 + (SEV_RANK[f.severity] || 0); }, render: function (f) { return resBadge(f.result); } },
+        { key: 'severity', label: 'Severity', defaultDir: 'desc', sort: function (f) { return SEV_RANK[f.severity] || 0; }, render: function (f) { return sevBadge(f.severity); } },
+        { key: 'title', label: 'Finding', cls: 'title-cell', sort: function (f) { return str(f.title); }, render: function (f) { return [linkBtn(str(f.title), function () { openFinding(f); }), h('span', { class: 'sub mono' }, str(f.ruleId))]; } },
+        { key: 'asset', label: 'Asset', sort: function (f) { return str(f.assetName); }, render: function (f) { return h('span', { class: 'break' }, str(f.assetName), h('span', { class: 'sub' }, typeLabel(f.assetType))); } },
+        { key: 'aff', label: 'Affected workloads', sort: function (f) { return arr(f.affectedWorkloads).length; }, render: function (f) { const l = arr(f.affectedWorkloads).filter(function (id) { return str(id) !== str(f.assetId); }); return l.length ? h('span', { class: 'break small' }, l.slice(0, 4).map(assetName).join(', ') + (l.length > 4 ? ' +' + (l.length - 4) : '')) : h('span', { class: 'muted' }, '-'); } },
+        { key: 'obs', label: 'Observed', sort: function (f) { return str(f.observed); }, render: function (f) { return h('span', { class: 'break small' }, trunc(f.observed, 140)); } }
+      ],
+      onRowClick: openFinding
+    });
+    const naN = af.filter(function (f) { return f.result === 'NOT_APPLICABLE'; }).length;
+    const naBox = h('input', { type: 'checkbox', id: 'ai-na' });
+    const applyNa = function () { ft.setRows(naBox.checked ? af : af.filter(function (f) { return f.result !== 'NOT_APPLICABLE'; })); };
+    on(naBox, 'change', applyNa);
+    applyNa();
+    el.appendChild(h('div', { class: 'card section' }, h('div', { class: 'card-head' }, h('h2', null, 'AI and GPU findings (' + fmtN(af.length - naN) + ' applicable)'),
+      h('label', { class: 'chip', for: 'ai-na' }, naBox, h('span', null, 'Show ' + fmtN(naN) + ' not applicable'))), ft.el));
   };
 
   // =====================================================================
@@ -15859,7 +16765,7 @@ var VsatBlastView = (function () {
   "schemaVersion": "2.3",
   "tool": {
     "name": "VSAT",
-    "version": "2.5.0"
+    "version": "2.6.0"
   },
   "run": {
     "id": "00000000-0000-4000-8000-000000000d30",
@@ -15976,7 +16882,16 @@ var VsatBlastView = (function () {
     "credentialStores": [],
     "identityGroups": [],
     "identityDomains": [],
-    "aiWorkloads": [],
+    "aiWorkloads": [
+      {
+        "match": "name:ai-train01",
+        "role": "training"
+      },
+      {
+        "match": "name:ai-infer01",
+        "role": "inference"
+      }
+    ],
     "signoffs": [],
     "backupSystems": [
       {
@@ -16514,6 +17429,71 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "graphics": {
+          "status": "ok",
+          "value": {
+            "defaultType": "shared",
+            "sharedPassthruAssignmentPolicy": "performance",
+            "devices": [
+              {
+                "pciId": "0000:3b:00.0",
+                "graphicsType": "direct",
+                "vmCount": 0
+              }
+            ]
+          }
+        },
+        "iommu": {
+          "status": "ok",
+          "value": {
+            "enabled": true,
+            "source": "inferred-from-active-passthrough"
+          }
+        },
+        "pciPassthru": {
+          "status": "ok",
+          "value": [
+            {
+              "id": "0000:3b:00.0",
+              "vendorId": "10de",
+              "deviceId": "2331",
+              "vendorName": "NVIDIA Corporation",
+              "deviceName": "GH100 [H100 PCIe]",
+              "classId": "0302",
+              "passthruCapable": true,
+              "passthruEnabled": true,
+              "passthruActive": true,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            },
+            {
+              "id": "0000:18:00.0",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            },
+            {
+              "id": "0000:18:00.1",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            }
+          ]
+        },
         "coredump": {
           "status": "ok",
           "value": {
@@ -16596,6 +17576,7 @@ var VsatBlastView = (function () {
       "props": {
         "device": "vmnic0",
         "mac": "00:50:56:01:00:00",
+        "pci": "0000:18:00.0",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -16636,6 +17617,7 @@ var VsatBlastView = (function () {
       "props": {
         "device": "vmnic1",
         "mac": "00:50:56:01:00:01",
+        "pci": "0000:18:00.1",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -16903,6 +17885,71 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "graphics": {
+          "status": "ok",
+          "value": {
+            "defaultType": "shared",
+            "sharedPassthruAssignmentPolicy": "performance",
+            "devices": [
+              {
+                "pciId": "0000:3b:00.0",
+                "graphicsType": "direct",
+                "vmCount": 0
+              }
+            ]
+          }
+        },
+        "iommu": {
+          "status": "ok",
+          "value": {
+            "enabled": true,
+            "source": "inferred-from-active-passthrough"
+          }
+        },
+        "pciPassthru": {
+          "status": "ok",
+          "value": [
+            {
+              "id": "0000:3b:00.0",
+              "vendorId": "10de",
+              "deviceId": "2331",
+              "vendorName": "NVIDIA Corporation",
+              "deviceName": "GH100 [H100 PCIe]",
+              "classId": "0302",
+              "passthruCapable": true,
+              "passthruEnabled": true,
+              "passthruActive": true,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            },
+            {
+              "id": "0000:18:00.0",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            },
+            {
+              "id": "0000:18:00.1",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            }
+          ]
+        },
         "coredump": {
           "status": "ok",
           "value": {
@@ -16979,6 +18026,7 @@ var VsatBlastView = (function () {
       "props": {
         "device": "vmnic0",
         "mac": "00:50:56:02:00:00",
+        "pci": "0000:18:00.0",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -17000,6 +18048,7 @@ var VsatBlastView = (function () {
       "props": {
         "device": "vmnic1",
         "mac": "00:50:56:02:00:01",
+        "pci": "0000:18:00.1",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -17248,6 +18297,46 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "graphics": {
+          "status": "absent",
+          "value": null
+        },
+        "iommu": {
+          "status": "unsupported",
+          "value": null,
+          "error": "ESXi does not report IOMMU state; it is inferred only from active passthrough devices"
+        },
+        "pciPassthru": {
+          "status": "ok",
+          "value": [
+            {
+              "id": "0000:18:00.0",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            },
+            {
+              "id": "0000:18:00.1",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            }
+          ]
+        },
         "coredump": {
           "status": "ok",
           "value": {
@@ -17324,6 +18413,7 @@ var VsatBlastView = (function () {
       "props": {
         "device": "vmnic0",
         "mac": "00:50:56:03:00:00",
+        "pci": "0000:18:00.0",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -17345,6 +18435,7 @@ var VsatBlastView = (function () {
       "props": {
         "device": "vmnic1",
         "mac": "00:50:56:03:00:01",
+        "pci": "0000:18:00.1",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -17593,6 +18684,46 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "graphics": {
+          "status": "absent",
+          "value": null
+        },
+        "iommu": {
+          "status": "unsupported",
+          "value": null,
+          "error": "ESXi does not report IOMMU state; it is inferred only from active passthrough devices"
+        },
+        "pciPassthru": {
+          "status": "ok",
+          "value": [
+            {
+              "id": "0000:18:00.0",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            },
+            {
+              "id": "0000:18:00.1",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            }
+          ]
+        },
         "coredump": {
           "status": "ok",
           "value": {
@@ -17669,6 +18800,7 @@ var VsatBlastView = (function () {
       "props": {
         "device": "vmnic0",
         "mac": "00:50:56:04:00:00",
+        "pci": "0000:18:00.0",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -17690,6 +18822,7 @@ var VsatBlastView = (function () {
       "props": {
         "device": "vmnic1",
         "mac": "00:50:56:04:00:01",
+        "pci": "0000:18:00.1",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -17976,6 +19109,33 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "graphics": {
+          "status": "absent",
+          "value": null
+        },
+        "iommu": {
+          "status": "unsupported",
+          "value": null,
+          "error": "ESXi does not report IOMMU state; it is inferred only from active passthrough devices"
+        },
+        "pciPassthru": {
+          "status": "ok",
+          "value": [
+            {
+              "id": "0000:18:00.0",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            }
+          ]
+        },
         "coredump": {
           "status": "ok",
           "value": {
@@ -18050,6 +19210,7 @@ var VsatBlastView = (function () {
       "props": {
         "device": "vmnic0",
         "mac": "00:50:56:05:00:00",
+        "pci": "0000:18:00.0",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -18644,7 +19805,8 @@ var VsatBlastView = (function () {
               "10.0.30.5"
             ],
             "type": "NFS",
-            "securityType": "AUTH_SYS"
+            "securityType": "AUTH_SYS",
+            "nfsVersion": "3"
           }
         }
       }
@@ -18759,6 +19921,13 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -18841,6 +20010,13 @@ var VsatBlastView = (function () {
               "port": "202"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -18926,6 +20102,13 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -19009,6 +20192,13 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -19091,6 +20281,13 @@ var VsatBlastView = (function () {
               "port": "205"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -19181,6 +20378,13 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -19263,6 +20467,13 @@ var VsatBlastView = (function () {
               "port": "207"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -19353,6 +20564,13 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -19436,6 +20654,13 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -19518,6 +20743,13 @@ var VsatBlastView = (function () {
               "port": "210"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -19608,6 +20840,13 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -19691,6 +20930,13 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -19773,6 +21019,13 @@ var VsatBlastView = (function () {
               "port": "213"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -19873,6 +21126,13 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -19961,6 +21221,20 @@ var VsatBlastView = (function () {
               "port": "215"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 1,
+            "devices": [
+              {
+                "kind": "passthrough",
+                "id": "0000:3b:00.0",
+                "vgpuProfile": null,
+                "pfId": null
+              }
+            ]
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -20051,6 +21325,20 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 1,
+            "devices": [
+              {
+                "kind": "passthrough",
+                "id": "0000:3b:00.0",
+                "vgpuProfile": null,
+                "pfId": null
+              }
+            ]
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -20133,6 +21421,13 @@ var VsatBlastView = (function () {
               "port": "217"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -20217,6 +21512,13 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -20299,6 +21601,13 @@ var VsatBlastView = (function () {
               "port": "219"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -20383,6 +21692,13 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -20466,6 +21782,13 @@ var VsatBlastView = (function () {
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -20546,6 +21869,13 @@ var VsatBlastView = (function () {
               "port": "222"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",

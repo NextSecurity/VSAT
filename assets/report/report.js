@@ -505,7 +505,7 @@
   // =====================================================================
   // Router
   // =====================================================================
-  const PAGES = ['overview', 'blast', 'ransomware', 'findings', 'topology', 'nsx', 'changes', 'remediation', 'exports'];
+  const PAGES = ['overview', 'blast', 'ransomware', 'findings', 'topology', 'nsx', 'ai', 'changes', 'remediation', 'exports'];
   const rendered = {};
   const renderers = {};
   function ensureRendered(p) {
@@ -1792,6 +1792,67 @@
     });
     if (!tf.length) wrap.appendChild(h('p', { class: 'muted' }, 'No ransomware-relevant findings in this assessment.'));
     el.appendChild(wrap);
+  };
+
+  // =====================================================================
+  // AI infra page
+  // =====================================================================
+  const AI_ROLE_LABEL = { 'k8s-control-plane': 'Kubernetes control plane', 'k8s-worker': 'Kubernetes worker', training: 'Training', inference: 'Inference', 'dataset-store': 'Dataset store', 'model-registry': 'Model registry' };
+  const AI_PLATFORM_LABEL = { vmware: 'vSphere', hyperv: 'Hyper-V', kvm: 'KVM' };
+  renderers.ai = function (el) {
+    const dom = coverageDomains().find(function (d) { return d.id === 'ai-infra'; }) ||
+      { id: 'ai-infra', name: 'AI / GPU infrastructure', mandatory: false, state: 'UNKNOWN', label: 'UNKNOWN: NOT IN THIS RESULTS FILE', detail: 'These results were produced before the AI / GPU checks existed. Replay the evidence package with this VSAT version.', checks: { total: 0 } };
+    const wls = arr(analysis.aiWorkloads).filter(function (w) { return w && typeof w === 'object'; });
+    const af = findings.filter(function (f) { return f.domain === 'ai-infra'; });
+    const byId = new Map(); findings.forEach(function (f) { byId.set(str(f.id), f); });
+    el.appendChild(pageHead('h-ai', 'AI infra', 'GPU and passthrough isolation, model and dataset storage, and Kubernetes control-plane exposure for AI workloads.'));
+    const withAcc = wls.filter(function (w) { return num(w.accelerators) > 0; }).length;
+    const declared = wls.filter(function (w) { return w.role; }).length;
+    const crowns = wls.filter(function (w) { return ['k8s-control-plane', 'model-registry', 'dataset-store'].indexOf(str(w.role)) >= 0; }).length;
+    const failN = af.filter(function (f) { return f.result === 'FAIL'; }).length;
+    const gapN = af.filter(function (f) { return f.result === 'UNKNOWN' || f.result === 'ERROR'; }).length;
+    const tile = function (v, l, s) { return h('div', { class: 'metric' }, h('div', { class: 'm-val' }, fmtN(v)), h('div', { class: 'm-lbl' }, l), s ? h('div', { class: 'small muted' }, s) : null); };
+    el.appendChild(h('div', { class: 'metric-row' },
+      tile(wls.length, 'AI workloads', declared + ' declared or tagged'), tile(withAcc, 'With accelerators', 'GPU, vGPU, passthrough or SR-IOV'),
+      tile(crowns, 'Crown jewels', 'control planes, registries, dataset stores'), tile(failN, 'Failing AI checks', 'ai-infra rules'), tile(gapN, 'Lacking evidence', 'UNKNOWN or ERROR, never a pass')));
+    const hint = h('div', { class: 'card ai-hint' }, h('h2', null, 'Declare AI workloads'),
+      h('p', { class: 'small' }, 'VMs with GPUs or passthrough devices are found automatically. Declare roles in the scope file so control planes, model registries and dataset stores become crown jewels in the Blast radius view (a ', h('span', { class: 'mono' }, 'role=<role>'), ' tag on the VM works too):'),
+      h('pre', { class: 'mono small' }, '"aiWorkloads": [\n  { "match": "name:k8s-cp*", "role": "k8s-control-plane" },\n  { "match": "tag:ml=train", "role": "training" }\n]'));
+    el.appendChild(h('div', { class: 'grid grid-2 section' }, coverageCard(dom), hint));
+    const openFails = function (w) { return arr(w.findings).map(function (id) { return byId.get(str(id)); }).filter(function (f) { return f && f.result === 'FAIL'; }); };
+    const wt = new DataTable({
+      caption: 'AI workloads', sortKey: 'fails', sortDir: 'desc', empty: 'No AI workloads: no VM has an accelerator or passthrough device and none is declared in scope aiWorkloads.',
+      columns: [
+        { key: 'name', label: 'Workload', cls: 'title-cell', sort: function (w) { return str(w.name); }, render: function (w) { return [assetById.has(str(w.assetId)) ? linkBtn(str(w.name), function () { openAsset(w.assetId); }) : h('span', null, str(w.name)), h('span', { class: 'sub' }, typeLabel(w.type))]; } },
+        { key: 'role', label: 'Role', sort: function (w) { return str(w.role); }, render: function (w) { return w.role ? h('span', null, AI_ROLE_LABEL[str(w.role)] || str(w.role), w.roleSource ? h('span', { class: 'sub' }, str(w.roleSource) === 'tag' ? 'from tag' : 'declared') : null) : h('span', { class: 'muted' }, '-'); } },
+        { key: 'platform', label: 'Platform', sort: function (w) { return str(w.platform); }, render: function (w) { return AI_PLATFORM_LABEL[str(w.platform)] || str(w.platform); } },
+        { key: 'acc', label: 'Accelerators', num: true, sort: function (w) { return num(w.accelerators); }, render: function (w) { return w.accelerators === null || w.accelerators === undefined ? h('span', { class: 'muted' }, 'not collected') : h('span', null, fmtN(w.accelerators), arr(w.acceleratorKinds).length ? h('span', { class: 'sub' }, arr(w.acceleratorKinds).join(', ')) : null); } },
+        { key: 'fails', label: 'Failing findings', defaultDir: 'desc', sort: function (w) { return openFails(w).length * 10 + (SEV_RANK[worstOf(openFails(w))] || 0); }, render: function (w) { const l = openFails(w); return l.length ? h('span', null, sevBadge(worstOf(l)), ' ', fmtN(l.length)) : h('span', { class: 'muted' }, 'none'); } },
+        { key: 'paths', label: 'Attack paths', num: true, sort: function (w) { return arr(w.blastPaths).length; }, render: function (w) { const n = arr(w.blastPaths).length; return n ? linkBtn(fmtN(n) + ' path' + (n === 1 ? '' : 's'), function () { go('blast'); }) : h('span', { class: 'muted' }, '0'); } }
+      ],
+      onRowClick: function (w) { if (assetById.has(str(w.assetId))) openAsset(w.assetId); }
+    });
+    wt.setRows(wls);
+    el.appendChild(h('div', { class: 'card section' }, h('h2', null, 'AI workloads (' + fmtN(wls.length) + ')'), wt.el));
+    const ft = new DataTable({
+      caption: 'AI and GPU findings', sortKey: 'result', sortDir: 'desc', empty: 'No applicable AI or GPU findings.',
+      columns: [
+        { key: 'result', label: 'Result', defaultDir: 'desc', sort: function (f) { return (RESULT_RANK[f.result] || 0) * 10 + (SEV_RANK[f.severity] || 0); }, render: function (f) { return resBadge(f.result); } },
+        { key: 'severity', label: 'Severity', defaultDir: 'desc', sort: function (f) { return SEV_RANK[f.severity] || 0; }, render: function (f) { return sevBadge(f.severity); } },
+        { key: 'title', label: 'Finding', cls: 'title-cell', sort: function (f) { return str(f.title); }, render: function (f) { return [linkBtn(str(f.title), function () { openFinding(f); }), h('span', { class: 'sub mono' }, str(f.ruleId))]; } },
+        { key: 'asset', label: 'Asset', sort: function (f) { return str(f.assetName); }, render: function (f) { return h('span', { class: 'break' }, str(f.assetName), h('span', { class: 'sub' }, typeLabel(f.assetType))); } },
+        { key: 'aff', label: 'Affected workloads', sort: function (f) { return arr(f.affectedWorkloads).length; }, render: function (f) { const l = arr(f.affectedWorkloads).filter(function (id) { return str(id) !== str(f.assetId); }); return l.length ? h('span', { class: 'break small' }, l.slice(0, 4).map(assetName).join(', ') + (l.length > 4 ? ' +' + (l.length - 4) : '')) : h('span', { class: 'muted' }, '-'); } },
+        { key: 'obs', label: 'Observed', sort: function (f) { return str(f.observed); }, render: function (f) { return h('span', { class: 'break small' }, trunc(f.observed, 140)); } }
+      ],
+      onRowClick: openFinding
+    });
+    const naN = af.filter(function (f) { return f.result === 'NOT_APPLICABLE'; }).length;
+    const naBox = h('input', { type: 'checkbox', id: 'ai-na' });
+    const applyNa = function () { ft.setRows(naBox.checked ? af : af.filter(function (f) { return f.result !== 'NOT_APPLICABLE'; })); };
+    on(naBox, 'change', applyNa);
+    applyNa();
+    el.appendChild(h('div', { class: 'card section' }, h('div', { class: 'card-head' }, h('h2', null, 'AI and GPU findings (' + fmtN(af.length - naN) + ' applicable)'),
+      h('label', { class: 'chip', for: 'ai-na' }, naBox, h('span', null, 'Show ' + fmtN(naN) + ' not applicable'))), ft.el));
   };
 
   // =====================================================================

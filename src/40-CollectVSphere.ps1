@@ -13,7 +13,7 @@ $script:VsatEsxcliAllowed = @(
 
 # Every per-host configuration fact the vSphere collector records (used to mark all of them
 # when a host is unreachable or its collection fails part-way).
-$script:VsatHostFactNames = @('lockdown', 'advanced', 'services', 'ntp', 'firewall', 'certificate', 'secureBoot', 'attestation', 'acceptance', 'kernel', 'modules', 'coredump', 'syslog', 'iscsiAdapters', 'network', 'neighbors', 'vmkernel')
+$script:VsatHostFactNames = @('lockdown', 'advanced', 'services', 'ntp', 'firewall', 'certificate', 'secureBoot', 'attestation', 'acceptance', 'kernel', 'modules', 'coredump', 'syslog', 'iscsiAdapters', 'network', 'neighbors', 'vmkernel', 'pciPassthru', 'graphics', 'iommu')
 
 function Import-VsatPowerCli {
     # Loads the core PowerCLI module process-locally (offline package ./modules first).
@@ -165,7 +165,7 @@ function Invoke-VsatVSphereCollection {
     }
 
     Invoke-VsatCollector -Evidence $Evidence -Name 'vsphere.hosts' -Endpoint $ep -Affects @('ESXI-*') -Script {
-        $props = 'Name', 'Parent', 'Runtime', 'Summary.Config.Product', 'Config.LockdownMode', 'Config.AdminDisabled', 'Config.Certificate', 'Config.Network', 'Config.DateTimeInfo', 'Config.Option', 'Config.Service', 'Config.Firewall', 'Config.StorageDevice', 'Capability', 'ConfigManager', 'Datastore', 'Hardware.SystemInfo'
+        $props = 'Name', 'Parent', 'Runtime', 'Summary.Config.Product', 'Config.LockdownMode', 'Config.AdminDisabled', 'Config.Certificate', 'Config.Network', 'Config.DateTimeInfo', 'Config.Option', 'Config.Service', 'Config.Firewall', 'Config.StorageDevice', 'Config.PciPassthruInfo', 'Capability', 'ConfigManager', 'Datastore', 'Hardware.SystemInfo', 'Hardware.PciDevice'
         $hosts = Get-View -Server $srv -ViewType HostSystem -Property $props
         $n = 0; $total = 0; $down = 0; $broken = 0
         foreach ($h in $hosts) {
@@ -216,6 +216,19 @@ function Invoke-VsatVSphereCollection {
                     if ($null -eq $t) { return $null }
                     [ordered]@{ status = [string]$t.Status; message = $(if ($t.Message) { $t.Message.Message } else { $null }) }
                 }
+                # Accelerators: passthrough / SR-IOV state and host graphics. ESXi reports no IOMMU
+                # flag; active passthrough requires VT-d/AMD-Vi, so that is the only IOMMU evidence.
+                Invoke-VsatFact $a 'pciPassthru' {
+                    if ($null -eq $h.Config.PciPassthruInfo) { throw 'PciPassthruInfo is not supported by this host' }
+                    , @(ConvertTo-VsatPciPassthru -PassthruInfo @($h.Config.PciPassthruInfo) -PciDevice @($h.Hardware.PciDevice))
+                }
+                Invoke-VsatFact $a 'graphics' {
+                    if (-not $h.ConfigManager.GraphicsManager) { return $null }
+                    $gm = Get-View -Server $srv -Id $h.ConfigManager.GraphicsManager -Property GraphicsInfo, GraphicsConfig -ErrorAction Stop
+                    [ordered]@{ defaultType = [string]$gm.GraphicsConfig.HostDefaultGraphicsType; sharedPassthruAssignmentPolicy = [string]$gm.GraphicsConfig.SharedPassthruAssignmentPolicy; devices = @($gm.GraphicsInfo | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ pciId = [string]$_.PciId; graphicsType = [string]$_.GraphicsType; vmCount = @($_.Vm).Count } }) }
+                }
+                if ($a.facts.pciPassthru.status -eq 'ok' -and @($a.facts.pciPassthru.value | Where-Object { $_.passthruActive }).Count) { Set-VsatFact -Asset $a -Name 'iommu' -Value ([ordered]@{ enabled = $true; source = 'inferred-from-active-passthrough' }) }
+                else { Set-VsatFact -Asset $a -Name 'iommu' -Status unsupported -Value $null -ErrorMessage 'ESXi does not report IOMMU state; it is inferred only from active passthrough devices' }
                 $esx = $null
                 try { $esx = Get-EsxCli -Server $srv -VMHost (Get-VMHost -Server $srv -Id $h.MoRef -ErrorAction Stop) -V2 -ErrorAction Stop }
                 catch { foreach ($f in 'acceptance', 'coredump', 'syslog', 'kernel', 'modules', 'iscsiAdapters') { Set-VsatFact -Asset $a -Name $f -Status (Get-VsatErrorClass $_) -Value $null -ErrorMessage $_.Exception.Message } }
@@ -335,7 +348,7 @@ function Invoke-VsatVSphereCollection {
         foreach ($d in $dss) {
             $did = "${ep}:" + (Get-VsatMoRef $d)
             $info = $d.Info
-            $nas = if ($info.PSObject.Properties['Nas'] -and $info.Nas) { [ordered]@{ remoteHost = $info.Nas.RemoteHost; remoteHosts = @($info.Nas.RemoteHostNames); type = $info.Nas.Type; securityType = $info.Nas.SecurityType } } else { $null }
+            $nas = if ($info.PSObject.Properties['Nas'] -and $info.Nas) { [ordered]@{ remoteHost = $info.Nas.RemoteHost; remoteHosts = @($info.Nas.RemoteHostNames); type = $info.Nas.Type; securityType = $info.Nas.SecurityType; nfsVersion = $(if ([string]$info.Nas.Type -eq 'NFS41') { '4.1' } elseif ([string]$info.Nas.Type -eq 'NFS') { '3' } else { $null }) } } else { $null }
             $a = Add-VsatAsset -Evidence $Evidence -Id $did -Type 'datastore' -Name $d.Name -Endpoint $ep -Props ([ordered]@{ type = [string]$d.Summary.Type; capacityGB = [math]::Round($d.Summary.Capacity / 1GB, 1); freeGB = [math]::Round($d.Summary.FreeSpace / 1GB, 1); accessible = [bool]$d.Summary.Accessible; multipleHostAccess = $d.Summary.MultipleHostAccess; hostCount = @($d.Host).Count })
             if ($nas) { Set-VsatFact -Asset $a -Name 'nas' -Value $nas }
             if ([string]$d.Summary.Type -eq 'vsan') {
@@ -361,7 +374,7 @@ function Invoke-VsatVSphereCollection {
             $c = $v.Config
             if ($null -eq $c) {
                 $a = Add-VsatAsset -Evidence $Evidence -Id $vid -Type 'vm' -Name $v.Name -Endpoint $ep
-                foreach ($f in 'extraConfig', 'devices', 'security') { Set-VsatFact -Asset $a -Name $f -Status error -Value $null -ErrorMessage 'VM configuration unavailable (orphaned or inaccessible)' }
+                foreach ($f in 'extraConfig', 'devices', 'security', 'accel') { Set-VsatFact -Asset $a -Name $f -Status error -Value $null -ErrorMessage 'VM configuration unavailable (orphaned or inaccessible)' }
                 continue
             }
             $ips = @($v.Guest.Net | Where-Object { $null -ne $_ } | ForEach-Object { $_.IpAddress } | Where-Object { $_ })
@@ -399,6 +412,7 @@ function Invoke-VsatVSphereCollection {
                         }
                     })
             }
+            Invoke-VsatFact $a 'accel' { ConvertTo-VsatVmAccel @($c.Hardware.Device) }
             foreach ($d in @($a.facts.devices.value | Where-Object { $null -ne $_ -and $_.Contains('mac') })) {
                 if ($d.network) { Add-VsatRelationship -Evidence $Evidence -Source $vid -Target $d.network -Type connects -Provenance 'vsphere.vms' -Props ([ordered]@{ nic = $d.label }) }
                 elseif ($d.portgroupKey) {
@@ -433,7 +447,7 @@ function Add-VsatHostNetwork {
     $pnicIds = @{}
     foreach ($p in $net.Pnic) {
         $pid2 = "${hid}/pnic/" + $p.Device
-        $pa = Add-VsatAsset -Evidence $Evidence -Id $pid2 -Type 'pnic' -Name ("{0} {1}" -f $Asset.name, $p.Device) -Endpoint $ep -Props ([ordered]@{ device = $p.Device; mac = $p.Mac; linkUp = [bool]$p.LinkSpeed; speedMb = $(if ($p.LinkSpeed) { $p.LinkSpeed.SpeedMb } else { 0 }) })
+        $pa = Add-VsatAsset -Evidence $Evidence -Id $pid2 -Type 'pnic' -Name ("{0} {1}" -f $Asset.name, $p.Device) -Endpoint $ep -Props ([ordered]@{ device = $p.Device; mac = $p.Mac; pci = [string]$p.Pci; linkUp = [bool]$p.LinkSpeed; speedMb = $(if ($p.LinkSpeed) { $p.LinkSpeed.SpeedMb } else { 0 }) })
         Add-VsatRelationship -Evidence $Evidence -Source $hid -Target $pid2 -Type contains -Provenance 'vsphere.hosts'
         $pnicIds[$p.Key] = $pid2
     }

@@ -1,0 +1,52 @@
+{
+  "collectorVersion": "1",
+  "collectedUtc": "2026-09-23T08:00:00Z",
+  "host": {
+    "name": "hvgpu01",
+    "domain": "example.local",
+    "fqdn": "hvgpu01.example.local",
+    "os": { "caption": "Microsoft Windows Server 2025 Datacenter", "version": "10.0.26100", "build": "26100", "installationType": "Server Core", "ubr": 1742 },
+    "facts": {
+      "vmhost": { "status": "ok", "value": { "migrationEnabled": false, "migrationAuth": "Kerberos", "anyNetworkForMigration": false, "enhancedSessionMode": false, "numaSpanning": false, "logicalProcessors": 96, "memoryGB": 1024 } },
+      "hotfix": { "status": "ok", "value": { "lastInstalledUtc": "2026-09-10T00:00:00Z", "lastId": "KB5065426", "count": 12, "ageDays": 13 } },
+      "secureBoot": { "status": "ok", "value": true },
+      "smb": { "status": "ok", "value": { "smb1": false, "requireSigning": true, "encryptData": false } },
+      "gpuPartition": { "status": "ok", "value": [ { "name": "\\\\?\\PCI#VEN_10DE&DEV_2331&SUBSYS_16C110DE&REV_A1#4&2d5b1a3c&0&0000#{064092b3-625e-43bf-9eb5-dc845897dd59}", "partitionCount": 4, "validPartitionCounts": [ 1, 2, 4, 8 ], "totalVRAM": "85899345920" } ] },
+      "assignable": { "status": "absent", "value": null },
+      "sriov": { "status": "ok", "value": [ { "switch": "vSwitch-SRIOV", "iovEnabled": true, "iovSupport": true, "iovSupportReasons": [], "allowManagementOS": true } ] },
+      "smbShares": { "status": "ok", "value": [
+        { "name": "datasets", "path": "D:\\Shares\\datasets", "encryptData": false, "folderEnumerationMode": "Unrestricted", "access": [ { "account": "Everyone", "right": "Full", "type": "Allow" } ] },
+        { "name": "profiles", "path": "D:\\Shares\\profiles", "encryptData": true, "folderEnumerationMode": "AccessBased", "access": [ { "account": "EXAMPLE\\ml-team", "right": "Change", "type": "Allow" } ] }
+      ] }
+    }
+  },
+  "switches": [
+    { "id": "sw-sriov-1", "name": "vSwitch-SRIOV", "type": "External", "allowManagementOS": true, "embeddedTeaming": false, "iov": true, "uplinks": [ "Mellanox ConnectX-7 #1" ], "extensions": [] }
+  ],
+  "vms": [
+    {
+      "id": "00000000-0000-4000-8000-000000000021", "name": "infer01", "state": "Running", "generation": 2, "configVersion": "12.0", "clustered": false, "automaticStart": "StartIfRunning", "checkpointType": "Production",
+      "facts": {
+        "security": { "status": "ok", "value": { "tpm": true, "shielded": false, "encryptState": true } },
+        "firmware": { "status": "ok", "value": { "generation": 2, "secureBoot": "On", "template": "MicrosoftUEFICertificateAuthority" } },
+        "adapters": { "status": "ok", "value": [ { "name": "Network Adapter", "switch": "vSwitch-SRIOV", "switchId": "sw-sriov-1", "mac": "00155D0B0021", "macSpoofing": "Off", "dhcpGuard": "On", "routerGuard": "On", "portMirroring": "None", "vlanMode": "Access", "accessVlan": 40, "allowedVlans": "", "ips": [ "10.20.50.21" ] } ] },
+        "integration": { "status": "ok", "value": [ { "name": "Guest Service Interface", "enabled": false }, { "name": "Heartbeat", "enabled": true } ] },
+        "checkpoints": { "status": "absent", "value": null },
+        "devices": { "status": "ok", "value": [ { "type": "disk", "path": "D:\\VMs\\infer01\\infer01.vhdx", "controller": "SCSI" } ] },
+        "accel": { "status": "ok", "value": { "count": 1, "devices": [ { "kind": "gpu-p", "locationPath": "\\\\?\\PCI#VEN_10DE&DEV_2331&SUBSYS_16C110DE&REV_A1#4&2d5b1a3c&0&0000#{064092b3-625e-43bf-9eb5-dc845897dd59}", "lowMMIO": 134217728, "highMMIO": 34359738368 } ] } }
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000022", "name": "cpu01", "state": "Running", "generation": 2, "configVersion": "12.0", "clustered": false, "automaticStart": "StartIfRunning", "checkpointType": "Production",
+      "facts": {
+        "security": { "status": "ok", "value": { "tpm": true, "shielded": false, "encryptState": true } },
+        "firmware": { "status": "ok", "value": { "generation": 2, "secureBoot": "On", "template": "MicrosoftWindows" } },
+        "adapters": { "status": "ok", "value": [ { "name": "Network Adapter", "switch": "vSwitch-SRIOV", "switchId": "sw-sriov-1", "mac": "00155D0B0022", "macSpoofing": "Off", "dhcpGuard": "On", "routerGuard": "On", "portMirroring": "None", "vlanMode": "Access", "accessVlan": 40, "allowedVlans": "", "ips": [ "10.20.50.22" ] } ] },
+        "integration": { "status": "ok", "value": [ { "name": "Guest Service Interface", "enabled": false }, { "name": "Heartbeat", "enabled": true } ] },
+        "checkpoints": { "status": "absent", "value": null },
+        "devices": { "status": "ok", "value": [ { "type": "disk", "path": "D:\\VMs\\cpu01\\cpu01.vhdx", "controller": "SCSI" } ] },
+        "accel": { "status": "ok", "value": { "count": 0, "devices": [] } }
+      }
+    }
+  ]
+}

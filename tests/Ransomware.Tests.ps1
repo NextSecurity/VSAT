@@ -60,7 +60,7 @@ Describe 'backupSystems scope key' {
         $n.crownReason | Should -Be 'backup infrastructure'
     }
     It 'registers the backup crown rule right after the management plane' {
-        @($script:VsatCrownRules | ForEach-Object id) | Should -Be @('management-plane', 'backup-system', 'operator-high', 'ot-workload', 'inferred-high')
+        @($script:VsatCrownRules | ForEach-Object id) | Should -Be @('management-plane', 'backup-system', 'operator-high', 'ot-workload', 'ai-control-plane', 'inferred-high')
     }
 }
 

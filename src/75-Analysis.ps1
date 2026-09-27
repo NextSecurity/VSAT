@@ -49,9 +49,24 @@ function Set-VsatScopeAnnotations {
     param([Parameter(Mandatory)]$Evidence)
     # OT lens: on only when at least one zone declares a valid Purdue level (0-5 or 'dmz').
     $script:VsatOtLens = Test-VsatOtLensDeclared -Scope $Evidence.scope
+    foreach ($w in @(Get-VsatProp $Evidence.scope 'aiWorkloads' @())) {
+        $role = [string](Get-VsatProp $w 'role' '')
+        if ($w -and $role -notin $script:VsatAiRoles) { Write-VsatLog -Level warn -Source 'scope' -Message "aiWorkloads entry '$(Get-VsatProp $w 'match' '')' has unknown role '$role'; expected one of $($script:VsatAiRoles -join ', ')" }
+    }
     foreach ($a in $Evidence.assets) {
         # A level from an earlier scope (replay with an updated scope file) never lingers.
         if ($a -is [System.Collections.IDictionary] -and $a.Contains('purdueLevel')) { $a.Remove('purdueLevel') }
+        # AI workload role: a role=<ai role> tag, overridden by scope aiWorkloads (never lingers across scopes).
+        if ($a -is [System.Collections.IDictionary]) { foreach ($k in 'aiRole', 'aiRoleSource') { if ($a.Contains($k)) { $a.Remove($k) } } }
+        $tagRole = @(@($a.tags) | Where-Object { $_ -like 'role=*' } | ForEach-Object { ([string]$_ -split '=', 2)[1] } | Where-Object { $_ -in $script:VsatAiRoles })[0]
+        if ($tagRole) { $a.aiRole = $tagRole; $a.aiRoleSource = 'tag' }
+        foreach ($w in @(Get-VsatProp $Evidence.scope 'aiWorkloads' @())) {
+            if (-not $w -or -not (Test-VsatAssetMatch -Asset $a -Match ([string](Get-VsatProp $w 'match' '')))) { continue }
+            $role = [string](Get-VsatProp $w 'role' '')
+            if ($role -in $script:VsatAiRoles) { $a.aiRole = $role; $a.aiRoleSource = 'operator' }
+            $wc = [string](Get-VsatProp $w 'criticality' '')
+            if ($wc -in @('high', 'medium', 'low')) { $a.criticality = $wc; $a.criticalitySource = 'operator' }
+        }
         foreach ($c in @($Evidence.scope.criticalAssets)) {
             if (Test-VsatAssetMatch -Asset $a -Match ([string]$c.match)) { $a.criticality = [string]$c.criticality; $a.criticalitySource = 'operator' }
         }

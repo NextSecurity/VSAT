@@ -71,11 +71,11 @@ The `Unblock-File` step clears Windows' Mark-of-the-Web on the download; `-EA 0`
 Use these instead of the lines above when you want a specific release rather than always the newest:
 
 ```powershell
-$v='2.5.0';$u="https://github.com/NextSecurity/VSAT/releases/download/v$v";iwr "$u/vsat.ps1" -OutFile vsat.ps1;iwr "$u/SHA256SUMS.txt" -OutFile SHA256SUMS.txt;$h=((gc SHA256SUMS.txt|?{$_ -match '\svsat\.ps1$'}) -split '\s+')[0];if((Get-FileHash vsat.ps1).Hash -ne $h){throw 'checksum mismatch - do not run'};Unblock-File vsat.ps1 -EA 0;./vsat.ps1 -Demo
+$v='2.6.0';$u="https://github.com/NextSecurity/VSAT/releases/download/v$v";iwr "$u/vsat.ps1" -OutFile vsat.ps1;iwr "$u/SHA256SUMS.txt" -OutFile SHA256SUMS.txt;$h=((gc SHA256SUMS.txt|?{$_ -match '\svsat\.ps1$'}) -split '\s+')[0];if((Get-FileHash vsat.ps1).Hash -ne $h){throw 'checksum mismatch - do not run'};Unblock-File vsat.ps1 -EA 0;./vsat.ps1 -Demo
 ```
 
 ```bash
-v=2.5.0; u=https://github.com/NextSecurity/VSAT/releases/download/v$v; curl -fsSLO $u/vsat.ps1 -O $u/SHA256SUMS.txt && grep ' vsat.ps1$' SHA256SUMS.txt | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -) && pwsh ./vsat.ps1 -Demo
+v=2.6.0; u=https://github.com/NextSecurity/VSAT/releases/download/v$v; curl -fsSLO $u/vsat.ps1 -O $u/SHA256SUMS.txt && grep ' vsat.ps1$' SHA256SUMS.txt | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -) && pwsh ./vsat.ps1 -Demo
 ```
 
 VSAT is also published on the PowerShell Gallery as the script `VSAT`: `Install-PSResource VSAT -Repository PSGallery; vsat.ps1 -Demo`. The checksum one-liner above stays the documented default because it works without Gallery access.
@@ -104,7 +104,7 @@ For all parameters, exit codes and output files, see [docs/usage.md](docs/usage.
 
 ## Mandatory audit coverage
 
-Coverage is organized **by platform, then by domain**. All three platforms can be assessed in one run and one report. Cross-platform lenses add 9 more rules: OT segmentation (6) and ransomware readiness (3), 191 in total.
+Coverage is organized **by platform, then by domain**. All three platforms can be assessed in one run and one report. Cross-platform checks add 19 more rules: OT segmentation (6), ransomware readiness (3) and AI & GPU isolation (10), 201 in total.
 
 | Platform | Rules | How VSAT reads it |
 |---|---|---|
@@ -153,13 +153,14 @@ Each result is one of `PASS`, `FAIL`, `MANUAL`, `NOT_APPLICABLE`, `UNKNOWN` or `
 1. **Blast radius:** pick a compromised account or VM and see what an attacker reaches across every platform, and which fixes break the most paths. Paths are inferred from configuration.
 2. **OT segmentation lens:** give scope zones a Purdue level and six `OT-*` rules check that OT and IT workloads do not share hosts, virtual switches, management planes, admin accounts or network paths.
 3. **Ransomware readiness:** "could one stolen account encrypt every hypervisor and the backups?" Declare your backup systems and VSAT checks whether an attacker path reaches them, whether they run alongside production, and whether production admins also control them. A card shows how many hypervisors each account controls, worst first.
-4. **MITRE ATT&CK mapping:** each attack-path hop and rule is mapped to ATT&CK techniques, and every run writes `attack-layer.json` for the ATT&CK Navigator.
-5. **Drift:** `-Baseline <previous .vsat.zip>` shows new, resolved, changed and unassessed items. Evidence that has disappeared is not treated as a resolved finding.
-6. **Explainable attack paths:** inferred from configuration. Each path lists the firewall rules and prerequisites involved, plus its uncertainty. These paths are not proof of exploitability.
-7. **Failure-impact explorer:** pick a host, uplink, datastore or Edge and see which workloads could be affected. This is a configuration model. VSAT injects no failures.
-8. **Remediation work packages:** findings grouped by corrective action and team, with impact, maintenance window, rollback and validation steps. VSAT writes guidance and never applies changes.
-9. **Audit integrity:** when the customer runs VSAT for you, the report shows what changed during the engagement (from vCenter events, NSX, Windows event logs and KVM host history), earlier runs by the same account, and a warning when log history is too short. `-CollectOnly` shows no findings, and a receipt code (`VSAT-XXXX-XXXX-XXXX-XXXX`) read aloud at the end of the session proves later that the package you received is the one from that session: `-Replay assessment.vsat.zip -Receipt <code>`.
-10. **Collect once, replay, share safely:** `-Replay` re-evaluates saved evidence offline. `-Redact` writes a separate sharing copy that uses consistent pseudonyms.
+4. **AI & GPU isolation:** GPU passthrough, vGPU and MIG sharing, IOMMU and interrupt remapping, ACS overrides, SR-IOV next to management traffic, model and dataset storage exposure, and Kubernetes control planes reachable from other workloads. VMs with accelerators are found automatically; declare roles with `aiWorkloads`.
+5. **MITRE ATT&CK mapping:** each attack-path hop and rule is mapped to ATT&CK techniques, and every run writes `attack-layer.json` for the ATT&CK Navigator.
+6. **Drift:** `-Baseline <previous .vsat.zip>` shows new, resolved, changed and unassessed items. Evidence that has disappeared is not treated as a resolved finding.
+7. **Explainable attack paths:** inferred from configuration. Each path lists the firewall rules and prerequisites involved, plus its uncertainty. These paths are not proof of exploitability.
+8. **Failure-impact explorer:** pick a host, uplink, datastore or Edge and see which workloads could be affected. This is a configuration model. VSAT injects no failures.
+9. **Remediation work packages:** findings grouped by corrective action and team, with impact, maintenance window, rollback and validation steps. VSAT writes guidance and never applies changes.
+10. **Audit integrity:** when the customer runs VSAT for you, the report shows what changed during the engagement (from vCenter events, NSX, Windows event logs and KVM host history), earlier runs by the same account, and a warning when log history is too short. `-CollectOnly` shows no findings, and a receipt code (`VSAT-XXXX-XXXX-XXXX-XXXX`) read aloud at the end of the session proves later that the package you received is the one from that session: `-Replay assessment.vsat.zip -Receipt <code>`.
+11. **Collect once, replay, share safely:** `-Replay` re-evaluates saved evidence offline. `-Redact` writes a separate sharing copy that uses consistent pseudonyms.
 
 ## Sample report and topology
 

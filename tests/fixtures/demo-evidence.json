@@ -2,7 +2,7 @@
   "schemaVersion": "2.3",
   "tool": {
     "name": "VSAT",
-    "version": "2.5.0"
+    "version": "2.6.0"
   },
   "run": {
     "id": "00000000-0000-4000-8000-000000000d30",
@@ -119,7 +119,16 @@
     "credentialStores": [],
     "identityGroups": [],
     "identityDomains": [],
-    "aiWorkloads": [],
+    "aiWorkloads": [
+      {
+        "match": "name:ai-train01",
+        "role": "training"
+      },
+      {
+        "match": "name:ai-infer01",
+        "role": "inference"
+      }
+    ],
     "signoffs": [],
     "backupSystems": [
       {
@@ -657,6 +666,71 @@
             }
           ]
         },
+        "graphics": {
+          "status": "ok",
+          "value": {
+            "defaultType": "shared",
+            "sharedPassthruAssignmentPolicy": "performance",
+            "devices": [
+              {
+                "pciId": "0000:3b:00.0",
+                "graphicsType": "direct",
+                "vmCount": 0
+              }
+            ]
+          }
+        },
+        "iommu": {
+          "status": "ok",
+          "value": {
+            "enabled": true,
+            "source": "inferred-from-active-passthrough"
+          }
+        },
+        "pciPassthru": {
+          "status": "ok",
+          "value": [
+            {
+              "id": "0000:3b:00.0",
+              "vendorId": "10de",
+              "deviceId": "2331",
+              "vendorName": "NVIDIA Corporation",
+              "deviceName": "GH100 [H100 PCIe]",
+              "classId": "0302",
+              "passthruCapable": true,
+              "passthruEnabled": true,
+              "passthruActive": true,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            },
+            {
+              "id": "0000:18:00.0",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            },
+            {
+              "id": "0000:18:00.1",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            }
+          ]
+        },
         "coredump": {
           "status": "ok",
           "value": {
@@ -739,6 +813,7 @@
       "props": {
         "device": "vmnic0",
         "mac": "00:50:56:01:00:00",
+        "pci": "0000:18:00.0",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -779,6 +854,7 @@
       "props": {
         "device": "vmnic1",
         "mac": "00:50:56:01:00:01",
+        "pci": "0000:18:00.1",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -1046,6 +1122,71 @@
             }
           ]
         },
+        "graphics": {
+          "status": "ok",
+          "value": {
+            "defaultType": "shared",
+            "sharedPassthruAssignmentPolicy": "performance",
+            "devices": [
+              {
+                "pciId": "0000:3b:00.0",
+                "graphicsType": "direct",
+                "vmCount": 0
+              }
+            ]
+          }
+        },
+        "iommu": {
+          "status": "ok",
+          "value": {
+            "enabled": true,
+            "source": "inferred-from-active-passthrough"
+          }
+        },
+        "pciPassthru": {
+          "status": "ok",
+          "value": [
+            {
+              "id": "0000:3b:00.0",
+              "vendorId": "10de",
+              "deviceId": "2331",
+              "vendorName": "NVIDIA Corporation",
+              "deviceName": "GH100 [H100 PCIe]",
+              "classId": "0302",
+              "passthruCapable": true,
+              "passthruEnabled": true,
+              "passthruActive": true,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            },
+            {
+              "id": "0000:18:00.0",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            },
+            {
+              "id": "0000:18:00.1",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            }
+          ]
+        },
         "coredump": {
           "status": "ok",
           "value": {
@@ -1122,6 +1263,7 @@
       "props": {
         "device": "vmnic0",
         "mac": "00:50:56:02:00:00",
+        "pci": "0000:18:00.0",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -1143,6 +1285,7 @@
       "props": {
         "device": "vmnic1",
         "mac": "00:50:56:02:00:01",
+        "pci": "0000:18:00.1",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -1391,6 +1534,46 @@
             }
           ]
         },
+        "graphics": {
+          "status": "absent",
+          "value": null
+        },
+        "iommu": {
+          "status": "unsupported",
+          "value": null,
+          "error": "ESXi does not report IOMMU state; it is inferred only from active passthrough devices"
+        },
+        "pciPassthru": {
+          "status": "ok",
+          "value": [
+            {
+              "id": "0000:18:00.0",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            },
+            {
+              "id": "0000:18:00.1",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            }
+          ]
+        },
         "coredump": {
           "status": "ok",
           "value": {
@@ -1467,6 +1650,7 @@
       "props": {
         "device": "vmnic0",
         "mac": "00:50:56:03:00:00",
+        "pci": "0000:18:00.0",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -1488,6 +1672,7 @@
       "props": {
         "device": "vmnic1",
         "mac": "00:50:56:03:00:01",
+        "pci": "0000:18:00.1",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -1736,6 +1921,46 @@
             }
           ]
         },
+        "graphics": {
+          "status": "absent",
+          "value": null
+        },
+        "iommu": {
+          "status": "unsupported",
+          "value": null,
+          "error": "ESXi does not report IOMMU state; it is inferred only from active passthrough devices"
+        },
+        "pciPassthru": {
+          "status": "ok",
+          "value": [
+            {
+              "id": "0000:18:00.0",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            },
+            {
+              "id": "0000:18:00.1",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            }
+          ]
+        },
         "coredump": {
           "status": "ok",
           "value": {
@@ -1812,6 +2037,7 @@
       "props": {
         "device": "vmnic0",
         "mac": "00:50:56:04:00:00",
+        "pci": "0000:18:00.0",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -1833,6 +2059,7 @@
       "props": {
         "device": "vmnic1",
         "mac": "00:50:56:04:00:01",
+        "pci": "0000:18:00.1",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -2119,6 +2346,33 @@
             }
           ]
         },
+        "graphics": {
+          "status": "absent",
+          "value": null
+        },
+        "iommu": {
+          "status": "unsupported",
+          "value": null,
+          "error": "ESXi does not report IOMMU state; it is inferred only from active passthrough devices"
+        },
+        "pciPassthru": {
+          "status": "ok",
+          "value": [
+            {
+              "id": "0000:18:00.0",
+              "vendorId": "8086",
+              "deviceId": "159b",
+              "vendorName": "Intel(R) Corporation",
+              "deviceName": "Ethernet Controller E810-XXV for SFP",
+              "classId": "0200",
+              "passthruCapable": true,
+              "passthruEnabled": false,
+              "passthruActive": false,
+              "sriovEnabled": false,
+              "numVirtualFunction": 0
+            }
+          ]
+        },
         "coredump": {
           "status": "ok",
           "value": {
@@ -2193,6 +2447,7 @@
       "props": {
         "device": "vmnic0",
         "mac": "00:50:56:05:00:00",
+        "pci": "0000:18:00.0",
         "linkUp": true,
         "speedMb": 25000
       },
@@ -2787,7 +3042,8 @@
               "10.0.30.5"
             ],
             "type": "NFS",
-            "securityType": "AUTH_SYS"
+            "securityType": "AUTH_SYS",
+            "nfsVersion": "3"
           }
         }
       }
@@ -2902,6 +3158,13 @@
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -2984,6 +3247,13 @@
               "port": "202"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -3069,6 +3339,13 @@
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -3152,6 +3429,13 @@
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -3234,6 +3518,13 @@
               "port": "205"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -3324,6 +3615,13 @@
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -3406,6 +3704,13 @@
               "port": "207"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -3496,6 +3801,13 @@
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -3579,6 +3891,13 @@
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -3661,6 +3980,13 @@
               "port": "210"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -3751,6 +4077,13 @@
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -3834,6 +4167,13 @@
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -3916,6 +4256,13 @@
               "port": "213"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -4016,6 +4363,13 @@
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -4104,6 +4458,20 @@
               "port": "215"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 1,
+            "devices": [
+              {
+                "kind": "passthrough",
+                "id": "0000:3b:00.0",
+                "vgpuProfile": null,
+                "pfId": null
+              }
+            ]
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -4194,6 +4562,20 @@
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 1,
+            "devices": [
+              {
+                "kind": "passthrough",
+                "id": "0000:3b:00.0",
+                "vgpuProfile": null,
+                "pfId": null
+              }
+            ]
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -4276,6 +4658,13 @@
               "port": "217"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -4360,6 +4749,13 @@
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -4442,6 +4838,13 @@
               "port": "219"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",
@@ -4526,6 +4929,13 @@
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -4609,6 +5019,13 @@
             }
           ]
         },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
+        },
         "snapshots": {
           "status": "ok",
           "value": []
@@ -4689,6 +5106,13 @@
               "port": "222"
             }
           ]
+        },
+        "accel": {
+          "status": "ok",
+          "value": {
+            "count": 0,
+            "devices": []
+          }
         },
         "snapshots": {
           "status": "ok",

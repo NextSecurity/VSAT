@@ -3,6 +3,8 @@
 # key authentication and a pinned host key, or exported with -ExportCollector kvm for
 # air-gapped hosts) and prints delimited sections. virsh is always used with --readonly;
 # domain XML is dumped WITHOUT --security-info so console passwords are never collected.
+# Accelerator sections read /proc and /sys only; nvidia-smi runs (as a query) only when it is
+# already installed, and an unprivileged lspci that hides ACS capabilities is reported as such.
 
 $script:VsatKvmCollector = @'
 #!/bin/sh
@@ -45,11 +47,20 @@ done
 sec logins
 L=$(command -v last 2>/dev/null)
 if [ -n "$L" ]; then last -F -w 2>&1 | awk 'NR<=5000 || /^wtmp begins/'; else echo 'unsupported=last'; fi
+sec cmdline; cat /proc/cmdline 2>/dev/null
+sec iommu-groups; ls -d /sys/kernel/iommu_groups/*/devices/* 2>/dev/null
+sec iommu-ecap; cat /sys/class/iommu/*/intel-iommu/ecap 2>/dev/null
+sec mdev; for m in /sys/bus/mdev/devices/*; do [ -e "$m" ] && printf '%s %s %s\n' "$(basename "$m")" "$(basename "$(readlink "$m/mdev_type")")" "$(basename "$(readlink -f "$m/..")")"; done 2>/dev/null
+sec nvidia-smi; if [ -n "$(command -v nvidia-smi 2>/dev/null)" ]; then nvidia-smi -q -x 2>&1; else echo not-installed; fi
+sec pci-acs; if [ -n "$(command -v lspci 2>/dev/null)" ]; then lspci -D -vvv 2>/dev/null | grep -E '^[0-9a-f]{4}:|ACSCtl'; else echo not-installed; fi
+sec exports; cat /etc/exports /etc/exports.d/*.exports 2>/dev/null
+sec mounts; grep -E ' (nfs4?|cifs|smb3|fuse\.(s3fs|goofys|mountpoint-s3|rclone)) ' /proc/mounts 2>/dev/null
 sec domains; $V list --all --name 2>&1
 for d in $($V list --all --name 2>/dev/null); do
   sec "domain:$d"; $V dumpxml "$d" 2>&1
   sec "dominfo:$d"; $V dominfo "$d" 2>&1
   sec "snapshots:$d"; $V snapshot-list "$d" --parent 2>/dev/null
+  sec "domifaddr:$d"; $V domifaddr "$d" --source lease 2>/dev/null; $V domifaddr "$d" --source arp 2>/dev/null
 done
 sec networks; $V net-list --all --name 2>&1
 for n in $($V net-list --all --name 2>/dev/null); do sec "network:$n"; $V net-dumpxml "$n" 2>&1; done
@@ -186,6 +197,7 @@ function Add-VsatKvmEvidence {
     $chg = ConvertFrom-VsatKvmChanges -Sections $s
     if ($chg) { Set-VsatFact $ha 'changes' -Status $chg.status -Value $chg.value -ErrorMessage $chg.error }
     Set-VsatFact $ha 'libvirt' -Status $(if ([string]$s['virsh-version'] -match 'library|Using') { 'ok' } else { 'error' }) -Value ([string]$s['virsh-version']) -ErrorMessage $(if ([string]$s['virsh-version'] -notmatch 'library|Using') { [string]$s['virsh-version'] } else { $null })
+    $mdevType = Add-VsatKvmAccelEvidence -Asset $ha -Sections $s
 
     foreach ($key in @($s.Keys | Where-Object { $_ -like 'network:*' })) {
         $n = $key.Substring(8)
@@ -202,7 +214,11 @@ function Add-VsatKvmEvidence {
         $info = ConvertFrom-VsatKeyValue ([string]$s["dominfo:$d"]) ':'
         $va = Add-VsatAsset -Evidence $Evidence -Id $vid -Type 'kvm-vm' -Name $d -Endpoint $ep -Props ([ordered]@{ uuid = $(if ($x) { [string]$x.domain.uuid } else { $null }); state = [string]$info['State']; autostart = [string]$info['Autostart']; persistent = [string]$info['Persistent'] })
         Add-VsatRelationship -Evidence $Evidence -Source $vid -Target $hid -Type runs-on -Provenance 'kvm.vms'
-        if (-not $x) { Set-VsatFact $va 'domain' -Status error -Value $null -ErrorMessage "Domain XML unavailable: $([string]$s[$key])"; continue }
+        if (-not $x) {
+            Set-VsatFact $va 'domain' -Status error -Value $null -ErrorMessage "Domain XML unavailable: $([string]$s[$key])"
+            Set-VsatFact $va 'accel' -Status error -Value $null -ErrorMessage 'Domain XML unavailable'
+            continue
+        }
         $dom = $x.domain
         $seclabels = @($dom.SelectNodes('seclabel') | ForEach-Object { [ordered]@{ type = $_.GetAttribute('type'); model = $_.GetAttribute('model'); relabel = $_.GetAttribute('relabel') } })
         $loader = $dom.SelectSingleNode('os/loader')
@@ -223,6 +239,10 @@ function Add-VsatKvmEvidence {
                 redirdevs = @($dom.SelectNodes('devices/redirdev')).Count
                 memoryBacking = [bool]$dom.SelectSingleNode('memoryBacking')
             })
+        if ($s.Contains("domifaddr:$d")) { $va.facts.domain.value.ips = @([regex]::Matches([string]$s["domifaddr:$d"], 'ipv4\s+(\d{1,3}(?:\.\d{1,3}){3})/') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique) }
+        $acc = Get-VsatKvmAccelFromXml $x
+        foreach ($dv in @($acc.devices | Where-Object { $_.mdevUuid -and $mdevType.ContainsKey($_.mdevUuid) })) { $dv.mdevType = $mdevType[$dv.mdevUuid] }
+        Set-VsatFact $va 'accel' -Value $acc
         foreach ($i in $ifaces) { if ($i.type -eq 'network' -and $i.source) { Add-VsatRelationship -Evidence $Evidence -Source $vid -Target "${ep}:net/$($i.source)" -Type connects -Provenance 'kvm.vms' -Props ([ordered]@{ mac = $i.mac }) } }
         $snaps = @(([string]$s["snapshots:$d"]) -split "`r?`n" | Where-Object { $_ -match '^\s*\S+\s+\d{4}-\d{2}-\d{2}' } | ForEach-Object {
                 $p = ($_.Trim() -split '\s{2,}')
@@ -231,6 +251,51 @@ function Add-VsatKvmEvidence {
             })
         Set-VsatFact $va 'snapshots' -Status $(if ($snaps.Count) { 'ok' } else { 'absent' }) -Value @($snaps)
     }
+}
+
+function Add-VsatKvmAccelEvidence {
+    # Accelerator and AI-storage sections (collector 2.6 and later). Output of an earlier collector
+    # has none of them: those facts stay uncollected (checks report UNKNOWN), never empty.
+    # Returns mdev uuid -> mdev type, used to label the guests' mediated devices.
+    param([Parameter(Mandatory)]$Asset, [Parameter(Mandatory)]$Sections)
+    $s = $Sections; $ha = $Asset
+    $types = @{}
+    $cmd = $null
+    if ($s.Contains('cmdline')) {
+        $cmd = ConvertFrom-VsatKernelCmdline $s['cmdline']
+        if ($cmd.raw) { Set-VsatFact $ha 'cmdline' -Value $cmd } else { Set-VsatFact $ha 'cmdline' -Status error -Value $null -ErrorMessage '/proc/cmdline was not readable' }
+    }
+    if ($s.Contains('iommu-groups')) {
+        # /sys/kernel/iommu_groups is world-readable; an empty listing means no IOMMU groups.
+        $groups = @(ConvertFrom-VsatIommuGroups $s['iommu-groups'])
+        $ir = ConvertFrom-VsatIommuEcap $s['iommu-ecap']
+        if ($ir -and $cmd -and $cmd.intremapOff) { $ir = $false }
+        Set-VsatFact $ha 'iommu' -Value ([ordered]@{ enabled = ($groups.Count -gt 0); groups = $groups; interruptRemapping = $ir; source = 'sysfs' })
+    }
+    if ($s.Contains('mdev')) {
+        $md = @(ConvertFrom-VsatMdevList $s['mdev'])
+        foreach ($m in $md) { $types[$m.uuid] = $m.type }
+        Set-VsatFact $ha 'mdev' -Value $md
+    }
+    if ($s.Contains('nvidia-smi')) {
+        $t = ([string]$s['nvidia-smi']).Trim()
+        if (-not $t -or $t -eq 'not-installed') { Set-VsatFact $ha 'gpuMig' -Status absent -Value $null }
+        else {
+            try { Set-VsatFact $ha 'gpuMig' -Value @(ConvertFrom-VsatNvidiaSmi $t) }
+            catch { Set-VsatFact $ha 'gpuMig' -Status error -Value $null -ErrorMessage $(if ($t.StartsWith('<')) { $_.Exception.Message } else { "nvidia-smi: $(@($t -split "`r?`n")[0])" }) }
+        }
+    }
+    if ($s.Contains('pci-acs')) {
+        $acs = @(ConvertFrom-VsatLspciAcs $s['pci-acs'])
+        if ($acs.Count) { Set-VsatFact $ha 'acs' -Value $acs }
+        else { Set-VsatFact $ha 'acs' -Status unsupported -Value $null -ErrorMessage 'PCIe ACS control not readable (lspci missing, or capabilities hidden from an unprivileged user)' }
+    }
+    if ($s.Contains('exports')) {
+        $ex = @(ConvertFrom-VsatExports $s['exports'])
+        if ($ex.Count) { Set-VsatFact $ha 'exports' -Value $ex } else { Set-VsatFact $ha 'exports' -Status absent -Value $null }
+    }
+    if ($s.Contains('mounts')) { Set-VsatFact $ha 'mounts' -Value @(ConvertFrom-VsatProcMounts $s['mounts']) }
+    return $types
 }
 
 function Invoke-VsatKvmCollection {

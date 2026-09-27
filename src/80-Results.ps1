@@ -17,6 +17,7 @@ function Invoke-VsatAnalysisPipeline {
     Update-VsatProgress -Message 'Evaluating rules'
     $eval = Invoke-VsatRules -Evidence $Evidence -ProfileName $ProfileName
     $findings = $eval.findings
+    Set-VsatAiAffectedWorkloads -Findings $findings -Context $eval.context
     Set-VsatExceptions -Evidence $Evidence -Findings $findings
     Update-VsatProgress -Message 'Building the engagement change timeline'
     $changes = Get-VsatChangeAnalysis -Evidence $Evidence
@@ -38,7 +39,7 @@ function Invoke-VsatAnalysisPipeline {
     $impact = Get-VsatImpact -Context $eval.context
     $wps = Get-VsatWorkPackages -Findings $findings
     $results = New-VsatResultsObject -Evidence $Evidence -Eval $eval -Coverage $coverage -Status $status -ProfileName $ProfileName
-    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; ransomware = $ransomware; workPackageCatalog = @(Get-VsatWorkPackageCatalog); changes = $changes }
+    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; ransomware = $ransomware; workPackageCatalog = @(Get-VsatWorkPackageCatalog); changes = $changes; aiWorkloads = @(Get-VsatAiWorkloads -Findings $findings -Context $eval.context -Blast $blast) }
     if ($BaselineEvidence) {
         Update-VsatProgress -Message 'Comparing with baseline'
         $saveIdx = $script:VsatAssetIndex
