@@ -1,6 +1,6 @@
 ﻿<#PSScriptInfo
 
-.VERSION 2.3.0
+.VERSION 2.4.0
 
 .GUID 228b4d14-2c3e-4ace-b07f-9151849e54c6
 
@@ -81,6 +81,15 @@
     Import output of vsat-kvm-collect.sh produced offline on a KVM host.
 .PARAMETER ExportCollector
     Write the read-only offline collector script for a platform to -OutputPath and exit.
+.PARAMETER EngagementStart
+    Start of the engagement change window (yyyy-MM-dd). Default: 30 days before the run;
+    at most 180 days back. Changes the platforms recorded since then form the timeline.
+.PARAMETER CollectOnly
+    Collect and write only assessment.vsat.zip, collection.log and manifest.json, then show
+    the receipt code. No findings and no report; the auditor replays the package.
+.PARAMETER Receipt
+    With -Replay: verify the package against the receipt code read out when it was
+    collected (VSAT-XXXX-XXXX-XXXX-XXXX). A mismatch stops with exit code 3.
 
 .EXAMPLE
     .\vsat.ps1
@@ -88,6 +97,10 @@
     .\vsat.ps1 -Server vc01.example.local -NsxServer nsx01.example.local -Cli
 .EXAMPLE
     .\vsat.ps1 -Replay .\assessment.vsat.zip
+.EXAMPLE
+    .\vsat.ps1 -CollectOnly -EngagementStart 2026-09-01
+.EXAMPLE
+    .\vsat.ps1 -Replay .\assessment.vsat.zip -Receipt VSAT-7Q2M-XK4D-9HNB-3TRE
 
 .NOTES
     Exit codes: 0 complete/no failing automated controls, 1 complete/findings present,
@@ -125,6 +138,9 @@ param(
     [string[]]$KvmEvidence,
     [ValidateSet('hyperv', 'kvm')]
     [string]$ExportCollector,
+    [string]$EngagementStart,
+    [switch]$CollectOnly,
+    [string]$Receipt,
     [Parameter(DontShow)]
     [switch]$LibraryMode
 )
@@ -136,8 +152,8 @@ $ErrorActionPreference = 'Stop'
 # Build: pwsh ./build/Build-Vsat.ps1
 # ---------------------------------------------------------------------------
 
-$script:VsatVersion = '2.3.0'
-$script:VsatBuildCommit = 'src-8e67de1e6b43d60a'
+$script:VsatVersion = '2.4.0'
+$script:VsatBuildCommit = 'src-5cd664ae36e26802'
 
 # ---- src/10-Util.ps1 ----
 #region Util
@@ -1137,6 +1153,22 @@ function Invoke-VsatVSphereCollection {
         1
     }
 
+    # Change history for the engagement window (src/78-Changes.ps1): the platform's own events,
+    # read with Get-VIEvent only. A denied read is recorded as a denied fact, never as "no events".
+    Invoke-VsatCollector -Evidence $Evidence -Name 'vsphere.events' -Endpoint $ep -Script {
+        $win = Get-VsatChangeWindow -Evidence $Evidence
+        $start = ConvertTo-VsatChangeDate $win.startUtc
+        Invoke-VsatFact $root 'events' {
+            $vsatEvents = @(Get-VIEvent -Server $srv -Start $start -MaxSamples 50000 -ErrorAction Stop)
+            # One event from the day before the window proves history reaches back past its start.
+            $vsatProbe = @(Get-VIEvent -Server $srv -Start $start.AddDays(-1) -Finish $start -MaxSamples 1 -ErrorAction Stop)
+            $vsatKey = $null
+            try { $vsatKey = [string](Get-View -Server $srv -Id $srv.ExtensionData.Content.SessionManager -Property CurrentSession -ErrorAction Stop).CurrentSession.Key } catch { }
+            ConvertTo-VsatVIEventFact -Events $vsatEvents -WindowStartUtc $win.startUtc -Account ([string]$srv.User) -SessionKey $vsatKey -CoversWindowStart ($vsatProbe.Count -gt 0) -MaxSamples 50000
+        }
+        @($root.facts.events.value.records).Count
+    }
+
     Invoke-VsatCollector -Evidence $Evidence -Name 'vsphere.inventory' -Endpoint $ep -Affects @('CL-*') -Script {
         $dcs = Get-View -Server $srv -ViewType Datacenter -Property Name, HostFolder
         foreach ($dc in $dcs) {
@@ -1561,6 +1593,14 @@ function ConvertTo-VsatComputeManagerFact {
     }
 }
 
+function Add-VsatNsxModified {
+    # Adds lastModifiedUtc/lastModifiedUser (from the object's own _last_modified_* fields, no
+    # extra API call) to asset props for the engagement change timeline.
+    param($Object, [System.Collections.IDictionary]$Props)
+    foreach ($kv in (ConvertTo-VsatNsxModified $Object).GetEnumerator()) { $Props[$kv.Key] = $kv.Value }
+    return $Props
+}
+
 function ConvertTo-VsatNsxRef {
     # Normalizes NSX group/service references: "ANY" stays ANY, paths are kept verbatim.
     param($Values)
@@ -1647,7 +1687,7 @@ function Invoke-VsatNsxCollection {
         $t0s = Get-VsatNsxPaged -Session $Session -Path '/policy/api/v1/infra/tier-0s'
         foreach ($g in $t0s.items) {
             $path = [string](Get-VsatProp $g 'path'); $id = "${ep}:$path"
-            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-t0' -Name (Get-VsatProp $g 'display_name') -Endpoint $ep -Props ([ordered]@{ path = $path; haMode = Get-VsatProp $g 'ha_mode'; failoverMode = Get-VsatProp $g 'failover_mode' })
+            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-t0' -Name (Get-VsatProp $g 'display_name') -Endpoint $ep -Props (Add-VsatNsxModified $g ([ordered]@{ path = $path; haMode = Get-VsatProp $g 'ha_mode'; failoverMode = Get-VsatProp $g 'failover_mode' }))
             Add-VsatNsxLocaleServices -Evidence $Evidence -Session $Session -Asset $a -Path $path -Endpoint $ep
             $count++
         }
@@ -1655,7 +1695,7 @@ function Invoke-VsatNsxCollection {
         foreach ($g in $t1s.items) {
             $path = [string](Get-VsatProp $g 'path'); $id = "${ep}:$path"
             $t0 = Get-VsatProp $g 'tier0_path'
-            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-t1' -Name (Get-VsatProp $g 'display_name') -Endpoint $ep -Props ([ordered]@{ path = $path; tier0Path = $t0; routeAdvertisement = @(Get-VsatProp $g 'route_advertisement_types' @()) })
+            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-t1' -Name (Get-VsatProp $g 'display_name') -Endpoint $ep -Props (Add-VsatNsxModified $g ([ordered]@{ path = $path; tier0Path = $t0; routeAdvertisement = @(Get-VsatProp $g 'route_advertisement_types' @()) }))
             if ($t0) { Add-VsatRelationship -Evidence $Evidence -Source $id -Target "${ep}:$t0" -Type routes -Provenance 'nsx.networking' }
             Add-VsatNsxLocaleServices -Evidence $Evidence -Session $Session -Asset $a -Path $path -Endpoint $ep
             try {
@@ -1670,7 +1710,7 @@ function Invoke-VsatNsxCollection {
             $path = [string](Get-VsatProp $s 'path'); $id = "${ep}:$path"
             $subnets = @(Get-VsatProp $s 'subnets' @() | Where-Object { $null -ne $_ } | ForEach-Object { Get-VsatProp $_ 'gateway_address' })
             $conn = Get-VsatProp $s 'connectivity_path'
-            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-segment' -Name (Get-VsatProp $s 'display_name') -Endpoint $ep -Props ([ordered]@{ path = $path; uniqueId = Get-VsatProp $s 'unique_id'; vlanIds = @(Get-VsatProp $s 'vlan_ids' @()); transportZone = Get-VsatProp $s 'transport_zone_path'; connectivityPath = $conn; subnets = $subnets; adminState = Get-VsatProp $s 'admin_state'; type = $(if (@(Get-VsatProp $s 'vlan_ids' @()).Count -gt 0) { 'vlan' } else { 'overlay' }) })
+            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-segment' -Name (Get-VsatProp $s 'display_name') -Endpoint $ep -Props (Add-VsatNsxModified $s ([ordered]@{ path = $path; uniqueId = Get-VsatProp $s 'unique_id'; vlanIds = @(Get-VsatProp $s 'vlan_ids' @()); transportZone = Get-VsatProp $s 'transport_zone_path'; connectivityPath = $conn; subnets = $subnets; adminState = Get-VsatProp $s 'admin_state'; type = $(if (@(Get-VsatProp $s 'vlan_ids' @()).Count -gt 0) { 'vlan' } else { 'overlay' }) }))
             if ($conn) { Add-VsatRelationship -Evidence $Evidence -Source $id -Target "${ep}:$conn" -Type routes -Provenance 'nsx.networking' }
             $count++
         }
@@ -1682,7 +1722,7 @@ function Invoke-VsatNsxCollection {
         $n = 0
         foreach ($g in $groups.items) {
             $path = [string](Get-VsatProp $g 'path'); $id = "${ep}:$path"
-            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-group' -Name (Get-VsatProp $g 'display_name') -Endpoint $ep -Props ([ordered]@{ path = $path; expressionCount = @(Get-VsatProp $g 'expression' @()).Count; tags = @(Get-VsatProp $g 'tags' @() | Where-Object { $null -ne $_ } | ForEach-Object { "$(Get-VsatProp $_ 'scope')=$(Get-VsatProp $_ 'tag')" }) })
+            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-group' -Name (Get-VsatProp $g 'display_name') -Endpoint $ep -Props (Add-VsatNsxModified $g ([ordered]@{ path = $path; expressionCount = @(Get-VsatProp $g 'expression' @()).Count; tags = @(Get-VsatProp $g 'tags' @() | Where-Object { $null -ne $_ } | ForEach-Object { "$(Get-VsatProp $_ 'scope')=$(Get-VsatProp $_ 'tag')" }) }))
             if (Test-VsatCancel) { break }
             # Effective (realized) membership; configured expressions alone are insufficient.
             try {
@@ -1746,10 +1786,10 @@ function Add-VsatNsxPolicies {
     $ptype = if ($Kind -eq 'security-policies') { 'dfw' } else { 'gfw' }
     foreach ($p in $policies.items) {
         $path = [string](Get-VsatProp $p 'path'); $polId = "${ep}:$path"
-        $pa = Add-VsatAsset -Evidence $Evidence -Id $polId -Type 'nsx-policy' -Name (Get-VsatProp $p 'display_name') -Endpoint $ep -Props ([ordered]@{
-                path = $path; firewall = $ptype; category = Get-VsatProp $p 'category'; sequence = [long](Get-VsatProp $p 'sequence_number' 0)
-                scope = @(ConvertTo-VsatNsxRef (Get-VsatProp $p 'scope')); stateful = Get-VsatProp $p 'stateful'; isDefault = [bool](Get-VsatProp $p 'is_default' $false)
-            })
+        $pa = Add-VsatAsset -Evidence $Evidence -Id $polId -Type 'nsx-policy' -Name (Get-VsatProp $p 'display_name') -Endpoint $ep -Props (Add-VsatNsxModified $p ([ordered]@{
+                    path = $path; firewall = $ptype; category = Get-VsatProp $p 'category'; sequence = [long](Get-VsatProp $p 'sequence_number' 0)
+                    scope = @(ConvertTo-VsatNsxRef (Get-VsatProp $p 'scope')); stateful = Get-VsatProp $p 'stateful'; isDefault = [bool](Get-VsatProp $p 'is_default' $false)
+                }))
         try {
             $rules = Get-VsatNsxPaged -Session $Session -Path "/policy/api/v1$path/rules"
             if ($rules.truncated) { $partial = $true }
@@ -1766,6 +1806,7 @@ function Add-VsatNsxPolicies {
                         disabled = [bool](Get-VsatProp $r 'disabled' $false); logged = [bool](Get-VsatProp $r 'logged' $false)
                         isDefault = ($pa.props.isDefault -or ([string](Get-VsatProp $r 'id') -match '^default-layer[23]-rule$'))
                     })
+                foreach ($kv in (ConvertTo-VsatNsxModified $r).GetEnumerator()) { $ra.props[$kv.Key] = $kv.Value }
                 Add-VsatRelationship -Evidence $Evidence -Source $polId -Target $rid -Type contains -Provenance "nsx.$ptype"
                 foreach ($g in @($ra.props.appliedTo + $ra.props.policyAppliedTo | Where-Object { $_ -ne 'ANY' } | Select-Object -Unique)) {
                     Add-VsatRelationship -Evidence $Evidence -Source $rid -Target "${ep}:$g" -Type applies-to -Provenance "nsx.$ptype"
@@ -1794,6 +1835,8 @@ function Add-VsatNsxPolicies {
 $script:VsatHyperVCollector = @'
 # VSAT Hyper-V collector (read-only). Compatible with Windows PowerShell 5.1 and PowerShell 7.
 # Output: JSON document on stdout. It never changes configuration.
+# Optional: -Since yyyy-MM-dd (engagement start) for the event history; default 30 days back.
+param([string]$Since)
 $ErrorActionPreference = 'Stop'
 function F([scriptblock]$s) {
     try { $v = & $s; if ($null -eq $v) { return @{ status = 'absent'; value = $null } }; return @{ status = 'ok'; value = $v } }
@@ -1806,6 +1849,45 @@ function F([scriptblock]$s) {
     }
 }
 $now = [DateTime]::UtcNow
+$since = $now.Date.AddDays(-30)
+if ($Since) { $since = [DateTime]::ParseExact($Since, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal) }
+function W([string]$log, [int[]]$ids, [int]$max) {
+    # One event log since the window start. A denied read is reported, never an empty list.
+    $src = @{ log = $log; status = 'ok'; oldestUtc = $null; oldestId = $null; full = $false; count = 0; truncated = $false }
+    $list = @()
+    try {
+        $info = Get-WinEvent -ListLog $log -ErrorAction Stop
+        if ($info.MaximumSizeInBytes -gt 0) { $src.full = ([double]$info.FileSize -ge 0.9 * [double]$info.MaximumSizeInBytes) }
+        try { $o = Get-WinEvent -LogName $log -MaxEvents 1 -Oldest -ErrorAction Stop; if ($o) { $src.oldestUtc = $o.TimeCreated.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); $src.oldestId = $o.Id } }
+        catch { if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*' -and $_.Exception.Message -notmatch 'No events were found') { throw } }
+        $fh = @{ LogName = $log; StartTime = $since }
+        if ($ids) { $fh.Id = $ids }
+        try { $list = @(Get-WinEvent -FilterHashtable $fh -MaxEvents $max -ErrorAction Stop) }
+        catch { if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*' -and $_.Exception.Message -notmatch 'No events were found') { throw } }
+    }
+    catch {
+        $m = $_.Exception.Message
+        $src.error = $m
+        if ($m -match 'unauthorized|denied|not have permission|privilege') { $src.status = 'denied' }
+        elseif ($m -match 'There is not an event log|not found|does not exist') { $src.status = 'unsupported' }
+        else { $src.status = 'error' }
+    }
+    $entries = @(foreach ($e in $list) {
+            $user = $null; $target = ''
+            $p = @($e.Properties)
+            if ($log -eq 'Security' -and $p.Count -ge 8) { $user = "$($p[7].Value)\$($p[6].Value)"; $target = "$($p[3].Value)\$($p[2].Value)" }
+            elseif ($e.UserId) { try { $user = $e.UserId.Translate([Security.Principal.NTAccount]).Value } catch { $user = [string]$e.UserId } }
+            if ($log -eq 'System' -and $p.Count) { $target = [string]$p[0].Value }
+            elseif ($log -like '*Firewall*' -and $p.Count -ge 2) { $target = [string]$p[1].Value }
+            $msg = [string]$e.Message
+            $first = if ($msg) { ($msg -split "`r?`n")[0] } else { "Event $($e.Id)" }
+            if ($first.Length -gt 300) { $first = $first.Substring(0, 300) }
+            @{ utc = $e.TimeCreated.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); log = $log; id = $e.Id; user = $user; message = $first; target = $target }
+        })
+    $src.count = $entries.Count
+    $src.truncated = ($entries.Count -ge $max)
+    return @{ source = $src; entries = $entries }
+}
 $out = @{ collectorVersion = '1'; collectedUtc = $now.ToString('yyyy-MM-ddTHH:mm:ssZ'); host = @{}; vms = @(); switches = @() }
 $os = Get-CimInstance -ClassName Win32_OperatingSystem
 $cs = Get-CimInstance -ClassName Win32_ComputerSystem
@@ -1827,6 +1909,21 @@ $f.replica = F { $r = Get-VMReplicationServer; @{ enabled = [bool]$r.Replication
 $f.admins = F { @(Get-LocalGroupMember -Group Administrators | ForEach-Object { @{ name = [string]$_.Name; class = [string]$_.ObjectClass } }) }
 $f.hvAdmins = F { @(Get-LocalGroupMember -SID 'S-1-5-32-578' | ForEach-Object { @{ name = [string]$_.Name; class = [string]$_.ObjectClass } }) }
 $f.cluster = F { if (-not (Get-Command Get-Cluster -ErrorAction SilentlyContinue)) { return $null }; $c = Get-Cluster; @{ name = [string]$c.Name; nodes = @(Get-ClusterNode | ForEach-Object { [string]$_.Name }) } }
+# Change history: service start types, security group membership, firewall rules, Hyper-V VMMS.
+# The Security log needs Event Log Readers membership (or local admin).
+$evs = @{ windowStartUtc = $since.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); account = [Security.Principal.WindowsIdentity]::GetCurrent().Name; sources = @(); entries = @() }
+foreach ($spec in @(
+        @{ log = 'System'; ids = @(7040) }
+        @{ log = 'Security'; ids = @(4728, 4729, 4732, 4733, 4756, 4757) }
+        @{ log = 'Microsoft-Windows-Windows Firewall With Advanced Security/Firewall'; ids = @(2004, 2005, 2006, 2052, 2097, 2099) }
+        @{ log = 'Microsoft-Windows-Hyper-V-VMMS-Admin'; ids = $null })) {
+    $r = W $spec.log $spec.ids 2000
+    $evs.sources += $r.source
+    $evs.entries += $r.entries
+}
+$denied = @($evs.sources | Where-Object { $_.status -eq 'denied' })
+$f.events = @{ status = $(if ($denied.Count) { 'denied' } else { 'ok' }); value = $evs }
+if ($denied.Count) { $f.events.error = (@($denied | ForEach-Object { "$($_.log): $($_.error)" }) -join '; ') }
 $out.host.facts = $f
 foreach ($sw in @(Get-VMSwitch)) {
     $out.switches += @{ id = [string]$sw.Id; name = $sw.Name; type = [string]$sw.SwitchType; allowManagementOS = [bool]$sw.AllowManagementOS; embeddedTeaming = [bool]$sw.EmbeddedTeamingEnabled; iov = [bool]$sw.IovEnabled
@@ -1850,7 +1947,7 @@ function Export-VsatCollector {
     if (-not (Test-Path -LiteralPath $OutputDir)) { [void](New-Item -ItemType Directory -Path $OutputDir -Force) }
     if ($Platform -eq 'hyperv') {
         $p = Join-Path $OutputDir 'vsat-hyperv-collect.ps1'
-        Write-VsatFile -Path $p -Content ("# Run on the Hyper-V host (elevated): powershell -NoProfile -File vsat-hyperv-collect.ps1 > hyperv-<host>.json`n# Then import with: vsat.ps1 -HyperVEvidence hyperv-<host>.json`n" + $script:VsatHyperVCollector)
+        Write-VsatFile -Path $p -Content ("# Run on the Hyper-V host (elevated): powershell -NoProfile -File vsat-hyperv-collect.ps1 -Since <engagement start yyyy-MM-dd> > hyperv-<host>.json`n# Then import with: vsat.ps1 -HyperVEvidence hyperv-<host>.json`n" + $script:VsatHyperVCollector)
     }
     else {
         $p = Join-Path $OutputDir 'vsat-kvm-collect.sh'
@@ -1862,12 +1959,12 @@ function Export-VsatCollector {
 function Invoke-VsatHyperVRemote {
     # Runs the read-only collector on the host. "localhost" runs in-process; "https://host"
     # uses WinRM over HTTPS; otherwise WinRM with Kerberos/Negotiate (message encryption).
-    param([Parameter(Mandatory)][string]$Address, [pscredential]$Credential)
+    param([Parameter(Mandatory)][string]$Address, [pscredential]$Credential, [string]$Since)
     $sb = [scriptblock]::Create($script:VsatHyperVCollector)
-    if ($Address -in @('localhost', '.', '127.0.0.1')) { return [string](& $sb) }
+    if ($Address -in @('localhost', '.', '127.0.0.1')) { return [string](& $sb $Since) }
     $useSsl = $Address -like 'https://*'
     $target = $Address -replace '^https?://', ''
-    $params = @{ ComputerName = $target; ScriptBlock = $sb; ErrorAction = 'Stop' }
+    $params = @{ ComputerName = $target; ScriptBlock = $sb; ArgumentList = @($Since); ErrorAction = 'Stop' }
     if ($Credential) { $params.Credential = $Credential }
     if ($useSsl) { $params.UseSSL = $true }
     return [string](Invoke-Command @params)
@@ -1910,8 +2007,9 @@ function Invoke-VsatHyperVCollection {
     param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)]$Endpoint, [pscredential]$Credential, [string]$ImportedJson)
     $vsatHvEndpoint = $Endpoint
     $json = $ImportedJson
+    $vsatHvSince = (Get-VsatChangeWindow -Evidence $Evidence).startUtc.Substring(0, 10)
     Invoke-VsatCollector -Evidence $Evidence -Name 'hyperv.host' -Endpoint $Endpoint.id -Affects @('HV-*') -Script {
-        if (-not $json) { $json = Invoke-VsatHyperVRemote -Address $vsatHvEndpoint.address -Credential $Credential }
+        if (-not $json) { $json = Invoke-VsatHyperVRemote -Address $vsatHvEndpoint.address -Credential $Credential -Since $vsatHvSince }
         $script:VsatHvData = ConvertFrom-VsatJson $json
         Add-VsatHyperVEvidence -Evidence $Evidence -Endpoint $vsatHvEndpoint -Data $script:VsatHvData
         1
@@ -1935,12 +2033,15 @@ function Invoke-VsatHyperVCollection {
 
 $script:VsatKvmCollector = @'
 #!/bin/sh
-# VSAT KVM/libvirt collector (read-only). Usage: sh vsat-kvm-collect.sh > kvm-<host>.txt
+# VSAT KVM/libvirt collector (read-only). Usage: sh vsat-kvm-collect.sh [engagement-start yyyy-mm-dd] > kvm-<host>.txt
 # Import with: vsat.ps1 -KvmEvidence kvm-<host>.txt
 # It only reads configuration and state; it writes nothing and changes nothing.
 LC_ALL=C; export LC_ALL
 V="virsh --readonly -c qemu:///system"
 sec() { printf '\n==VSAT:SECTION %s==\n' "$1"; }
+SINCE_DAY="${1:-${VSAT_SINCE_DAY:-}}"
+[ -n "$SINCE_DAY" ] || SINCE_DAY=$(date -u -d '30 days ago' +%Y-%m-%d 2>/dev/null)
+SINCE=$(date -u -d "$SINCE_DAY" +%s 2>/dev/null || echo 0)
 sec meta; printf 'collector=1\ncollected_utc=%s\nhostname=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(hostname -f 2>/dev/null || hostname)"
 sec os-release; cat /etc/os-release 2>/dev/null
 sec kernel; uname -r
@@ -1957,6 +2058,20 @@ sec groups; getent group libvirt kvm libvirt-qemu wheel sudo 2>/dev/null
 sec packages; (rpm -q qemu-kvm qemu-kvm-core libvirt-daemon libvirt 2>/dev/null; dpkg-query -W -f='${Package} ${Version}\n' qemu-system-x86 libvirt-daemon libvirt-daemon-system 2>/dev/null) | grep -v 'not installed'
 sec last-update; (rpm -qa --last 2>/dev/null | head -1; [ -f /var/log/dpkg.log ] && tail -n 1 /var/log/dpkg.log; stat -c 'aptlists=%Y' /var/lib/apt/lists 2>/dev/null; stat -c 'dpkgstatus=%Y' /var/lib/dpkg/status 2>/dev/null; stat -c 'rpmdb=%Y' /var/lib/rpm 2>/dev/null) 2>/dev/null
 sec now; date -u +%s
+sec change-window; printf 'since=%s\nsince_day=%s\ntz=%s\naccount=%s\n' "$SINCE" "$SINCE_DAY" "$(date +%z)" "$(id -un 2>/dev/null)"
+sec file-mtimes
+for d in /etc/ssh/sshd_config.d /etc/libvirt /etc/libvirt/qemu /etc/libvirt/qemu/networks /etc/sudoers.d /etc/firewalld /etc/firewalld/zones; do if [ -d "$d" ] && [ ! -r "$d" ]; then printf 'denied %s\n' "$d"; fi; done
+for f in /etc/ssh/sshd_config /etc/ssh/sshd_config.d/* /etc/group /etc/sudoers /etc/sudoers.d/* /etc/libvirt/*.conf /etc/libvirt/qemu/*.xml /etc/libvirt/qemu/networks/*.xml /etc/firewalld/firewalld.conf /etc/firewalld/zones/*.xml /etc/nftables.conf /etc/sysconfig/nftables.conf; do [ -e "$f" ] && stat -c '%Y %n' "$f" 2>&1; done
+sec package-log
+for f in /var/log/dnf.rpm.log /var/log/apt/history.log; do
+  if [ -e "$f" ]; then
+    if [ -r "$f" ]; then printf 'source=%s\nfirst=%s\n' "$f" "$(awk 'NF{print; exit}' "$f")"; awk -v d="$SINCE_DAY" '/^Start-Date: /{p=($2>=d)} /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/{p=(substr($0,1,10)>=d)} p' "$f" | tail -n 3000
+    else printf 'denied=%s\n' "$f"; fi
+  fi
+done
+sec logins
+L=$(command -v last 2>/dev/null)
+if [ -n "$L" ]; then last -F -w 2>&1 | awk 'NR<=5000 || /^wtmp begins/'; else echo 'unsupported=last'; fi
 sec domains; $V list --all --name 2>&1
 for d in $($V list --all --name 2>/dev/null); do
   sec "domain:$d"; $V dumpxml "$d" 2>&1
@@ -1975,7 +2090,7 @@ $script:VsatSshReadOnlyPreamble = 'sh -s'
 function Invoke-VsatKvmRemote {
     # Runs the collector over SSH using key-based auth only (BatchMode). The host key must
     # already be trusted (known_hosts) or pinned with -TrustedThumbprint "host=SHA256:...".
-    param([Parameter(Mandatory)][string]$Address, [string]$User)
+    param([Parameter(Mandatory)][string]$Address, [string]$User, [string]$SinceDay)
     $ssh = Get-Command ssh -ErrorAction SilentlyContinue
     if (-not $ssh) { throw 'ssh client not found; use -ExportCollector kvm and -KvmEvidence for offline collection.' }
     $hp = Split-VsatAddress $Address -DefaultPort 22
@@ -2004,7 +2119,10 @@ function Invoke-VsatKvmRemote {
         $sshArgs += @('-o', "UserKnownHostsFile=$kh", '-o', 'GlobalKnownHostsFile=/dev/null')
     }
     try {
-        $out = $script:VsatKvmCollector | & ssh @sshArgs $target $script:VsatSshReadOnlyPreamble 2>&1
+        # The engagement start is passed as a validated date variable ahead of the script text.
+        $body = $script:VsatKvmCollector
+        if ($SinceDay -match '^\d{4}-\d{2}-\d{2}$') { $body = "VSAT_SINCE_DAY=$SinceDay`n" + $body }
+        $out = $body | & ssh @sshArgs $target $script:VsatSshReadOnlyPreamble 2>&1
         if ($LASTEXITCODE -ne 0 -and -not ($out -join "`n").Contains('==VSAT:SECTION end==')) { throw "ssh to $Address failed (exit $LASTEXITCODE): $((@($out) | Select-Object -Last 3) -join ' ')" }
         return ($out -join "`n")
     }
@@ -2091,6 +2209,9 @@ function Add-VsatKvmEvidence {
     foreach ($m in [regex]::Matches([string]$s['last-update'], '(?:aptlists|dpkgstatus|rpmdb)=(\d+)')) { $stamps += [long]$m.Groups[1].Value }
     if ($now -gt 0 -and $stamps.Count) { $age = [int](($now - ($stamps | Measure-Object -Maximum).Maximum) / 86400); Set-VsatFact $ha 'updates' -Value ([ordered]@{ ageDays = $age; source = 'package database timestamp' }) }
     else { Set-VsatFact $ha 'updates' -Status 'unsupported' -Value $null -ErrorMessage 'Package update timestamp not available' }
+    # Change history (2.4): absent from older collector output, which then shows as "no change history".
+    $chg = ConvertFrom-VsatKvmChanges -Sections $s
+    if ($chg) { Set-VsatFact $ha 'changes' -Status $chg.status -Value $chg.value -ErrorMessage $chg.error }
     Set-VsatFact $ha 'libvirt' -Status $(if ([string]$s['virsh-version'] -match 'library|Using') { 'ok' } else { 'error' }) -Value ([string]$s['virsh-version']) -ErrorMessage $(if ([string]$s['virsh-version'] -notmatch 'library|Using') { [string]$s['virsh-version'] } else { $null })
 
     foreach ($key in @($s.Keys | Where-Object { $_ -like 'network:*' })) {
@@ -2143,8 +2264,9 @@ function Invoke-VsatKvmCollection {
     param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)]$Endpoint, [string]$User, [string]$ImportedText)
     $vsatKvmEndpoint = $Endpoint
     $txt = $ImportedText
+    $vsatKvmSince = (Get-VsatChangeWindow -Evidence $Evidence).startUtc.Substring(0, 10)
     Invoke-VsatCollector -Evidence $Evidence -Name 'kvm.host' -Endpoint $Endpoint.id -Affects @('KVM-*') -Script {
-        if (-not $txt) { $txt = Invoke-VsatKvmRemote -Address $vsatKvmEndpoint.address -User $User }
+        if (-not $txt) { $txt = Invoke-VsatKvmRemote -Address $vsatKvmEndpoint.address -User $User -SinceDay $vsatKvmSince }
         Add-VsatKvmEvidence -Evidence $Evidence -Endpoint $vsatKvmEndpoint -Text $txt
         1
     }
@@ -3614,6 +3736,9 @@ $script:VsatDomains = @(
     [ordered]@{ id = 'kvm-network'; name = 'KVM virtual networks'; mandatory = $true; platform = 'kvm'; collectors = @('kvm.network'); assetTypes = @('kvm-network') }
     # Lens over the domains above, driven by scope zones[].purdueLevel; never mandatory.
     [ordered]@{ id = 'ot-segmentation'; name = 'OT segmentation (virtualization layer)'; mandatory = $false; platform = 'cross-platform'; collectors = @(); assetTypes = @() }
+    # Audit integrity: does each endpoint's own change history cover the engagement window
+    # (src/78-Changes.ps1)? Never mandatory; gaps and denied reads are shown, never hidden.
+    [ordered]@{ id = 'change-history'; name = 'Change history (engagement window)'; mandatory = $false; platform = 'audit'; collectors = @(); assetTypes = @() }
 )
 
 function Update-VsatNsxDiscovery {
@@ -3703,7 +3828,7 @@ function Get-VsatNsxCoverage {
 }
 
 function Get-VsatCoverage {
-    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings)
+    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings, $Changes)
     $domains = [System.Collections.Generic.List[object]]::new()
     $vsEps = @($Evidence.scope.endpoints | Where-Object { $_.type -in @('vcenter', 'esxi') })
     $hasVc = @($vsEps | Where-Object { $_.type -eq 'vcenter' }).Count -gt 0
@@ -3719,6 +3844,12 @@ function Get-VsatCoverage {
                 $d.state = 'PARTIAL'; $d.label = 'PARTIAL: NSX PARTLY ASSESSED'
                 $d.missing = @($d.missing) + "$($checks.UNKNOWN + $checks.ERROR) NSX check(s) lack evidence"
             }
+            $domains.Add($d); continue
+        }
+        if ($def.id -eq 'change-history') {
+            $c = Get-VsatChangeCoverage -Evidence $Evidence -Changes $Changes
+            foreach ($k in 'state', 'label', 'detail', 'evidence', 'missing') { $d[$k] = $c[$k] }
+            $d.mandatory = $false
             $domains.Add($d); continue
         }
         if ($def.id -eq 'ot-segmentation') {
@@ -5518,6 +5649,577 @@ function Get-VsatFixWorkPackage {
 }
 #endregion Blast radius
 
+# ---- src/78-Changes.ps1 ----
+#region Change timeline, engagement window and receipt
+# 2.4 Audit Integrity. The change records the platforms already keep (vCenter events, NSX
+# object timestamps, Windows event logs, KVM file mtimes / package history / wtmp) are
+# normalized into one time-ordered list for the engagement window. Nothing here prevents a
+# customer from fixing, re-running or editing; it makes those things visible. Missing or
+# denied history is reported (coverage domain change-history), never shown as "no changes".
+
+$script:VsatChangeMaxLookbackDays = 180
+$script:VsatChangeDefaultDays = 30
+$script:VsatVIEventMaxSamples = 50000
+$script:VsatChangeMaxRecords = 10000
+$script:VsatCrockford = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+
+function Get-VsatChangeCategories {
+    if ($script:VsatChangeCategoryCache) { return $script:VsatChangeCategoryCache }
+    $script:VsatChangeCategoryCache = ConvertFrom-VsatJson (Get-VsatEmbeddedText 'data/change-categories.json')
+    return $script:VsatChangeCategoryCache
+}
+
+function ConvertTo-VsatChangeDate {
+    # Any timestamp VSAT records (UTC string, DateTime of any kind) -> UTC DateTime, or $null.
+    param([AllowNull()]$Value)
+    if ($null -eq $Value -or $Value -eq '') { return $null }
+    if ($Value -is [datetime]) {
+        if ($Value.Kind -eq [DateTimeKind]::Unspecified) { return [DateTime]::SpecifyKind($Value, [DateTimeKind]::Utc) }
+        return $Value.ToUniversalTime()
+    }
+    $d = [DateTime]::MinValue
+    $styles = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+    if ([DateTime]::TryParse([string]$Value, [Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$d)) { return $d }
+    return $null
+}
+
+function Format-VsatUtc {
+    param([Parameter(Mandatory)][datetime]$Time)
+    return $Time.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Resolve-VsatEngagementStart {
+    # -EngagementStart yyyy-MM-dd -> UTC midnight; never in the future, at most 180 days back.
+    param([Parameter(Mandatory)][string]$Value, [string]$RunStartUtc)
+    $d = [DateTime]::MinValue
+    $styles = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+    if (-not [DateTime]::TryParseExact($Value.Trim(), 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$d)) {
+        throw "-EngagementStart must be a date in yyyy-MM-dd format (got '$Value')."
+    }
+    $run = ConvertTo-VsatChangeDate $RunStartUtc
+    if (-not $run) { $run = [DateTime]::UtcNow }
+    if ($d -gt $run) { throw "-EngagementStart $Value is in the future." }
+    $min = $run.Date.AddDays(-$script:VsatChangeMaxLookbackDays)
+    $clamped = $d -lt $min
+    if ($clamped) { $d = $min }
+    return [ordered]@{ utc = (Format-VsatUtc $d); clamped = $clamped }
+}
+
+function Get-VsatChangeWindow {
+    # The window is part of the evidence (run.engagementStartUtc), so a replay shows the same
+    # timeline. Without it: 30 days before the run.
+    param([Parameter(Mandatory)]$Evidence)
+    $run = $Evidence.run
+    $runStart = ConvertTo-VsatChangeDate (Get-VsatProp $run 'startedUtc')
+    if (-not $runStart) { $runStart = [DateTime]::UtcNow }
+    $start = ConvertTo-VsatChangeDate (Get-VsatProp $run 'engagementStartUtc')
+    $source = 'operator'
+    if (-not $start) { $start = $runStart.Date.AddDays(-$script:VsatChangeDefaultDays); $source = 'default' }
+    $end = ConvertTo-VsatChangeDate (Get-VsatProp $run 'endedUtc')
+    if (-not $end -or $end -lt $runStart) { $end = $runStart }
+    return [ordered]@{ startUtc = (Format-VsatUtc $start); endUtc = (Format-VsatUtc $end); runStartUtc = (Format-VsatUtc $runStart); source = $source }
+}
+
+function ConvertTo-VsatAccountKey {
+    # DOMAIN\user, user@domain and user compare equal (case-insensitive).
+    param([AllowNull()][string]$User)
+    if (-not $User) { return '' }
+    $u = $User.Trim().ToLowerInvariant()
+    if ($u.Contains('\')) { $u = $u.Substring($u.LastIndexOf('\') + 1) }
+    if ($u.Contains('@')) { $u = $u.Substring(0, $u.IndexOf('@')) }
+    return $u
+}
+
+function Get-VsatVCenterEventCategory {
+    param([string]$Type, [string]$DescriptionId, [string]$EventTypeId)
+    $m = (Get-VsatChangeCategories).vcenter
+    if ($Type -and $m.eventTypes.Contains($Type)) { return [string]$m.eventTypes[$Type] }
+    if ($DescriptionId) { foreach ($p in @($m.descriptionIdPrefixes)) { if ($DescriptionId.StartsWith([string]$p.prefix, [StringComparison]::Ordinal)) { return [string]$p.category } } }
+    if ($EventTypeId) { foreach ($p in @($m.eventTypeIdPrefixes)) { if ($EventTypeId.StartsWith([string]$p.prefix, [StringComparison]::Ordinal)) { return [string]$p.category } } }
+    return $null
+}
+
+function ConvertTo-VsatVIEventFact {
+    # Projects Get-VIEvent output into the 'events' fact. Keeps categorized records only, and
+    # sign-ins only for the account VSAT itself uses (the earlier-runs detector).
+    param([AllowEmptyCollection()][object[]]$Events = @(), [Parameter(Mandatory)][string]$WindowStartUtc, [string]$Account, [string]$SessionKey, [bool]$CoversWindowStart, [int]$MaxSamples = $script:VsatVIEventMaxSamples)
+    $acct = ConvertTo-VsatAccountKey $Account
+    $records = [System.Collections.Generic.List[object]]::new()
+    $oldest = $null; $n = 0; $capped = $false
+    foreach ($e in @($Events | Where-Object { $null -ne $_ })) {
+        $n++
+        $t = ConvertTo-VsatChangeDate (Get-VsatProp $e 'CreatedTime')
+        if (-not $t) { continue }
+        if (-not $oldest -or $t -lt $oldest) { $oldest = $t }
+        $type = ([string]$e.PSObject.TypeNames[0] -split '\.')[-1]
+        $desc = [string](Get-VsatProp $e 'Info.DescriptionId' '')
+        $etid = [string](Get-VsatProp $e 'EventTypeId' '')
+        $cat = Get-VsatVCenterEventCategory -Type $type -DescriptionId $desc -EventTypeId $etid
+        if (-not $cat) { continue }
+        $user = [string](Get-VsatProp $e 'UserName' '')
+        if ($cat -eq 'login' -and (-not $acct -or (ConvertTo-VsatAccountKey $user) -ne $acct)) { continue }
+        if ($records.Count -ge $script:VsatChangeMaxRecords) { $capped = $true; continue }
+        # Most specific entity argument first; datacenter is on almost every event.
+        $entity = $null
+        foreach ($pair in @(@('Vm', 'Vm'), @('Host', 'Host'), @('ComputeResource', 'ComputeResource'), @('Ds', 'Datastore'), @('Dvs', 'Dvs'), @('Net', 'Network'), @('Entity', 'Entity'), @('Datacenter', 'Datacenter'))) {
+            $arg = Get-VsatProp $e $pair[0]
+            $ref = Get-VsatProp $arg $pair[1]
+            if ($ref -and (Get-VsatProp $ref 'Value')) { $entity = [ordered]@{ type = [string](Get-VsatProp $ref 'Type' ''); moref = [string]$ref.Value; name = [string](Get-VsatProp $arg 'Name' '') }; break }
+        }
+        $msg = Protect-VsatText ([string](Get-VsatProp $e 'FullFormattedMessage' ''))
+        if ($msg.Length -gt 300) { $msg = $msg.Substring(0, 300) }
+        $records.Add([ordered]@{ utc = (Format-VsatUtc $t); type = $type; descriptionId = $(if ($desc) { $desc } else { $null }); eventTypeId = $(if ($etid) { $etid } else { $null }); user = $user; message = $msg; entity = $entity; sessionId = $(if ($cat -eq 'login') { [string](Get-VsatProp $e 'SessionId' '') } else { $null }) })
+    }
+    return [ordered]@{
+        windowStartUtc = $WindowStartUtc; oldestUtc = $(if ($oldest) { Format-VsatUtc $oldest } else { $null }); coversWindowStart = [bool]$CoversWindowStart
+        truncated = ($n -ge $MaxSamples); maxSamples = $MaxSamples; recordsCapped = $capped
+        account = $Account; currentSessionKey = $SessionKey; records = $records.ToArray()
+    }
+}
+
+function ConvertTo-VsatNsxModified {
+    # NSX objects carry _last_modified_time (epoch ms) and _last_modified_user on every GET.
+    param([AllowNull()]$Object)
+    $o = [ordered]@{}
+    $ms = Get-VsatProp $Object '_last_modified_time'
+    if ($null -eq $ms) { return $o }
+    try { $o.lastModifiedUtc = Format-VsatUtc ([DateTimeOffset]::FromUnixTimeMilliseconds([long]$ms).UtcDateTime) } catch { return [ordered]@{} }
+    $o.lastModifiedUser = [string](Get-VsatProp $Object '_last_modified_user' '')
+    return $o
+}
+
+function ConvertTo-VsatOffset {
+    # "+0200" / "-0530" / "Z" -> TimeSpan.
+    param([string]$Text)
+    if ($Text -match '^([+-])(\d{2}):?(\d{2})$') { $ts = [TimeSpan]::new([int]$Matches[2], [int]$Matches[3], 0); if ($Matches[1] -eq '-') { $ts = $ts.Negate() }; return $ts }
+    return [TimeSpan]::Zero
+}
+
+function ConvertFrom-VsatLocalTime {
+    # Host-local wall clock text + host UTC offset -> UTC string (or $null).
+    param([string]$Text, [string[]]$Formats, [TimeSpan]$Offset)
+    $d = [DateTime]::MinValue
+    $t = ($Text -replace '\s+', ' ').Trim()
+    if (-not [DateTime]::TryParseExact($t, $Formats, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$d)) { return $null }
+    return (Format-VsatUtc ([DateTimeOffset]::new($d, $Offset).UtcDateTime))
+}
+
+function ConvertFrom-VsatIsoOffsetTime {
+    # dnf.rpm.log timestamps: 2026-09-23T10:11:12+0000.
+    param([string]$Text)
+    $t = $Text -replace '([+-]\d{2})(\d{2})$', '$1:$2'
+    $d = [DateTimeOffset]::MinValue
+    if ([DateTimeOffset]::TryParse($t, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$d)) { return (Format-VsatUtc $d.UtcDateTime) }
+    return $null
+}
+
+function ConvertFrom-VsatKvmChanges {
+    # KVM collector sections change-window, file-mtimes, package-log, logins -> 'changes' fact.
+    # Returns $null for collector output from before 2.4 (no change-window section).
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Sections)
+    if (-not $Sections.Contains('change-window')) { return $null }
+    $cw = ConvertFrom-VsatKeyValue ([string]$Sections['change-window'])
+    $tzText = [string]$cw['tz']
+    $tz = ConvertTo-VsatOffset $tzText
+    $since = 0L; [void][long]::TryParse([string]$cw['since'], [ref]$since)
+    $v = [ordered]@{
+        windowStartUtc = $(if ($since -gt 0) { Format-VsatUtc ([DateTimeOffset]::FromUnixTimeSeconds($since).UtcDateTime) } else { $null })
+        account = [string]$cw['account']; tz = $tzText
+        files = @(); deniedPaths = @()
+        packages = [ordered]@{ status = 'absent'; source = $null; firstUtc = $null; records = @() }
+        logins = [ordered]@{ status = 'absent'; beginsUtc = $null; records = @() }
+    }
+    $files = [System.Collections.Generic.List[object]]::new(); $denied = [System.Collections.Generic.List[string]]::new()
+    foreach ($l in (([string]$Sections['file-mtimes']) -split "`r?`n")) {
+        if ($l -match '^(\d+) (/.+)$') { $files.Add([ordered]@{ path = $Matches[2]; mtimeUtc = (Format-VsatUtc ([DateTimeOffset]::FromUnixTimeSeconds([long]$Matches[1]).UtcDateTime)) }) }
+        elseif ($l -match '^denied (/.+)$') { $denied.Add($Matches[1]) }
+        elseif ($l -match "cannot stat '([^']+)': Permission denied") { $denied.Add($Matches[1]) }
+    }
+    $v.files = $files.ToArray(); $v.deniedPaths = $denied.ToArray()
+
+    $pk = $v.packages
+    $recs = [System.Collections.Generic.List[object]]::new()
+    $apt = $null
+    $flushApt = { if ($apt -and $apt.utc -and @($apt.packages).Count) { $recs.Add([ordered]@{ utc = $apt.utc; action = (@($apt.packages) -join '; '); user = $apt.user }) } }
+    foreach ($l in (([string]$Sections['package-log']) -split "`r?`n")) {
+        if ($l -match '^denied=(.+)$') { $pk.status = 'denied'; $pk.source = $Matches[1]; continue }
+        if ($l -match '^source=(.+)$') { $pk.status = 'ok'; $pk.source = $Matches[1]; continue }
+        if ($l -match '^first=(.*)$') {
+            $f = $Matches[1]
+            if ($f -match '^(\d{4}-\d{2}-\d{2}T\S+)') { $pk.firstUtc = ConvertFrom-VsatIsoOffsetTime $Matches[1] }
+            elseif ($f -match '^Start-Date:\s*(.+)$') { $pk.firstUtc = ConvertFrom-VsatLocalTime -Text $Matches[1] -Formats @('yyyy-MM-dd HH:mm:ss') -Offset $tz }
+            continue
+        }
+        if ($l -match '^(\d{4}-\d{2}-\d{2}T\S+)\s+\S+\s+(Upgraded|Installed|Erased|Removed|Downgraded|Reinstalled|Obsoleted|Upgrade|Erase|Install):\s*(\S+)') {
+            $u = ConvertFrom-VsatIsoOffsetTime $Matches[1]
+            if ($u) { $recs.Add([ordered]@{ utc = $u; action = "$($Matches[2]) $($Matches[3])"; user = $null }) }
+            continue
+        }
+        if ($l -match '^Start-Date:\s*(.+)$') { & $flushApt; $apt = @{ utc = (ConvertFrom-VsatLocalTime -Text $Matches[1] -Formats @('yyyy-MM-dd HH:mm:ss') -Offset $tz); user = $null; packages = @() }; continue }
+        if ($apt -and $l -match '^Requested-By:\s*(\S+)') { $apt.user = $Matches[1]; continue }
+        if ($apt -and $l -match '^(Install|Upgrade|Remove|Purge|Downgrade|Reinstall):\s*(.+)$') {
+            $names = @([regex]::Matches($Matches[2], '(?:^|\),\s*)([^\s:,()]+)(?::[^\s(]+)?\s*\(') | ForEach-Object { $_.Groups[1].Value })
+            $apt.packages = @($apt.packages) + @("$($Matches[1]) $($names -join ', ')")
+        }
+    }
+    & $flushApt
+    $pk.records = $recs.ToArray()
+
+    $lg = $v.logins
+    $ltext = [string]$Sections['logins']
+    $lrecs = [System.Collections.Generic.List[object]]::new()
+    if ($ltext -match 'unsupported=last') { $lg.status = 'unsupported' }
+    elseif ($ltext -match '(?i)permission denied|cannot open') { $lg.status = 'denied' }
+    elseif ($ltext.Trim()) {
+        $lg.status = 'ok'
+        $fmt = @('ddd MMM d HH:mm:ss yyyy')
+        foreach ($l in ($ltext -split "`r?`n")) {
+            if ($l -match '^wtmp begins (.+)$') { $lg.beginsUtc = ConvertFrom-VsatLocalTime -Text $Matches[1] -Formats $fmt -Offset $tz; continue }
+            if ($l -match '^(reboot|shutdown|runlevel)\s') { continue }
+            if ($l -match '^(?<user>\S+)\s+(?<tty>\S+)\s+(?:(?<from>\S+)\s+)?(?<when>(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Z][a-z]{2} +\d{1,2} \d{2}:\d{2}:\d{2} \d{4})') {
+                $u = ConvertFrom-VsatLocalTime -Text $Matches['when'] -Formats $fmt -Offset $tz
+                if ($u) { $lrecs.Add([ordered]@{ utc = $u; user = $Matches['user']; tty = $Matches['tty']; from = $(if ($Matches['from']) { $Matches['from'] } else { $null }) }) }
+            }
+        }
+    }
+    $lg.records = $lrecs.ToArray()
+
+    $reasons = @()
+    if ($v.deniedPaths.Count) { $reasons += "cannot read $($v.deniedPaths -join ', ')" }
+    if ($pk.status -eq 'denied') { $reasons += "package history $($pk.source): access denied" }
+    if ($lg.status -eq 'denied') { $reasons += 'logins (wtmp): access denied' }
+    return [ordered]@{ status = $(if ($reasons.Count) { 'denied' } else { 'ok' }); value = $v; error = ($reasons -join '; ') }
+}
+
+function Get-VsatKvmFileCategory {
+    param([string]$Path)
+    foreach ($p in @((Get-VsatChangeCategories).kvm.files)) {
+        $rx = '^' + [regex]::Escape([string]$p.pattern).Replace('\*', '[^/]*') + '$'
+        if ($Path -match $rx) { return [string]$p.category }
+    }
+    return $null
+}
+
+function New-VsatChangeEntry {
+    param([string]$Utc, [string]$EndpointId, [string]$AssetId, [string]$User, [string]$Category, [string]$Action, [string]$Source)
+    $asset = Get-VsatAsset $AssetId
+    $id = 'C-' + (Get-VsatSha256 -Text ("$Source|$Utc|$EndpointId|$AssetId|$Category|$User|$Action")).Substring(0, 8)
+    return [ordered]@{ id = $id; utc = $Utc; endpointId = $EndpointId; assetId = $AssetId; assetName = $(if ($asset) { $asset.name } else { $AssetId }); user = $(if ($User) { $User } else { $null }); category = $Category; action = (Protect-VsatText $Action); source = $Source }
+}
+
+function Get-VsatChangeAnalysis {
+    # Evidence -> results.analysis.changes. Pure function of evidence, so replay reproduces it.
+    param([Parameter(Mandatory)]$Evidence)
+    if (-not $script:VsatAssetIndex -or $script:VsatAssetIndex.Count -ne @($Evidence.assets).Count) {
+        $script:VsatAssetIndex = @{}; foreach ($a in $Evidence.assets) { $script:VsatAssetIndex[$a.id] = $a }
+    }
+    $win = Get-VsatChangeWindow -Evidence $Evidence
+    $ws = ConvertTo-VsatChangeDate $win.startUtc
+    # Records up to a few minutes after the run end still belong to this run's timeline.
+    $we = (ConvertTo-VsatChangeDate $win.endUtc).AddMinutes(10)
+    $runStart = ConvertTo-VsatChangeDate $win.runStartUtc
+    $map = Get-VsatChangeCategories
+    $entries = [System.Collections.Generic.List[object]]::new()
+    $seen = @{}
+    $sources = [System.Collections.Generic.List[object]]::new()
+    $historyBy = [ordered]@{}
+    $logins = [System.Collections.Generic.List[object]]::new()   # @{ endpointId; entry; sessionId }
+    $accounts = [ordered]@{}   # endpointId -> @{ user; sessionKey; loginsReadable }
+    $inWindow = { param($u) $t = ConvertTo-VsatChangeDate $u; return ($t -and $t -ge $ws -and $t -le $we) }
+    $add = {
+        param($entry)
+        if (-not $entry -or $seen.ContainsKey($entry.id)) { return }
+        $seen[$entry.id] = $true
+        $entries.Add($entry)
+    }
+    $byEndpoint = @{}; foreach ($a in $Evidence.assets) { if (-not $byEndpoint.ContainsKey([string]$a.endpoint)) { $byEndpoint[[string]$a.endpoint] = [System.Collections.Generic.List[object]]::new() }; $byEndpoint[[string]$a.endpoint].Add($a) }
+    foreach ($ep in @($Evidence.scope.endpoints)) {
+        $epId = [string]$ep.id
+        $assets = if ($byEndpoint.ContainsKey($epId)) { $byEndpoint[$epId] } else { @() }
+        $src = [ordered]@{ endpointId = $epId; address = [string]$ep.address; type = [string]$ep.type; status = 'not-collected'; historyStartUtc = $null; reasons = @(); note = $null }
+        $reasons = [System.Collections.Generic.List[string]]::new()
+        switch ($ep.type) {
+            { $_ -in @('vcenter', 'esxi') } {
+                $root = @($assets | Where-Object { $_.id -eq "${epId}:root" })[0]
+                $f = if ($root -and $root.facts.Contains('events')) { $root.facts.events } else { $null }
+                if (-not $f) { $reasons.Add($(if ($root) { 'no event history in this evidence (collected before VSAT 2.4)' } else { 'endpoint was not assessed' })); break }
+                if ($f.status -ne 'ok') { $src.status = $(if ($f.status -eq 'denied') { 'denied' } else { 'error' }); $reasons.Add("event history $($f.status)$(if ($f.error) { ": $($f.error)" })"); break }
+                $v = $f.value
+                $accounts[$epId] = @{ user = [string]$v.account; sessionKey = [string]$v.currentSessionKey; loginsReadable = $true }
+                foreach ($r in @($v.records)) {
+                    if (-not $r -or -not (& $inWindow $r.utc)) { continue }
+                    $cat = Get-VsatVCenterEventCategory -Type ([string]$r.type) -DescriptionId ([string]$r.descriptionId) -EventTypeId ([string]$r.eventTypeId)
+                    if (-not $cat) { continue }
+                    $aid = "${epId}:root"
+                    if ($r.entity -and $r.entity.moref -and (Get-VsatAsset "${epId}:$($r.entity.moref)")) { $aid = "${epId}:$($r.entity.moref)" }
+                    $action = if ($r.message) { [string]$r.message } elseif ($r.descriptionId) { [string]$r.descriptionId } else { [string]$r.type }
+                    $e = New-VsatChangeEntry -Utc $r.utc -EndpointId $epId -AssetId $aid -User ([string]$r.user) -Category $cat -Action $action -Source 'vcenter-event'
+                    if ($cat -eq 'login') {
+                        # The current session is this run, not an earlier one.
+                        if (($r.sessionId -and $r.sessionId -eq $v.currentSessionKey) -or (ConvertTo-VsatChangeDate $r.utc) -ge $runStart) { continue }
+                        $logins.Add(@{ endpointId = $epId; entry = $e })
+                    }
+                    & $add $e
+                }
+                $vs = ConvertTo-VsatChangeDate $v.windowStartUtc
+                $oldest = ConvertTo-VsatChangeDate $v.oldestUtc
+                $hs = $ws
+                if ($vs -and $vs -gt $hs) { $hs = $vs; $reasons.Add("events were collected from $($v.windowStartUtc.Substring(0, 10)) only") }
+                if ($v.truncated -and $oldest -and $oldest -gt $hs) { $hs = $oldest; $reasons.Add("event query reached $($v.maxSamples) records (older events not read)") }
+                elseif (-not $v.coversWindowStart -and $oldest -and $oldest -gt $hs) { $hs = $oldest; $reasons.Add('vCenter keeps no events from before this date (event retention or cleared events)') }
+                elseif (-not $v.coversWindowStart -and -not $oldest) { $reasons.Add('vCenter returned no events for the window') ; $hs = $we }
+                $src.historyStartUtc = Format-VsatUtc $hs
+                $src.status = $(if ($hs -gt $ws) { 'gap' } else { 'covered' })
+            }
+            'nsx' {
+                $mgr = @($assets | Where-Object { $_.type -eq 'nsx-manager' })[0]
+                $stamped = @($assets | Where-Object { $_.props -and $_.props.Contains('lastModifiedUtc') })
+                if (-not $mgr -or -not $stamped.Count) { $reasons.Add($(if ($mgr) { 'objects carry no modification timestamps (collected before VSAT 2.4)' } else { 'endpoint was not assessed' })); break }
+                foreach ($a in $stamped) {
+                    $cat = [string](Get-VsatProp $map.nsx.assetTypes $a.type '')
+                    if (-not $cat -or -not (& $inWindow $a.props.lastModifiedUtc)) { continue }
+                    & $add (New-VsatChangeEntry -Utc $a.props.lastModifiedUtc -EndpointId $epId -AssetId $a.id -User ([string]$a.props.lastModifiedUser) -Category $cat -Action "Last modified: $($a.type -replace '^nsx-', 'NSX ') $($a.name)" -Source 'nsx-object')
+                }
+                foreach ($k in @($map.nsx.managerFacts.Keys)) {
+                    $m = ConvertTo-VsatNsxModified (Get-VsatProp $mgr.facts "$k.value")
+                    if ($m.Count -and (& $inWindow $m.lastModifiedUtc)) { & $add (New-VsatChangeEntry -Utc $m.lastModifiedUtc -EndpointId $epId -AssetId $mgr.id -User $m.lastModifiedUser -Category ([string]$map.nsx.managerFacts[$k]) -Action "Last modified: NSX $k" -Source 'nsx-object') }
+                }
+                $src.status = 'covered'; $src.historyStartUtc = $win.startUtc
+                $src.note = 'NSX keeps only the last modification of each object; earlier changes to the same object are not visible.'
+            }
+            'hyperv' {
+                $h = @($assets | Where-Object { $_.type -eq 'hyperv-host' })[0]
+                $f = if ($h -and $h.facts.Contains('events')) { $h.facts.events } else { $null }
+                if (-not $f) { $reasons.Add($(if ($h) { 'no event history in this evidence (collected before VSAT 2.4)' } else { 'endpoint was not assessed' })); break }
+                $v = $f.value
+                if (-not $v) { $src.status = $(if ($f.status -eq 'denied') { 'denied' } else { 'error' }); $reasons.Add("event history $($f.status)$(if ($f.error) { ": $($f.error)" })"); break }
+                $accounts[$epId] = @{ user = [string]$v.account; sessionKey = $null; loginsReadable = $false }
+                foreach ($r in @($v.entries)) {
+                    if (-not $r -or -not (& $inWindow $r.utc)) { continue }
+                    $logMap = Get-VsatProp $map.windows ([string]$r.log)
+                    $cat = if ($logMap) { [string](Get-VsatProp $logMap ([string]$r.id) (Get-VsatProp $logMap '*' '')) } else { '' }
+                    if (-not $cat) { continue }
+                    $action = [string]$r.message
+                    if ($r.target -and $action -notmatch [regex]::Escape([string]$r.target)) { $action = "$action [$($r.target)]" }
+                    & $add (New-VsatChangeEntry -Utc $r.utc -EndpointId $epId -AssetId $h.id -User ([string]$r.user) -Category $cat -Action $action -Source 'windows-event')
+                }
+                $hs = $ws
+                $vs = ConvertTo-VsatChangeDate $v.windowStartUtc
+                if ($vs -and $vs -gt $hs) { $hs = $vs; $reasons.Add("events were collected from $($v.windowStartUtc.Substring(0, 10)) only") }
+                foreach ($s in @($v.sources)) {
+                    if (-not $s) { continue }
+                    if ($s.status -eq 'denied') { $reasons.Add("$($s.log) log: access denied$(if ($s.error) { " ($($s.error))" }) - add the account to Event Log Readers") ; continue }
+                    if ($s.status -ne 'ok') { $reasons.Add("$($s.log) log: $($s.status)$(if ($s.error) { " ($($s.error))" })"); continue }
+                    $o = ConvertTo-VsatChangeDate $s.oldestUtc
+                    # A quiet log that is not full holds everything since it was created; a full
+                    # (rolled over) or cleared log starts at its oldest event.
+                    $cleared = [int](Get-VsatProp $s 'oldestId' 0) -in @(104, 1102)
+                    if ($o -and $o -gt $ws -and ([bool](Get-VsatProp $s 'full' $false) -or $cleared)) {
+                        if ($o -gt $hs) { $hs = $o }
+                        $reasons.Add("$($s.log) log $(if ($cleared) { 'was cleared' } else { 'rolled over' }); history starts $($s.oldestUtc.Substring(0, 10))")
+                    }
+                    if ($s.truncated) { $reasons.Add("$($s.log) log: more than $($s.count) records in the window (older ones not read)") }
+                }
+                $src.historyStartUtc = Format-VsatUtc $hs
+                $src.status = $(if ($f.status -eq 'denied' -or @($v.sources | Where-Object { $_ -and $_.status -eq 'denied' }).Count) { 'denied' } elseif ($hs -gt $ws) { 'gap' } elseif (@($v.sources | Where-Object { $_ -and $_.status -notin @('ok') }).Count) { 'error' } else { 'covered' })
+            }
+            'kvm' {
+                $h = @($assets | Where-Object { $_.type -eq 'kvm-host' })[0]
+                $f = if ($h -and $h.facts.Contains('changes')) { $h.facts.changes } else { $null }
+                if (-not $f -or -not $f.value) { $reasons.Add($(if ($h) { 'no change history in this evidence (collected before VSAT 2.4)' } else { 'endpoint was not assessed' })); break }
+                $v = $f.value
+                $accounts[$epId] = @{ user = [string]$v.account; sessionKey = $null; loginsReadable = ($v.logins.status -eq 'ok') }
+                foreach ($fi in @($v.files)) {
+                    if (-not $fi -or -not (& $inWindow $fi.mtimeUtc)) { continue }
+                    $cat = Get-VsatKvmFileCategory ([string]$fi.path)
+                    if (-not $cat) { continue }
+                    $aid = $h.id
+                    $leaf = [IO.Path]::GetFileNameWithoutExtension([string]$fi.path)
+                    if ($fi.path -like '/etc/libvirt/qemu/networks/*.xml') { $n = @($assets | Where-Object { $_.type -eq 'kvm-network' -and $_.props.network -eq $leaf })[0]; if ($n) { $aid = $n.id } }
+                    elseif ($fi.path -like '/etc/libvirt/qemu/*.xml') { $n = @($assets | Where-Object { $_.type -eq 'kvm-vm' -and $_.name -eq $leaf })[0]; if ($n) { $aid = $n.id } }
+                    & $add (New-VsatChangeEntry -Utc $fi.mtimeUtc -EndpointId $epId -AssetId $aid -User '' -Category $cat -Action "Modified $($fi.path)" -Source 'file-mtime')
+                }
+                # One entry per package transaction (records within the same minute).
+                $groups = [ordered]@{}
+                foreach ($r in @($v.packages.records)) { if ($r -and (& $inWindow $r.utc)) { $k = $r.utc.Substring(0, 16); if (-not $groups.Contains($k)) { $groups[$k] = [System.Collections.Generic.List[object]]::new() }; $groups[$k].Add($r) } }
+                foreach ($k in $groups.Keys) {
+                    $g = $groups[$k]
+                    $acts = @($g | ForEach-Object { [string]$_.action })
+                    $text = if ($acts.Count -gt 6) { (@($acts | Select-Object -First 6) -join '; ') + "; +$($acts.Count - 6) more" } else { $acts -join '; ' }
+                    & $add (New-VsatChangeEntry -Utc $g[0].utc -EndpointId $epId -AssetId $h.id -User ([string]$g[0].user) -Category ([string]$map.kvm.packageLog) -Action "Packages: $text" -Source 'package-log')
+                }
+                foreach ($r in @($v.logins.records)) {
+                    if (-not $r -or -not (& $inWindow $r.utc)) { continue }
+                    $e = New-VsatChangeEntry -Utc $r.utc -EndpointId $epId -AssetId $h.id -User ([string]$r.user) -Category ([string]$map.kvm.wtmp) -Action ("Login ($($r.tty))" + $(if ($r.from) { " from $($r.from)" } else { '' })) -Source 'wtmp'
+                    if ((ConvertTo-VsatChangeDate $r.utc) -lt $runStart) { $logins.Add(@{ endpointId = $epId; entry = $e }) }
+                    & $add $e
+                }
+                $hs = $ws
+                $vs = ConvertTo-VsatChangeDate $v.windowStartUtc
+                if ($vs -and $vs -gt $hs) { $hs = $vs; $reasons.Add("changes were collected from $($v.windowStartUtc.Substring(0, 10)) only") }
+                if ($v.deniedPaths.Count) { $reasons.Add("cannot read $($v.deniedPaths -join ', ') (run the collector as root to include them)") }
+                switch ($v.packages.status) {
+                    'ok' { $p1 = ConvertTo-VsatChangeDate $v.packages.firstUtc; if ($p1 -and $p1 -gt $ws) { if ($p1 -gt $hs) { $hs = $p1 }; $reasons.Add("package history $($v.packages.source) starts $($v.packages.firstUtc.Substring(0, 10)) (rotated)") } }
+                    'denied' { $reasons.Add("package history $($v.packages.source): access denied") }
+                    default { $reasons.Add('no package history log found (/var/log/dnf.rpm.log or /var/log/apt/history.log)') }
+                }
+                switch ($v.logins.status) {
+                    'ok' { $b = ConvertTo-VsatChangeDate $v.logins.beginsUtc; if ($b -and $b -gt $ws) { if ($b -gt $hs) { $hs = $b }; $reasons.Add("login records (wtmp) start $($v.logins.beginsUtc.Substring(0, 10))") } }
+                    'denied' { $reasons.Add('logins (wtmp): access denied') }
+                    default { $reasons.Add("logins: $($v.logins.status)") }
+                }
+                $src.historyStartUtc = Format-VsatUtc $hs
+                $src.status = $(if ($f.status -eq 'denied') { 'denied' } elseif ($hs -gt $ws) { 'gap' } elseif ($v.packages.status -ne 'ok' -or $v.logins.status -ne 'ok') { 'error' } else { 'covered' })
+            }
+        }
+        $src.reasons = $reasons.ToArray()
+        if ($src.historyStartUtc) { $historyBy[$epId] = $src.historyStartUtc }
+        $sources.Add($src)
+    }
+    $gaps = @(foreach ($s in $sources) {
+            if ($s.status -eq 'gap') { [ordered]@{ endpointId = $s.endpointId; address = $s.address; historyStartUtc = $s.historyStartUtc; windowStartUtc = $win.startUtc; text = "History starts $($s.historyStartUtc.Substring(0, 10)), engagement started $($win.startUtc.Substring(0, 10))" } }
+        })
+    # Earlier-runs detector: sign-ins by the account VSAT used, before this run, inside the window.
+    $sessions = @(foreach ($epId in $accounts.Keys) {
+            $acc = $accounts[$epId]
+            if (-not $acc.user -or -not $acc.loginsReadable) { continue }
+            $key = ConvertTo-VsatAccountKey $acc.user
+            $mine = @($logins | Where-Object { $_.endpointId -eq $epId -and (ConvertTo-VsatAccountKey $_.entry.user) -eq $key } | ForEach-Object { $_.entry } | Sort-Object { $_.utc })
+            [ordered]@{ endpointId = $epId; user = $acc.user; count = $mine.Count; firstUtc = $(if ($mine.Count) { $mine[0].utc } else { $null }); lastUtc = $(if ($mine.Count) { $mine[-1].utc } else { $null }); entryIds = @($mine | ForEach-Object { $_.id }) }
+        })
+    $sorted = @($entries | Sort-Object -Property @{ Expression = { $_.utc }; Descending = $true }, @{ Expression = { $_.id }; Descending = $false })
+    return [ordered]@{
+        windowStartUtc = $win.startUtc; windowEndUtc = $win.endUtc; windowSource = $win.source
+        entries = $sorted
+        historyStartUtcByEndpoint = $historyBy
+        gaps = $gaps
+        sources = $sources.ToArray()
+        accountSessions = $sessions
+        summary = [ordered]@{ entries = $sorted.Count; changedChecks = 0; changedPassing = 0 }
+    }
+}
+
+function Set-VsatChangedInWindow {
+    # A finding gets changedInWindow = [entryId] when its asset has an entry in the rule's
+    # changeCategory inside the window. The result itself never changes (a PASS stays a PASS).
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings, [Parameter(Mandatory)]$Changes)
+    # When an entry names what changed ("Update option values (Security.AccountLockFailures)",
+    # "Stop service (SSH)"), only checks on that setting or service are marked. An entry that
+    # names nothing, or names something no check on the asset reads, marks the whole category.
+    $cats = @{}; $keys = @{}
+    foreach ($r in (Get-VsatRulePack).rules) {
+        $c = Get-VsatProp $r 'changeCategory'
+        if (-not $c) { continue }
+        $cats[[string]$r.id] = @($c)
+        $k = [string](Get-VsatProp (Get-VsatProp $r 'check') 'key' '')
+        if ($k) { $keys[[string]$r.id] = $k.ToLowerInvariant() }
+    }
+    $keyed = { param($ruleId, $subject) $rk = $keys[[string]$ruleId]; $rk -and ($rk -eq $subject -or $rk.EndsWith("-$subject", [StringComparison]::Ordinal) -or $rk.EndsWith(".$subject", [StringComparison]::Ordinal)) }
+    $assetRules = @{}
+    foreach ($f in $Findings) { $a = [string]$f.assetId; if (-not $assetRules.ContainsKey($a)) { $assetRules[$a] = [System.Collections.Generic.List[string]]::new() }; $assetRules[$a].Add([string]$f.ruleId) }
+    $idx = @{}; $subjects = @{}
+    foreach ($e in @($Changes.entries)) {
+        $k = "$($e.assetId)|$($e.category)"
+        if (-not $idx.ContainsKey($k)) { $idx[$k] = [System.Collections.Generic.List[string]]::new() }
+        $idx[$k].Add([string]$e.id)
+        if ($e.category -in @('settings', 'service') -and [string]$e.action -match '\(([^()]+)\)\s*$') {
+            $s = ($Matches[1] -split ':')[0].Trim().ToLowerInvariant()
+            if (@($assetRules[[string]$e.assetId] | Where-Object { & $keyed $_ $s }).Count) { $subjects[[string]$e.id] = $s }
+        }
+    }
+    $changed = 0; $passing = 0
+    foreach ($f in $Findings) {
+        if (-not $cats.ContainsKey([string]$f.ruleId)) { continue }
+        $ids = @(foreach ($c in $cats[[string]$f.ruleId]) { $k = "$($f.assetId)|$c"; if ($idx.ContainsKey($k)) { $idx[$k] | Where-Object { -not $subjects.ContainsKey($_) -or (& $keyed $f.ruleId $subjects[$_]) } } })
+        if (-not $ids.Count) { continue }
+        $f.changedInWindow = @($ids | Select-Object -Unique)
+        $changed++
+        if ($f.result -eq 'PASS') { $passing++ }
+    }
+    $Changes.summary.changedChecks = $changed
+    $Changes.summary.changedPassing = $passing
+}
+
+function Get-VsatChangeCoverage {
+    # Non-mandatory coverage domain change-history: ASSESSED when every endpoint's history
+    # covers the window, PARTIAL on gaps, UNKNOWN when history was denied or is absent.
+    param([Parameter(Mandatory)]$Evidence, $Changes)
+    if (-not $Changes) { $Changes = Get-VsatChangeAnalysis -Evidence $Evidence }
+    $srcs = @($Changes.sources)
+    $ws = $Changes.windowStartUtc.Substring(0, 10)
+    $winText = "Engagement window $ws to $($Changes.windowEndUtc.Substring(0, 10)) ($(if ($Changes.windowSource -eq 'operator') { 'engagement start given with -EngagementStart' } else { 'default: 30 days before the run' }))."
+    if (-not $srcs.Count) {
+        return [ordered]@{ state = 'NOT_APPLICABLE'; label = 'NOT APPLICABLE: NO ENDPOINTS IN SCOPE'; detail = 'No endpoints were assessed, so there is no change history to read.'; evidence = @(); missing = @() }
+    }
+    $name = { param($s) "$($s.type) $($s.address)" }
+    $evidence = @(foreach ($s in $srcs) { "$(& $name $s): $($s.status)$(if ($s.historyStartUtc) { ", history from $($s.historyStartUtc.Substring(0, 10))" })$(if ($s.note) { " ($($s.note))" })" })
+    $missing = @(foreach ($s in $srcs) {
+            if ($s.status -eq 'covered') { continue }
+            $lead = if ($s.status -eq 'gap') { "History starts $($s.historyStartUtc.Substring(0, 10)), engagement started $ws. " } else { '' }
+            "$(& $name $s): $lead$(@($s.reasons) -join '; ')"
+        })
+    $count = "$(@($Changes.entries).Count) change(s) recorded."
+    if (@($srcs | Where-Object { $_.status -ne 'not-collected' }).Count -eq 0) {
+        return [ordered]@{ state = 'UNKNOWN'; label = 'UNKNOWN: NO CHANGE HISTORY IN THIS EVIDENCE'; detail = "This evidence has no change history (collected before VSAT 2.4, or no endpoint was assessed). Changes during the engagement cannot be shown. This is not a pass. $winText"; evidence = $evidence; missing = $missing }
+    }
+    if (@($srcs | Where-Object { $_.status -eq 'denied' }).Count) {
+        return [ordered]@{ state = 'UNKNOWN'; label = 'UNKNOWN: CHANGE HISTORY NOT READABLE'; detail = "Change history could not be read on every endpoint (access denied); changes there cannot be shown. $count $winText"; evidence = $evidence; missing = $missing }
+    }
+    if ($missing.Count) {
+        $g = @($Changes.gaps | Select-Object -First 1)
+        return [ordered]@{ state = 'PARTIAL'; label = 'PARTIAL: CHANGE HISTORY INCOMPLETE'; detail = "$(if ($g.Count) { "$($g[0].address): $($g[0].text). " })Changes before the history start are not visible. $count $winText"; evidence = $evidence; missing = $missing }
+    }
+    return [ordered]@{ state = 'ASSESSED'; label = 'CHANGE HISTORY ASSESSED'; detail = "Every endpoint's change history covers the engagement window. $count $winText"; evidence = $evidence; missing = @() }
+}
+
+function Get-VsatChangeRows {
+    # changes.csv rows: one per timeline entry, with the checks it touches.
+    param([Parameter(Mandatory)]$Results)
+    $byEntry = @{}
+    foreach ($f in @($Results.findings)) { foreach ($id in @(Get-VsatProp $f 'changedInWindow' @())) { if (-not $byEntry.ContainsKey($id)) { $byEntry[$id] = [System.Collections.Generic.List[string]]::new() }; $byEntry[$id].Add("$($f.ruleId) $($f.result)") } }
+    foreach ($e in @(Get-VsatProp $Results 'analysis.changes.entries' @())) {
+        [ordered]@{ id = $e.id; utc = $e.utc; endpointId = $e.endpointId; assetId = $e.assetId; assetName = $e.assetName; user = $e.user; category = $e.category; action = $e.action; source = $e.source; checks = $(if ($byEntry.ContainsKey($e.id)) { @($byEntry[$e.id] | Select-Object -Unique) -join '; ' } else { '' }) }
+    }
+}
+
+function ConvertTo-VsatReceiptCode {
+    # First 80 bits of a SHA-256 in Crockford base32, grouped VSAT-XXXX-XXXX-XXXX-XXXX.
+    param([Parameter(Mandatory)][byte[]]$Hash)
+    $sb = [System.Text.StringBuilder]::new()
+    $acc = 0L; $bits = 0
+    foreach ($b in $Hash[0..9]) {
+        $acc = ($acc -shl 8) -bor [long]$b; $bits += 8
+        while ($bits -ge 5) { $bits -= 5; [void]$sb.Append($script:VsatCrockford[[int](($acc -shr $bits) -band 31)]); $acc = $acc -band ((1L -shl $bits) - 1) }
+    }
+    $c = $sb.ToString()
+    return ('VSAT-{0}-{1}-{2}-{3}' -f $c.Substring(0, 4), $c.Substring(4, 4), $c.Substring(8, 4), $c.Substring(12, 4))
+}
+
+function Get-VsatReceipt {
+    param([Parameter(Mandatory)][string]$Path)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $fs = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $Path).ProviderPath)
+    try { return (ConvertTo-VsatReceiptCode -Hash $sha.ComputeHash($fs)) } finally { $fs.Dispose(); $sha.Dispose() }
+}
+
+function ConvertTo-VsatReceiptNormalized {
+    # Accepts the code as it is read aloud or typed: any case, spaces or dashes, with or without
+    # the VSAT prefix, and the Crockford aliases O=0, I=1, L=1.
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Code)
+    $c = ($Code.ToUpperInvariant() -replace '[\s-]', '')
+    if ($c.Length -eq 20 -and $c.StartsWith('VSAT')) { $c = $c.Substring(4) }
+    $c = $c.Replace('O', '0').Replace('I', '1').Replace('L', '1')
+    if ($c -notmatch '^[0-9A-HJKMNP-TV-Z]{16}$') { throw "Receipt code format is invalid; expected VSAT-XXXX-XXXX-XXXX-XXXX (got '$Code')." }
+    return ('VSAT-{0}-{1}-{2}-{3}' -f $c.Substring(0, 4), $c.Substring(4, 4), $c.Substring(8, 4), $c.Substring(12, 4))
+}
+
+function Test-VsatReceipt {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Code)
+    return ((ConvertTo-VsatReceiptNormalized $Code) -eq (Get-VsatReceipt -Path $Path))
+}
+
+#endregion Change timeline, engagement window and receipt
+
 # ---- src/79-Attack.ps1 ----
 #region MITRE ATT&CK labels and Navigator layer
 
@@ -5691,7 +6393,10 @@ function Invoke-VsatAnalysisPipeline {
     $eval = Invoke-VsatRules -Evidence $Evidence -ProfileName $ProfileName
     $findings = $eval.findings
     Set-VsatExceptions -Evidence $Evidence -Findings $findings
-    $coverage = Get-VsatCoverage -Evidence $Evidence -Findings $findings
+    Update-VsatProgress -Message 'Building the engagement change timeline'
+    $changes = Get-VsatChangeAnalysis -Evidence $Evidence
+    Set-VsatChangedInWindow -Findings $findings -Changes $changes
+    $coverage = Get-VsatCoverage -Evidence $Evidence -Findings $findings -Changes $changes
     $status = Get-VsatRunStatus -Evidence $Evidence -Coverage $coverage -Findings $findings
     Update-VsatProgress -Message 'Modeling attack paths and failure impact'
     $paths = Get-VsatAttackPaths -Context $eval.context
@@ -5707,7 +6412,7 @@ function Invoke-VsatAnalysisPipeline {
     $impact = Get-VsatImpact -Context $eval.context
     $wps = Get-VsatWorkPackages -Findings $findings
     $results = New-VsatResultsObject -Evidence $Evidence -Eval $eval -Coverage $coverage -Status $status -ProfileName $ProfileName
-    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; workPackageCatalog = @(Get-VsatWorkPackageCatalog) }
+    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; workPackageCatalog = @(Get-VsatWorkPackageCatalog); changes = $changes }
     if ($BaselineEvidence) {
         Update-VsatProgress -Message 'Comparing with baseline'
         $saveIdx = $script:VsatAssetIndex
@@ -5803,7 +6508,9 @@ function Get-VsatReportData {
     foreach ($k in $Results.Keys) { $data[$k] = $Results[$k] }
     $data.findings = @(foreach ($f in $Results.findings) {
             if ($f.result -in @('PASS', 'NOT_APPLICABLE')) {
-                [ordered]@{ id = $f.id; key = $f.key; ruleId = $f.ruleId; title = $f.title; domain = $f.domain; assetId = $f.assetId; assetName = $f.assetName; assetType = $f.assetType; result = $f.result; severity = $f.severity; observed = $f.observed; expected = $f.expected; confidence = $f.confidence; exception = $f.exception }
+                $c = [ordered]@{ id = $f.id; key = $f.key; ruleId = $f.ruleId; title = $f.title; domain = $f.domain; assetId = $f.assetId; assetName = $f.assetName; assetType = $f.assetType; result = $f.result; severity = $f.severity; observed = $f.observed; expected = $f.expected; confidence = $f.confidence; exception = $f.exception }
+                if ($f.Contains('changedInWindow')) { $c.changedInWindow = $f.changedInWindow }
+                $c
             }
             else { $f }
         })
@@ -5873,13 +6580,15 @@ function Write-VsatOutputs {
         }
     }
     Export-VsatCsv -Rows @($wl) -Columns @('workPackage', 'title', 'team', 'maintenanceWindow', 'findingId', 'severity', 'ruleId', 'asset', 'action', 'validation', 'rollback') -Path (Join-Path $OutputDir 'worklist.csv')
-    $logText = ($script:VsatLog | ForEach-Object { "{0} [{1}] {2}: {3}" -f $_.t, $_.level, $_.source, $_.message }) -join [Environment]::NewLine
-    Write-VsatFile -Path (Join-Path $OutputDir 'collection.log') -Content $logText
-    $manifest = New-VsatManifest -Results $Results -OutputDir $OutputDir -Names @('evidence.json', 'results.json', 'report.html', 'attack-layer.json', 'findings.csv', 'worklist.csv', 'collection.log')
+    Export-VsatCsv -Rows @(Get-VsatChangeRows -Results $Results) -Columns @('id', 'utc', 'endpointId', 'assetId', 'assetName', 'user', 'category', 'action', 'source', 'checks') -Path (Join-Path $OutputDir 'changes.csv')
+    Write-VsatFile -Path (Join-Path $OutputDir 'collection.log') -Content (Get-VsatLogText)
+    $names = @('evidence.json', 'results.json', 'report.html', 'attack-layer.json', 'findings.csv', 'worklist.csv', 'changes.csv', 'collection.log')
+    $manifest = New-VsatManifest -Results $Results -OutputDir $OutputDir -Names $names
     Write-VsatFile -Path (Join-Path $OutputDir 'manifest.json') -Content (ConvertTo-VsatJson $manifest)
     $zip = Join-Path $OutputDir 'assessment.vsat.zip'
-    New-VsatPackage -Path $zip -SourceDir $OutputDir -Names @('evidence.json', 'results.json', 'report.html', 'attack-layer.json', 'findings.csv', 'worklist.csv', 'collection.log', 'manifest.json')
-    $out = @('report.html', 'results.json', 'evidence.json', 'attack-layer.json', 'findings.csv', 'worklist.csv', 'collection.log', 'manifest.json', 'assessment.vsat.zip')
+    New-VsatPackage -Path $zip -SourceDir $OutputDir -Names @($names + 'manifest.json')
+    $script:VsatLastReceipt = Complete-VsatReceipt -OutputDir $OutputDir -Manifest $manifest -Names $names
+    $out = @('report.html', 'results.json', 'evidence.json', 'attack-layer.json', 'findings.csv', 'worklist.csv', 'changes.csv', 'collection.log', 'manifest.json', 'assessment.vsat.zip')
     if ($Redact) {
         $red = Get-VsatRedactedCopy -Evidence $Evidence -Results $Results
         $rdir = Join-Path $OutputDir 'redacted'
@@ -5898,17 +6607,63 @@ function Write-VsatOutputs {
     return $out
 }
 
+function Get-VsatLogText {
+    return (($script:VsatLog | ForEach-Object { "{0} [{1}] {2}: {3}" -f $_.t, $_.level, $_.source, $_.message }) -join [Environment]::NewLine)
+}
+
+function Complete-VsatReceipt {
+    # The receipt is computed AFTER the zip is written (no circularity): it goes into the
+    # on-disk manifest.json and collection.log only. The copies inside the zip stay as zipped,
+    # and the on-disk manifest is re-hashed so its file list keeps matching the folder.
+    param([Parameter(Mandatory)][string]$OutputDir, [Parameter(Mandatory)]$Manifest, [Parameter(Mandatory)][string[]]$Names)
+    $zip = Join-Path $OutputDir 'assessment.vsat.zip'
+    $code = Get-VsatReceipt -Path $zip
+    $sha = Get-VsatSha256 -Path $zip
+    Write-VsatLog -Source 'receipt' -Message "Receipt code $code (SHA-256 of assessment.vsat.zip: $sha). Read this code to your auditor."
+    Write-VsatFile -Path (Join-Path $OutputDir 'collection.log') -Content (Get-VsatLogText)
+    $Manifest.files = @($Names | ForEach-Object { $p = Join-Path $OutputDir $_; [ordered]@{ name = $_; sha256 = (Get-VsatSha256 -Path $p); bytes = (Get-Item -LiteralPath $p).Length } })
+    $Manifest.package = [ordered]@{ name = 'assessment.vsat.zip'; sha256 = $sha; bytes = (Get-Item -LiteralPath $zip).Length }
+    $Manifest.receipt = $code
+    $Manifest.receiptNote = 'Receipt = first 80 bits of the SHA-256 of assessment.vsat.zip (Crockford base32). Verify with: vsat.ps1 -Replay assessment.vsat.zip -Receipt <code>. This file and collection.log were updated after the zip was written; the copies inside the zip do not contain the receipt.'
+    Write-VsatFile -Path (Join-Path $OutputDir 'manifest.json') -Content (ConvertTo-VsatJson $Manifest)
+    return $code
+}
+
+function Write-VsatCollectOnly {
+    # -CollectOnly: evidence package, log and manifest only. No findings, no report, so the
+    # easy "run, read, fix, rerun" loop is gone; the auditor replays the package later.
+    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][string]$OutputDir)
+    if (-not (Test-Path -LiteralPath $OutputDir)) { [void](New-Item -ItemType Directory -Path $OutputDir -Force) }
+    [void](Protect-VsatDirectory -Path $OutputDir)
+    Write-VsatLog -Source 'collect-only' -Message 'Collect-only run: writing the evidence package without findings or report'
+    $Evidence.collection.log = @($script:VsatLog)
+    $Evidence.run.collectOnly = $true
+    Write-VsatFile -Path (Join-Path $OutputDir 'evidence.json') -Content (ConvertTo-VsatJson $Evidence)
+    Write-VsatFile -Path (Join-Path $OutputDir 'collection.log') -Content (Get-VsatLogText)
+    $manifest = New-VsatManifest -Evidence $Evidence -OutputDir $OutputDir -Names @('evidence.json', 'collection.log')
+    Write-VsatFile -Path (Join-Path $OutputDir 'manifest.json') -Content (ConvertTo-VsatJson $manifest)
+    New-VsatPackage -Path (Join-Path $OutputDir 'assessment.vsat.zip') -SourceDir $OutputDir -Names @('evidence.json', 'collection.log', 'manifest.json')
+    # evidence.json lives only inside the package; the folder holds exactly three files.
+    Remove-Item -LiteralPath (Join-Path $OutputDir 'evidence.json') -Force
+    $manifest.packageFiles = @('evidence.json', 'collection.log', 'manifest.json')
+    $code = Complete-VsatReceipt -OutputDir $OutputDir -Manifest $manifest -Names @('collection.log')
+    return [ordered]@{ receipt = $code; files = @('assessment.vsat.zip', 'collection.log', 'manifest.json') }
+}
+
 function New-VsatManifest {
-    param($Results, [string]$OutputDir, [string[]]$Names)
+    # With -Results: a full assessment. With -Evidence only: a collect-only package.
+    param($Results, [string]$OutputDir, [string[]]$Names, $Evidence)
     $pcli = $null
     try { $m = Get-Module VMware.VimAutomation.Core -ErrorAction SilentlyContinue | Select-Object -First 1; if ($m) { $pcli = [string]$m.Version } } catch { }
+    $run = if ($Results) { $Results.run } else { $Evidence.run }
     return [ordered]@{
         schemaVersion = $script:VsatSchemaVersion
         tool = [ordered]@{ name = 'VSAT'; version = $script:VsatVersion; buildCommit = $script:VsatBuildCommit }
-        rulePack = $Results.rulePack.version; advisorySnapshot = $Results.advisory.snapshotDate
-        runId = $Results.run.id; startedUtc = $Results.run.startedUtc; endedUtc = $Results.run.endedUtc; mode = $Results.run.mode
-        status = $Results.status.overall; statusLabel = $Results.status.label; exitCode = $Results.status.exitCode
-        coverage = @($Results.coverage.domains | ForEach-Object { [ordered]@{ domain = $_.id; state = $_.state } })
+        rulePack = $(if ($Results) { $Results.rulePack.version } else { (Get-VsatRulePack).version }); advisorySnapshot = $(if ($Results) { $Results.advisory.snapshotDate } else { (Get-VsatAdvisoryData).snapshotDate })
+        runId = $run.id; startedUtc = $run.startedUtc; endedUtc = $run.endedUtc; mode = $run.mode
+        engagementStartUtc = (Get-VsatProp $run 'engagementStartUtc')
+        status = $(if ($Results) { $Results.status.overall } else { 'collected' }); statusLabel = $(if ($Results) { $Results.status.label } else { 'COLLECTED: EVIDENCE ONLY (replay to evaluate)' }); exitCode = $(if ($Results) { $Results.status.exitCode } else { $null })
+        coverage = @(if ($Results) { $Results.coverage.domains | ForEach-Object { [ordered]@{ domain = $_.id; state = $_.state } } })
         dependencies = [ordered]@{ powershell = [string]$PSVersionTable.PSVersion; edition = [string]$PSVersionTable.PSEdition; os = [string][Environment]::OSVersion.VersionString; powercli = $pcli }
         files = @($Names | ForEach-Object { $p = Join-Path $OutputDir $_; [ordered]@{ name = $_; sha256 = (Get-VsatSha256 -Path $p); bytes = (Get-Item -LiteralPath $p).Length } })
         note = 'SHA-256 hashes provide integrity checking of this package, not proof that source systems reported truthfully. Contains sensitive infrastructure data.'
@@ -6045,6 +6800,14 @@ function Get-VsatRedactedCopy {
         if ($nm -match '[\\@]') { & $add $nm 'principal' }
         elseif ($nm.Length -ge 1 -and -not $bare.Contains($nm)) { $counters['principal'] = [int]$counters['principal'] + 1; $bare[$nm] = '{0}-{1:d4}' -f 'principal', $counters['principal'] }
     }
+    # Change timeline users: domain-qualified names join the global map; bare local names
+    # (root, admin, vsat) are replaced only in the timeline's user fields below.
+    $changeUsers = [ordered]@{}
+    $ch = Get-VsatProp $Results 'analysis.changes' $null
+    foreach ($u in @(@(Get-VsatProp $ch 'entries' @()) + @(Get-VsatProp $ch 'accountSessions' @()) | Where-Object { $_ } | ForEach-Object { [string]$_.user } | Where-Object { $_ })) {
+        if ($u -match '[\\@]') { & $add $u 'principal' }
+        elseif (-not $changeUsers.Contains($u)) { $counters['user'] = [int]$counters['user'] + 1; $changeUsers[$u] = '{0}-{1:d4}' -f 'user', $counters['user'] }
+    }
     $keys = @($map.Keys | Sort-Object { - $_.Length })
     $ipMap = @{}
     # One compiled alternation keeps redaction linear in the size of each string.
@@ -6056,6 +6819,8 @@ function Get-VsatRedactedCopy {
     $ev = Invoke-VsatRedactValue -Value $Evidence -Ctx $ctx
     $res = Invoke-VsatRedactValue -Value $Results -Ctx $ctx
     if ($bare.Count) { Protect-VsatRedactBlastPrincipals -Blast (Get-VsatProp $res 'analysis.blastRadius' $null) -Bare $bare }
+    $rch = Get-VsatProp $res 'analysis.changes' $null
+    if ($rch -and $changeUsers.Count) { foreach ($x in @(@($rch.entries) + @($rch.accountSessions))) { if ($x -and $x.user -and $changeUsers.Contains([string]$x.user)) { $x.user = $changeUsers[[string]$x.user] } } }
     $res.redacted = [ordered]@{ pseudonyms = $map.Count; ipAddresses = $ctx.ipMap.Count; note = 'Names, addresses, UUIDs and principals replaced with consistent pseudonyms. Review before sharing.' }
     return [ordered]@{ evidence = $ev; results = $res }
 }
@@ -6238,7 +7003,7 @@ $script:VsatServerScript = {
     function Get-PublicState {
         $p = $State.progress
         return [ordered]@{
-            version = $State.version; mode = $State.mode; profile = $State.profile; phase = $State.phase
+            version = $State.version; mode = $State.mode; profile = $State.profile; phase = $State.phase; collectOnly = [bool]$State.collectOnly
             doctor = $State.doctor; endpoints = @($State.endpoints); nsx = $State.nsx
             progress = [ordered]@{ phase = $p.phase; message = $p.message; step = $p.step; totalSteps = $p.totalSteps; counts = $p.counts; log = @($p.log | Select-Object -Last 50) }
             result = $State.result
@@ -6505,7 +7270,7 @@ function Invoke-VsatLiveCollection {
     param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Targets)
     $vs = @($Targets | Where-Object { $_.type -in @('vcenter', 'esxi') })
     $nsx = @($Targets | Where-Object { $_.type -eq 'nsx' })
-    $script:VsatProgress.totalSteps = ($vs.Count * 6) + ($nsx.Count * 7)
+    $script:VsatProgress.totalSteps = ($vs.Count * 7) + ($nsx.Count * 7)
     $script:VsatProgress.step = 0
     try {
         foreach ($t in $vs) {
@@ -6603,8 +7368,28 @@ function Open-VsatBrowser {
     catch { Write-Host "Open this address in a browser: $Target" }
 }
 
+function Write-VsatReceiptLine {
+    # Always the last line of the CLI output, so it can be read out on the call.
+    param([string]$Receipt)
+    if (-not $Receipt) { return }
+    Write-Host ''
+    Write-Host (" Receipt: {0}   (read this code to your auditor)" -f $Receipt) -ForegroundColor Cyan
+}
+
+function Write-VsatCollectSummary {
+    param([Parameter(Mandatory)]$Evidence, [string]$OutputDir, [string[]]$Files, [string]$Receipt)
+    Write-Host ''
+    Write-Host ("=" * 78)
+    Write-Host ' EVIDENCE COLLECTED (collect-only: no findings are shown)' -ForegroundColor Green
+    foreach ($e in @($Evidence.scope.endpoints)) { Write-Host ("   {0,-8} {1,-40} {2}" -f $e.type, (Protect-VsatText $e.address), $e.status) }
+    Write-Host ("=" * 78)
+    Write-Host ' Send only assessment.vsat.zip to your auditor. It contains sensitive infrastructure data.' -ForegroundColor Cyan
+    foreach ($f in @($Files)) { Write-Host ("   {0}" -f (Join-Path $OutputDir $f)) }
+    Write-VsatReceiptLine $Receipt
+}
+
 function Write-VsatSummary {
-    param([Parameter(Mandatory)]$Results, [string]$OutputDir, [string[]]$Files)
+    param([Parameter(Mandatory)]$Results, [string]$OutputDir, [string[]]$Files, [string]$Receipt)
     $st = $Results.status
     $color = switch ($st.overall) { 'complete' { if ($st.exitCode -eq 0) { 'Green' } else { 'Yellow' } } default { 'Red' } }
     Write-Host ''
@@ -6617,6 +7402,14 @@ function Write-VsatSummary {
         $c = switch ($d.state) { 'ASSESSED' { 'Green' } 'NOT_APPLICABLE' { 'Gray' } 'PARTIAL' { 'Yellow' } default { 'Red' } }
         Write-Host ("   {0,-24} {1,-15} {2}" -f $d.name, $d.state, $(if ($d.mandatory) { 'mandatory' } else { '' })) -ForegroundColor $c
     }
+    $ch = Get-VsatProp $Results 'analysis.changes' $null
+    if ($ch) {
+        Write-Host ' Engagement timeline' -ForegroundColor Cyan
+        Write-Host ("   {0} change(s) since {1}; {2} passing check(s) changed during the engagement" -f @($ch.entries).Count, ([string]$ch.windowStartUtc).Substring(0, 10), $ch.summary.changedPassing)
+        foreach ($a in @($ch.accountSessions | Where-Object { $_ -and $_.count })) { Write-Host ("   Earlier sessions by the VSAT account {0}: {1} (first {2}, last {3})" -f (Protect-VsatText $a.user), $a.count, $a.firstUtc, $a.lastUtc) -ForegroundColor Yellow }
+        foreach ($g in @($ch.gaps)) { Write-Host ("   {0}: {1}" -f (Protect-VsatText $g.address), $g.text) -ForegroundColor Yellow }
+    }
+    if ($Results.Contains('receiptVerification') -and $Results.receiptVerification.verified) { Write-Host (" Receipt verified: {0}" -f $Results.receiptVerification.code) -ForegroundColor Green }
     $s = $Results.summary
     Write-Host ' Findings (FAIL by severity)' -ForegroundColor Cyan
     Write-Host ("   critical {0}  high {1}  medium {2}  low {3}  info {4}" -f $s.severity.critical, $s.severity.high, $s.severity.medium, $s.severity.low, $s.severity.info)
@@ -6631,16 +7424,38 @@ function Write-VsatSummary {
         Write-Host ' Output (contains sensitive infrastructure data)' -ForegroundColor Cyan
         foreach ($f in @($Files)) { Write-Host ("   {0}" -f (Join-Path $OutputDir $f)) }
     }
+    Write-VsatReceiptLine $Receipt
     Write-Host ''
 }
 
 function Complete-VsatRun {
     # Shared tail for CLI, replay and demo: analysis, outputs, summary.
-    param($Evidence, [string]$ProfileName, [string]$OutputDir, $BaselineEvidence, [switch]$Redact)
+    param($Evidence, [string]$ProfileName, [string]$OutputDir, $BaselineEvidence, [switch]$Redact, $ReceiptCheck)
     $results = Invoke-VsatAnalysisPipeline -Evidence $Evidence -ProfileName $ProfileName -BaselineEvidence $BaselineEvidence
+    if ($ReceiptCheck) { $results.receiptVerification = $ReceiptCheck }
     Update-VsatProgress -Phase 'writing' -Message 'Writing report and evidence package'
+    $script:VsatLastReceipt = $null
     $files = Write-VsatOutputs -Evidence $Evidence -Results $results -OutputDir $OutputDir -Redact:$Redact
-    return @{ results = $results; files = $files }
+    return @{ results = $results; files = $files; receipt = $script:VsatLastReceipt }
+}
+
+function Set-VsatEngagementWindow {
+    # Stores -EngagementStart on the evidence (run.engagementStartUtc) so collectors read the
+    # right window and a replay shows the same timeline.
+    param([Parameter(Mandatory)]$Evidence, $Engagement)
+    if (-not $Engagement) { return }
+    $Evidence.run.engagementStartUtc = $Engagement.utc
+    if ($Engagement.clamped) { Write-VsatLog -Level warn -Source 'changes' -Message "-EngagementStart is more than $($script:VsatChangeMaxLookbackDays) days back; the change window starts $($Engagement.utc.Substring(0, 10))" }
+}
+
+function Test-VsatReplayReceipt {
+    # -Replay <zip> -Receipt <code>: the package must hash to the code read out on the call.
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Code)
+    if ($Path -match '\.json$') { throw 'A receipt verifies an evidence package (.vsat.zip), not a plain evidence.json.' }
+    $want = ConvertTo-VsatReceiptNormalized $Code
+    $full = (Resolve-Path -LiteralPath $Path).ProviderPath
+    $got = Get-VsatReceipt -Path $full
+    return [ordered]@{ verified = ($got -eq $want); code = $want; actual = $got; package = [IO.Path]::GetFileName($full); sha256 = (Get-VsatSha256 -Path $full); verifiedUtc = (Get-VsatUtcNow) }
 }
 
 function Read-VsatBaseline {
@@ -6704,6 +7519,9 @@ function Invoke-VsatMain {
         return 0
     }
 
+    if ($A.Receipt -and -not $A.Replay) { throw 'The -Receipt parameter verifies a package and requires -Replay <assessment.vsat.zip>.' }
+    $engagement = if ($A.EngagementStart) { Resolve-VsatEngagementStart -Value $A.EngagementStart -RunStartUtc (Get-VsatUtcNow) } else { $null }
+
     $outDir = Resolve-VsatOutputDir $A.OutputPath
     [void](New-Item -ItemType Directory -Path $outDir -Force)
     [void](Protect-VsatDirectory -Path $outDir)
@@ -6712,15 +7530,29 @@ function Invoke-VsatMain {
     $baseline = Read-VsatBaseline $A.Baseline
 
     if ($A.Replay) {
+        if ($A.CollectOnly) { Write-VsatLog -Level warn -Source 'replay' -Message '-CollectOnly has no effect with -Replay; the package is evaluated' }
+        $receiptCheck = $null
+        if ($A.Receipt) {
+            # Verified before the package is opened: a mismatch never produces a report.
+            try { $receiptCheck = Test-VsatReplayReceipt -Path $A.Replay -Code $A.Receipt }
+            catch { Write-VsatLog -Level error -Source 'receipt' -Message $_.Exception.Message; Write-Host (" RECEIPT NOT VERIFIED: {0}" -f (Protect-VsatText $_.Exception.Message)) -ForegroundColor Red; return 3 }
+            if (-not $receiptCheck.verified) {
+                Write-VsatLog -Level error -Source 'receipt' -Message "Receipt mismatch: $($A.Replay) has receipt $($receiptCheck.actual), expected $($receiptCheck.code). This is not the package from that session, or it was changed."
+                Write-Host (" RECEIPT MISMATCH: this package has {0}, expected {1}. It is not the package from that session, or it was changed." -f $receiptCheck.actual, $receiptCheck.code) -ForegroundColor Red
+                return 3
+            }
+            Write-VsatLog -Source 'receipt' -Message "Receipt verified: $($receiptCheck.code) matches $($receiptCheck.package)"
+        }
         $pkg = Read-VsatPackage -Path $A.Replay
         Write-VsatLog -Source 'replay' -Message "Replaying evidence from $($A.Replay) (integrity: $($pkg.integrity)); no connectivity or credentials used"
         $ev = ConvertTo-VsatLiveEvidence $pkg.evidence
         $ev.run.replayedUtc = Get-VsatUtcNow
+        Set-VsatEngagementWindow -Evidence $ev -Engagement $engagement
         # Re-applies the operator's current scope.json overrides onto replayed evidence (see
         # Merge-VsatScopeOverrides in 20-Model.ps1).
-        Merge-VsatScopeOverrides -Scope $scope -EvidenceScope $ev.scope
-        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact
-        Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files
+        if ($scope) { Merge-VsatScopeOverrides -Scope $scope -EvidenceScope $ev.scope }
+        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact -ReceiptCheck $receiptCheck
+        Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files -Receipt $r.receipt
         if (-not $A.Cli -and -not $A.NoBrowser) { Open-VsatBrowser (Join-Path $outDir 'report.html') }
         return $r.results.status.exitCode
     }
@@ -6728,8 +7560,14 @@ function Invoke-VsatMain {
     if ($A.Demo -and $A.Cli) {
         Write-VsatLog -Source 'demo' -Message 'Running against the built-in synthetic lab (no connectivity)'
         $ev = Get-VsatDemoEvidence
+        Set-VsatEngagementWindow -Evidence $ev -Engagement $engagement
+        if ($A.CollectOnly) {
+            $c = Write-VsatCollectOnly -Evidence $ev -OutputDir $outDir
+            Write-VsatCollectSummary -Evidence $ev -OutputDir $outDir -Files $c.files -Receipt $c.receipt
+            return 0
+        }
         $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact
-        Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files
+        Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files -Receipt $r.receipt
         return $r.results.status.exitCode
     }
 
@@ -6739,6 +7577,7 @@ function Invoke-VsatMain {
         $t = Get-VsatCliTargets -Servers $A.Server -NsxServers $A.NsxServer -Scope $scope -Credential $A.Credential -NsxCred $A.NsxCredential -Interactive:$interactive
         if ($t.declaredAbsent) { if (-not $scope) { $scope = [ordered]@{} }; $scope.nsxDeclaredAbsent = $true }
         $ev = New-VsatEvidence -Mode live -Scope $scope
+        Set-VsatEngagementWindow -Evidence $ev -Engagement $engagement
         $cancelHandler = $null
         try {
             [Console]::TreatControlCAsInput = $false
@@ -6746,12 +7585,26 @@ function Invoke-VsatMain {
             Invoke-VsatPlatformCollection -Evidence $ev -A $A
         }
         catch { Write-VsatLog -Level error -Message "Collection aborted: $($_.Exception.Message)" }
+        if ($A.CollectOnly) {
+            $c = Write-VsatCollectOnly -Evidence $ev -OutputDir $outDir
+            Write-VsatCollectSummary -Evidence $ev -OutputDir $outDir -Files $c.files -Receipt $c.receipt
+            return (Get-VsatCollectOnlyExitCode -Evidence $ev)
+        }
         $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact
-        Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files
+        Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files -Receipt $r.receipt
         return $r.results.status.exitCode
     }
 
     return (Invoke-VsatUi -A $A -Scope $scope -OutputDir $outDir -ProfileName $profileName -Baseline $baseline)
+}
+
+function Get-VsatCollectOnlyExitCode {
+    # 0 when the package holds evidence from at least one endpoint, 3 when nothing was collected.
+    param([Parameter(Mandatory)]$Evidence)
+    if ($Evidence.run.mode -ne 'live') { return 0 }
+    if ($Evidence.run.status -eq 'canceled') { return 4 }
+    if (@($Evidence.scope.endpoints | Where-Object { $_.status -in @('collected', 'partial') }).Count) { return 0 }
+    return 3
 }
 
 function Invoke-VsatUi {
@@ -6760,6 +7613,7 @@ function Invoke-VsatUi {
     $state.version = $script:VsatVersion
     $state.mode = $(if ($A.Demo) { 'demo' } else { 'live' })
     $state.profile = $ProfileName
+    $state.collectOnly = [bool]$A.CollectOnly
     $state.phase = 'setup'
     $state.token = New-VsatToken
     $state.cookieToken = New-VsatToken
@@ -6790,6 +7644,7 @@ function Invoke-VsatUi {
     if (-not $A.NoBrowser) { Open-VsatBrowser $url }
     $evidenceScope = $Scope
     $lastEvidence = $null; $exit = 2
+    $engagement = if ($A.EngagementStart) { Resolve-VsatEngagementStart -Value $A.EngagementStart -RunStartUtc (Get-VsatUtcNow) } else { $null }
     try {
         while (-not $state.shutdown) {
             $cmd = $null
@@ -6854,19 +7709,30 @@ function Invoke-VsatUi {
                         if ($state.mode -eq 'demo') {
                             $ev = Get-VsatDemoEvidence
                             $ev.scope.nsxDeclaredAbsent = $sc.nsxDeclaredAbsent
+                            Set-VsatEngagementWindow -Evidence $ev -Engagement $engagement
                             $state.progress.totalSteps = 3
                             foreach ($i in 1..3) { Update-VsatProgress -Phase 'collecting' -Message "Loading synthetic lab ($i/3)" -Step; Start-Sleep -Milliseconds 300 }
                         }
                         else {
                             $ev = New-VsatEvidence -Mode live -Scope $sc
+                            Set-VsatEngagementWindow -Evidence $ev -Engagement $engagement
                             Invoke-VsatLiveCollection -Evidence $ev -Targets @($targets.Values)
+                        }
+                        if ($state.collectOnly) {
+                            # Collect-only: the browser shows the receipt, never findings or the report.
+                            $c = Write-VsatCollectOnly -Evidence $ev -OutputDir $OutputDir
+                            $state.result = @{ collectOnly = $true; receipt = $c.receipt; outputDir = $OutputDir; runId = [string]$ev.run.id; files = @($c.files) }
+                            $exit = Get-VsatCollectOnlyExitCode -Evidence $ev
+                            $state.phase = $(if ($ev.run.status -eq 'canceled') { 'canceled' } else { 'done' })
+                            Write-VsatCollectSummary -Evidence $ev -OutputDir $OutputDir -Files $c.files -Receipt $c.receipt
+                            break
                         }
                         $r = Complete-VsatRun -Evidence $ev -ProfileName $cmd.profile -OutputDir $OutputDir -BaselineEvidence $Baseline -Redact:$A.Redact
                         $state.reportHtml = [System.IO.File]::ReadAllText((Join-Path $OutputDir 'report.html'))
-                        $state.result = @{ status = $r.results.status; summary = $r.results.summary; outputDir = $OutputDir; runId = [string]$r.results.run.id; reportUrl = '/report'; files = @($r.files); blastRadius = $r.results.analysis.blastRadius; workPackageCatalog = @($r.results.analysis.workPackageCatalog); workPackages = @($r.results.analysis.workPackages | ForEach-Object { [ordered]@{ id = $_.id; title = $_.title } }) }
+                        $state.result = @{ status = $r.results.status; summary = $r.results.summary; outputDir = $OutputDir; runId = [string]$r.results.run.id; reportUrl = '/report'; files = @($r.files); receipt = $r.receipt; blastRadius = $r.results.analysis.blastRadius; workPackageCatalog = @($r.results.analysis.workPackageCatalog); workPackages = @($r.results.analysis.workPackages | ForEach-Object { [ordered]@{ id = $_.id; title = $_.title } }) }
                         $state.phase = $(if ($r.results.status.overall -eq 'canceled') { 'canceled' } else { 'done' })
                         $exit = $r.results.status.exitCode
-                        Write-VsatSummary -Results $r.results -OutputDir $OutputDir -Files $r.files
+                        Write-VsatSummary -Results $r.results -OutputDir $OutputDir -Files $r.files -Receipt $r.receipt
                     }
                     catch {
                         Write-VsatLog -Level error -Message "Assessment failed: $($_.Exception.Message)"
@@ -6902,23 +7768,23 @@ $script:VsatEmbedded = [ordered]@{
     'rules/esxi.json' = @'
 {
   "rules": [
-    { "id": "ESXI-PATCH-ADV", "title": "ESXi build is not exposed to known security advisories", "domain": "esxi", "assetType": "host", "severity": "critical",
+    { "id": "ESXI-PATCH-ADV", "changeCategory": "patch", "title": "ESXi build is not exposed to known security advisories", "domain": "esxi", "assetType": "host", "severity": "critical",
       "attack": { "mitigates": ["T1190", "T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "Advisory" },
       "rationale": "Hosts below the fixed build of a published advisory remain exposed to its vulnerabilities, some of which are exploited in the wild.",
       "mitigation": { "summary": "Patch the host to the fixed build listed for each advisory.", "steps": ["Stage the patch or image in vSphere Lifecycle Manager", "Evacuate the host (maintenance mode) and remediate", "Verify the new build number"], "workPackage": "WP-PATCH" },
       "cis": "1.1", "limitations": "Evaluates the embedded advisory snapshot only; OEM custom images and express patches may differ." },
-    { "id": "ESXI-LIFECYCLE", "title": "ESXi release is within vendor general support", "domain": "esxi", "assetType": "host", "severity": "high",
+    { "id": "ESXI-LIFECYCLE", "changeCategory": "patch", "title": "ESXi release is within vendor general support", "domain": "esxi", "assetType": "host", "severity": "high",
       "attack": { "mitigates": ["T1190", "T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "Lifecycle" },
       "rationale": "Releases past end of general support stop receiving routine security fixes.",
       "mitigation": { "summary": "Plan an upgrade to a supported ESXi release.", "steps": ["Check hardware compatibility", "Upgrade via vSphere Lifecycle Manager"], "workPackage": "WP-LIFECYCLE" }, "vsat": true },
-    { "id": "ESXI-ACCEPTANCE", "title": "Host image acceptance level is not CommunitySupported", "domain": "esxi", "assetType": "host", "severity": "high",
+    { "id": "ESXI-ACCEPTANCE", "changeCategory": "patch", "title": "Host image acceptance level is not CommunitySupported", "domain": "esxi", "assetType": "host", "severity": "high",
       "attack": { "mitigates": ["T1505.006"], "mitigation": "M1045", "status": "proposed" },
       "check": { "type": "setting", "fact": "acceptance", "op": "in", "value": ["VMwareCertified", "VMwareAccepted", "PartnerSupported"], "absent": "unknown" },
       "rationale": "CommunitySupported VIBs are unsigned and bypass vendor validation, enabling malicious kernel modules.",
       "mitigation": { "summary": "Set the acceptance level to PartnerSupported or higher and remove community VIBs.", "steps": ["esxcli software acceptance set --level=PartnerSupported (review first)"], "workPackage": "WP-ESXI-HARDENING" }, "cis": "1.2", "scg": "esxi.acceptance-level" },
-    { "id": "ESXI-EXEC-INSTALLED-ONLY", "title": "Only installed binaries may execute (execInstalledOnly)", "domain": "esxi", "assetType": "host", "severity": "high",
+    { "id": "ESXI-EXEC-INSTALLED-ONLY", "changeCategory": "settings", "title": "Only installed binaries may execute (execInstalledOnly)", "domain": "esxi", "assetType": "host", "severity": "high",
       "attack": { "mitigates": ["T1486", "T1059.004"], "mitigation": "M1038", "status": "proposed" },
       "applies": { "minVersion": "7.0" },
       "check": { "type": "setting", "fact": "kernel", "key": "execInstalledOnly", "op": "eq", "value": true, "absent": "unknown" },
@@ -6929,150 +7795,150 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "setting", "fact": "attestation", "path": "status", "op": "eq", "value": "accepted", "absent": "unknown" },
       "rationale": "TPM 2.0 attestation provides evidence that the host booted with Secure Boot and trusted components.",
       "mitigation": { "summary": "Enable UEFI Secure Boot and TPM 2.0 in firmware; investigate attestation failures.", "steps": ["Enable TPM 2.0 (FIFO/CRB) and Secure Boot in BIOS", "Check host Summary > Security"], "workPackage": "WP-ESXI-HARDENING" }, "vsat": true },
-    { "id": "ESXI-SVC-SSH", "title": "SSH service is stopped and set to start manually", "domain": "esxi", "assetType": "host", "severity": "medium",
+    { "id": "ESXI-SVC-SSH", "changeCategory": "service", "title": "SSH service is stopped and set to start manually", "domain": "esxi", "assetType": "host", "severity": "medium",
       "attack": { "mitigates": ["T1021.004"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "service", "key": "TSM-SSH", "running": false, "policy": "off" },
       "rationale": "Persistent SSH exposes a privileged remote shell and bypasses vCenter auditing.",
       "mitigation": { "summary": "Stop SSH and set its startup policy to manual.", "steps": ["Host > Configure > Services > SSH > Stop; Startup policy: Start and stop manually"], "workPackage": "WP-ESXI-SERVICES" }, "cis": "5.3", "scg": "esxi.ssh" },
-    { "id": "ESXI-SVC-SHELL", "title": "ESXi Shell is stopped and set to start manually", "domain": "esxi", "assetType": "host", "severity": "medium",
+    { "id": "ESXI-SVC-SHELL", "changeCategory": "service", "title": "ESXi Shell is stopped and set to start manually", "domain": "esxi", "assetType": "host", "severity": "medium",
       "attack": { "mitigates": ["T1059.004"], "mitigation": null, "status": "proposed" },
       "check": { "type": "service", "key": "TSM", "running": false, "policy": "off" },
       "rationale": "The ESXi Shell grants unaudited root-level access on the console.",
       "mitigation": { "summary": "Stop the ESXi Shell service and set it to manual.", "steps": ["Host > Configure > Services > ESXi Shell > Stop"], "workPackage": "WP-ESXI-SERVICES" }, "cis": "5.2", "scg": "esxi.shell" },
-    { "id": "ESXI-SVC-SLP", "title": "SLP service is stopped and disabled", "domain": "esxi", "assetType": "host", "severity": "high",
+    { "id": "ESXI-SVC-SLP", "changeCategory": "service", "title": "SLP service is stopped and disabled", "domain": "esxi", "assetType": "host", "severity": "high",
       "attack": { "mitigates": ["T1210"], "mitigation": "M1042", "status": "proposed" },
       "applies": { "maxVersion": "8.0", "reason": "ESX 9.0 removed CIM, SFCB and the OpenSLP stack (VCF 9.0 product support notes)", "source": "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/release-notes/vmware-cloud-foundation-90-release-notes/platform-product-support-notes/product-support-notes-vsphere.html" },
       "check": { "type": "service", "key": "slpd", "running": false, "policy": "off" },
       "rationale": "OpenSLP has been exploited at scale for ESXi ransomware (e.g. CVE-2021-21974).",
       "mitigation": { "summary": "Stop slpd, set it to manual and disable the CIMSLP firewall ruleset.", "steps": ["/etc/init.d/slpd stop; esxcli network firewall ruleset set -r CIMSLP -e 0; chkconfig slpd off (review first)"], "workPackage": "WP-ESXI-SERVICES" }, "vsat": true },
-    { "id": "ESXI-SVC-CIM", "title": "CIM server is not running unless required", "domain": "esxi", "assetType": "host", "severity": "low",
+    { "id": "ESXI-SVC-CIM", "changeCategory": "service", "title": "CIM server is not running unless required", "domain": "esxi", "assetType": "host", "severity": "low",
       "attack": { "mitigates": ["T1210"], "mitigation": "M1042", "status": "proposed" },
       "applies": { "maxVersion": "8.0", "reason": "ESX 9.0 removed CIM, SFCB and the OpenSLP stack (VCF 9.0 product support notes)", "source": "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/release-notes/vmware-cloud-foundation-90-release-notes/platform-product-support-notes/product-support-notes-vsphere.html" },
       "check": { "type": "service", "key": "sfcbd-watchdog", "running": false, "policy": "off" },
       "rationale": "CIM exposes hardware management interfaces; limit it to hosts that need hardware monitoring.",
       "mitigation": { "summary": "Disable CIM where hardware monitoring does not require it, or record an exception.", "steps": ["esxcli system wbem set --enable false (review first)"], "workPackage": "WP-ESXI-SERVICES" }, "cis": "5.4" },
-    { "id": "ESXI-SVC-SNMP", "title": "SNMP agent is not running unless required", "domain": "esxi", "assetType": "host", "severity": "low",
+    { "id": "ESXI-SVC-SNMP", "changeCategory": "service", "title": "SNMP agent is not running unless required", "domain": "esxi", "assetType": "host", "severity": "low",
       "attack": { "mitigates": ["T1602.001"], "mitigation": "M1041", "status": "proposed" },
       "check": { "type": "service", "key": "snmpd", "running": false, "policy": "off" },
       "rationale": "SNMP v1/v2c community strings are cleartext; use SNMPv3 only when monitoring requires it.",
       "mitigation": { "summary": "Disable SNMP or configure SNMPv3 with authentication and privacy, then record an exception.", "steps": ["esxcli system snmp get / set (review first)"], "workPackage": "WP-ESXI-SERVICES" }, "cis": "2.5" },
-    { "id": "ESXI-LOCKDOWN", "title": "Lockdown mode is enabled", "domain": "esxi", "assetType": "host", "severity": "medium",
+    { "id": "ESXI-LOCKDOWN", "changeCategory": "access", "title": "Lockdown mode is enabled", "domain": "esxi", "assetType": "host", "severity": "medium",
       "attack": { "mitigates": ["T1078", "T1675"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "setting", "fact": "lockdown", "path": "mode", "op": "in", "value": ["lockdownNormal", "lockdownStrict"], "absent": "unknown" },
       "profiles": { "strict": { "value": ["lockdownStrict"] } },
       "rationale": "Lockdown mode forces management through vCenter so access is centrally authorized and audited.",
       "mitigation": { "summary": "Enable normal lockdown mode (strict for the strict profile) and define exception users.", "steps": ["Host > Configure > Security Profile > Lockdown Mode > Edit"], "workPackage": "WP-ESXI-ACCESS" },
       "cis": "5.5", "scg": "esxi.lockdown-mode", "limitations": "Uses HostConfigInfo.lockdownMode; the deprecated adminDisabled Boolean is not used." },
-    { "id": "ESXI-DCUI-TIMEOUT", "title": "DCUI idle timeout is 600 seconds or less", "domain": "esxi", "assetType": "host", "severity": "low",
+    { "id": "ESXI-DCUI-TIMEOUT", "changeCategory": "settings", "title": "DCUI idle timeout is 600 seconds or less", "domain": "esxi", "assetType": "host", "severity": "low",
       "attack": { "mitigates": ["T1563"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "UserVars.DcuiTimeOut", "op": "range", "value": [1, 600], "absent": "fail" },
       "rationale": "Idle console sessions can be reused by anyone with physical or remote console access.",
       "mitigation": { "summary": "Set UserVars.DcuiTimeOut to 600 or less.", "steps": ["Get-AdvancedSetting -Entity <host> -Name UserVars.DcuiTimeOut (review, then set)"], "workPackage": "WP-ESXI-ACCESS" }, "cis": "5.1", "scg": "UserVars.DcuiTimeOut" },
-    { "id": "ESXI-SHELL-TIMEOUT", "title": "ESXi Shell and SSH services time out within an hour", "domain": "esxi", "assetType": "host", "severity": "low",
+    { "id": "ESXI-SHELL-TIMEOUT", "changeCategory": "settings", "title": "ESXi Shell and SSH services time out within an hour", "domain": "esxi", "assetType": "host", "severity": "low",
       "attack": { "mitigates": ["T1563"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "UserVars.ESXiShellTimeOut", "op": "range", "value": [1, 3600], "absent": "fail" },
       "profiles": { "strict": { "value": [1, 600] } },
       "rationale": "Automatically disables shell services that were enabled temporarily and forgotten.",
       "mitigation": { "summary": "Set UserVars.ESXiShellTimeOut (e.g. 600).", "steps": ["Set advanced setting UserVars.ESXiShellTimeOut"], "workPackage": "WP-ESXI-ACCESS" }, "cis": "5.9", "scg": "UserVars.ESXiShellTimeOut" },
-    { "id": "ESXI-SHELL-IDLE", "title": "Idle ESXi Shell and SSH sessions time out after 300 seconds or less", "domain": "esxi", "assetType": "host", "severity": "low",
+    { "id": "ESXI-SHELL-IDLE", "changeCategory": "settings", "title": "Idle ESXi Shell and SSH sessions time out after 300 seconds or less", "domain": "esxi", "assetType": "host", "severity": "low",
       "attack": { "mitigates": ["T1563"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "UserVars.ESXiShellInteractiveTimeOut", "op": "range", "value": [1, 300], "absent": "fail" },
       "rationale": "Terminates abandoned interactive root sessions.",
       "mitigation": { "summary": "Set UserVars.ESXiShellInteractiveTimeOut to 300 or less.", "steps": ["Set advanced setting UserVars.ESXiShellInteractiveTimeOut"], "workPackage": "WP-ESXI-ACCESS" }, "cis": "5.8", "scg": "UserVars.ESXiShellInteractiveTimeOut" },
-    { "id": "ESXI-HOSTCLIENT-TIMEOUT", "title": "Host Client session timeout is 900 seconds or less", "domain": "esxi", "assetType": "host", "severity": "low",
+    { "id": "ESXI-HOSTCLIENT-TIMEOUT", "changeCategory": "settings", "title": "Host Client session timeout is 900 seconds or less", "domain": "esxi", "assetType": "host", "severity": "low",
       "attack": { "mitigates": ["T1563"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "UserVars.HostClientSessionTimeout", "op": "range", "value": [1, 900], "absent": "default", "default": 900 },
       "rationale": "Limits reuse of unattended browser sessions to the host client.",
       "mitigation": { "summary": "Set UserVars.HostClientSessionTimeout to 900 or less.", "steps": ["Set advanced setting UserVars.HostClientSessionTimeout"], "workPackage": "WP-ESXI-ACCESS" }, "scg": "UserVars.HostClientSessionTimeout" },
-    { "id": "ESXI-ACCOUNT-LOCK", "title": "Failed login attempts before lockout is 5 or fewer", "domain": "esxi", "assetType": "host", "severity": "medium",
+    { "id": "ESXI-ACCOUNT-LOCK", "changeCategory": "settings", "title": "Failed login attempts before lockout is 5 or fewer", "domain": "esxi", "assetType": "host", "severity": "medium",
       "attack": { "mitigates": ["T1110"], "mitigation": "M1036", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "Security.AccountLockFailures", "op": "range", "value": [1, 5], "absent": "fail" },
       "rationale": "Limits online password guessing against local accounts.",
       "mitigation": { "summary": "Set Security.AccountLockFailures to 5.", "steps": ["Set advanced setting Security.AccountLockFailures = 5"], "workPackage": "WP-ESXI-ACCESS" }, "cis": "4.3", "scg": "Security.AccountLockFailures" },
-    { "id": "ESXI-ACCOUNT-UNLOCK", "title": "Account lockout lasts at least 15 minutes", "domain": "esxi", "assetType": "host", "severity": "low",
+    { "id": "ESXI-ACCOUNT-UNLOCK", "changeCategory": "settings", "title": "Account lockout lasts at least 15 minutes", "domain": "esxi", "assetType": "host", "severity": "low",
       "attack": { "mitigates": ["T1110"], "mitigation": "M1036", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "Security.AccountUnlockTime", "op": "ge", "value": 900, "absent": "fail" },
       "rationale": "Short lockouts do not meaningfully slow password guessing.",
       "mitigation": { "summary": "Set Security.AccountUnlockTime to 900.", "steps": ["Set advanced setting Security.AccountUnlockTime = 900"], "workPackage": "WP-ESXI-ACCESS" }, "cis": "4.4", "scg": "Security.AccountUnlockTime" },
-    { "id": "ESXI-PASS-QUALITY", "title": "Password quality control enforces long passwords", "domain": "esxi", "assetType": "host", "severity": "medium",
+    { "id": "ESXI-PASS-QUALITY", "changeCategory": "settings", "title": "Password quality control enforces long passwords", "domain": "esxi", "assetType": "host", "severity": "medium",
       "attack": { "mitigates": ["T1110"], "mitigation": "M1027", "status": "proposed" },
       "check": { "type": "script", "name": "PasswordQuality", "minLength": 14 },
       "profiles": { "strict": { "minLength": 15 } },
       "rationale": "Short local passwords are practical to brute force offline and online.",
       "mitigation": { "summary": "Set Security.PasswordQualityControl, e.g. 'retry=3 min=disabled,disabled,disabled,disabled,15'.", "steps": ["Set advanced setting Security.PasswordQualityControl"], "workPackage": "WP-ESXI-ACCESS" }, "cis": "4.2", "scg": "Security.PasswordQualityControl" },
-    { "id": "ESXI-PASS-HISTORY", "title": "Previous 5 passwords cannot be reused", "domain": "esxi", "assetType": "host", "severity": "low",
+    { "id": "ESXI-PASS-HISTORY", "changeCategory": "settings", "title": "Previous 5 passwords cannot be reused", "domain": "esxi", "assetType": "host", "severity": "low",
       "attack": { "mitigates": ["T1110"], "mitigation": "M1027", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "Security.PasswordHistory", "op": "ge", "value": 5, "absent": "fail" },
       "rationale": "Prevents cycling back to compromised passwords.",
       "mitigation": { "summary": "Set Security.PasswordHistory to 5 or more.", "steps": ["Set advanced setting Security.PasswordHistory = 5"], "workPackage": "WP-ESXI-ACCESS" }, "cis": "4.5", "scg": "Security.PasswordHistory" },
-    { "id": "ESXI-AD-ADMINS-GROUP", "title": "AD admin group is not the default 'ESX Admins'", "domain": "esxi", "assetType": "host", "severity": "high",
+    { "id": "ESXI-AD-ADMINS-GROUP", "changeCategory": "settings", "title": "AD admin group is not the default 'ESX Admins'", "domain": "esxi", "assetType": "host", "severity": "high",
       "attack": { "mitigates": ["T1078.002", "T1098.007"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "Config.HostAgent.plugins.hostsvc.esxAdminsGroup", "op": "ne", "value": "ESX Admins", "absent": "unknown" },
       "rationale": "Any domain user able to create an 'ESX Admins' group gains full host admin rights on AD-joined hosts (CVE-2024-37085, exploited by ransomware operators).",
       "mitigation": { "summary": "Set esxAdminsGroup to a dedicated, protected group (or empty if AD is not used) and disable auto-add.", "steps": ["Set Config.HostAgent.plugins.hostsvc.esxAdminsGroup", "Set Config.HostAgent.plugins.hostsvc.esxAdminsGroupAutoAdd = false"], "workPackage": "WP-ESXI-ACCESS" }, "cis": "4.7", "vsat": true },
-    { "id": "ESXI-AD-ADMINS-AUTOADD", "title": "AD admin group auto-add is disabled", "domain": "esxi", "assetType": "host", "severity": "high",
+    { "id": "ESXI-AD-ADMINS-AUTOADD", "changeCategory": "settings", "title": "AD admin group auto-add is disabled", "domain": "esxi", "assetType": "host", "severity": "high",
       "attack": { "mitigates": ["T1078.002", "T1098.007"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "Config.HostAgent.plugins.hostsvc.esxAdminsGroupAutoAdd", "op": "eq", "value": false, "absent": "unknown" },
       "rationale": "Automatic admin grant for a named AD group is the root cause of CVE-2024-37085.",
       "mitigation": { "summary": "Set esxAdminsGroupAutoAdd to false.", "steps": ["Set Config.HostAgent.plugins.hostsvc.esxAdminsGroupAutoAdd = false"], "workPackage": "WP-ESXI-ACCESS" }, "vsat": true },
-    { "id": "ESXI-MOB", "title": "Managed Object Browser is disabled", "domain": "esxi", "assetType": "host", "severity": "medium",
+    { "id": "ESXI-MOB", "changeCategory": "settings", "title": "Managed Object Browser is disabled", "domain": "esxi", "assetType": "host", "severity": "medium",
       "attack": { "mitigates": ["T1210"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "Config.HostAgent.plugins.solo.enableMob", "op": "eq", "value": false, "absent": "unknown" },
       "rationale": "The MOB exposes the host API through a browser and can be used to change configuration.",
       "mitigation": { "summary": "Set Config.HostAgent.plugins.solo.enableMob to false.", "steps": ["Set advanced setting Config.HostAgent.plugins.solo.enableMob = false"], "workPackage": "WP-ESXI-HARDENING" }, "cis": "2.3", "scg": "Config.HostAgent.plugins.solo.enableMob" },
-    { "id": "ESXI-DVFILTER", "title": "dvfilter network API is not bound", "domain": "esxi", "assetType": "host", "severity": "low",
+    { "id": "ESXI-DVFILTER", "changeCategory": "settings", "title": "dvfilter network API is not bound", "domain": "esxi", "assetType": "host", "severity": "low",
       "attack": { "mitigates": ["T1040"], "mitigation": null, "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "Net.DVFilterBindIpAddress", "op": "empty", "absent": "pass" },
       "rationale": "A bound dvfilter API lets a VM inspect traffic of other VMs if abused.",
       "mitigation": { "summary": "Clear Net.DVFilterBindIpAddress unless a security appliance requires it.", "steps": ["Set advanced setting Net.DVFilterBindIpAddress to empty"], "workPackage": "WP-ESXI-HARDENING" }, "cis": "2.6", "scg": "Net.DVFilterBindIpAddress" },
-    { "id": "ESXI-BPDU", "title": "Guest BPDU frames are blocked", "domain": "esxi", "assetType": "host", "severity": "low",
+    { "id": "ESXI-BPDU", "changeCategory": "settings", "title": "Guest BPDU frames are blocked", "domain": "esxi", "assetType": "host", "severity": "low",
       "attack": { "mitigates": ["T1498"], "mitigation": "M1037", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "Net.BlockGuestBPDU", "op": "eq", "value": 1, "absent": "fail" },
       "rationale": "Prevents a VM from triggering BPDU guard on upstream switches (denial of service).",
       "mitigation": { "summary": "Set Net.BlockGuestBPDU to 1.", "steps": ["Set advanced setting Net.BlockGuestBPDU = 1"], "workPackage": "WP-ESXI-HARDENING" }, "scg": "Net.BlockGuestBPDU" },
-    { "id": "ESXI-SALT", "title": "Transparent page sharing uses per-VM salting", "domain": "esxi", "assetType": "host", "severity": "low",
+    { "id": "ESXI-SALT", "changeCategory": "settings", "title": "Transparent page sharing uses per-VM salting", "domain": "esxi", "assetType": "host", "severity": "low",
       "attack": { "mitigates": [], "mitigation": null, "status": "proposed", "none": "inter-VM memory side channel; ATT&CK has no technique for it" },
       "check": { "type": "setting", "fact": "advanced", "key": "Mem.ShareForceSalting", "op": "eq", "value": 2, "absent": "default", "default": 2 },
       "rationale": "Inter-VM page sharing can enable side-channel attacks.",
       "mitigation": { "summary": "Set Mem.ShareForceSalting to 2.", "steps": ["Set advanced setting Mem.ShareForceSalting = 2"], "workPackage": "WP-ESXI-HARDENING" }, "cis": "1.4", "scg": "Mem.ShareForceSalting" },
-    { "id": "ESXI-SHELL-WARNING", "title": "Shell warnings are not suppressed", "domain": "esxi", "assetType": "host", "severity": "info",
+    { "id": "ESXI-SHELL-WARNING", "changeCategory": "settings", "title": "Shell warnings are not suppressed", "domain": "esxi", "assetType": "host", "severity": "info",
       "attack": { "mitigates": [], "mitigation": null, "status": "proposed", "none": "hygiene/review control; no ATT&CK technique is directly mitigated" },
       "check": { "type": "setting", "fact": "advanced", "key": "UserVars.SuppressShellWarning", "op": "eq", "value": 0, "absent": "default", "default": 0 },
       "rationale": "The warning makes enabled shell services visible to operators.",
       "mitigation": { "summary": "Set UserVars.SuppressShellWarning to 0.", "steps": ["Set advanced setting UserVars.SuppressShellWarning = 0"], "workPackage": "WP-ESXI-HARDENING" }, "scg": "UserVars.SuppressShellWarning" },
-    { "id": "ESXI-LOG-LEVEL", "title": "Host agent log level is info", "domain": "esxi", "assetType": "host", "severity": "info",
+    { "id": "ESXI-LOG-LEVEL", "changeCategory": "settings", "title": "Host agent log level is info", "domain": "esxi", "assetType": "host", "severity": "info",
       "attack": { "mitigates": [], "mitigation": null, "status": "proposed", "none": "detection/forensics support, not a mitigation of a specific technique" },
       "check": { "type": "setting", "fact": "advanced", "key": "Config.HostAgent.log.level", "op": "eq", "value": "info", "absent": "default", "default": "info" },
       "rationale": "Adequate log detail is needed for investigations without excessive volume.",
       "mitigation": { "summary": "Set Config.HostAgent.log.level to info.", "steps": ["Set advanced setting Config.HostAgent.log.level = info"], "workPackage": "WP-ESXI-LOGGING" }, "scg": "Config.HostAgent.log.level" },
-    { "id": "ESXI-NTP", "title": "Time synchronization is configured and running", "domain": "esxi", "assetType": "host", "severity": "medium",
+    { "id": "ESXI-NTP", "changeCategory": "settings", "title": "Time synchronization is configured and running", "domain": "esxi", "assetType": "host", "severity": "medium",
       "attack": { "mitigates": [], "mitigation": null, "status": "proposed", "none": "detection/forensics support, not a mitigation of a specific technique" },
       "check": { "type": "script", "name": "Ntp", "minServers": 1 },
       "profiles": { "strict": { "minServers": 2 } },
       "rationale": "Accurate time is required for log correlation, certificates and Kerberos.",
       "mitigation": { "summary": "Configure authoritative NTP/PTP sources and start the service with policy 'on'.", "steps": ["Host > Configure > Time Configuration"], "workPackage": "WP-ESXI-LOGGING" }, "cis": "2.1" },
-    { "id": "ESXI-SYSLOG-REMOTE", "title": "Remote syslog is configured", "domain": "esxi", "assetType": "host", "severity": "medium",
+    { "id": "ESXI-SYSLOG-REMOTE", "changeCategory": "settings", "title": "Remote syslog is configured", "domain": "esxi", "assetType": "host", "severity": "medium",
       "attack": { "mitigates": ["T1070"], "mitigation": "M1029", "status": "proposed" },
       "check": { "type": "script", "name": "SyslogRemote" },
       "rationale": "Local logs can be erased by an attacker with root access; remote copies preserve evidence.",
       "mitigation": { "summary": "Set Syslog.global.logHost to the authorized collector(s) and open the syslog firewall ruleset.", "steps": ["Set advanced setting Syslog.global.logHost = udp://collector:514 (use tls:// where supported)"], "workPackage": "WP-ESXI-LOGGING" }, "cis": "3.3", "scg": "Syslog.global.logHost" },
-    { "id": "ESXI-SYSLOG-PERSIST", "title": "Logs are stored persistently", "domain": "esxi", "assetType": "host", "severity": "low",
+    { "id": "ESXI-SYSLOG-PERSIST", "changeCategory": "settings", "title": "Logs are stored persistently", "domain": "esxi", "assetType": "host", "severity": "low",
       "attack": { "mitigates": ["T1070"], "mitigation": "M1029", "status": "proposed" },
       "check": { "type": "setting", "fact": "advanced", "key": "Syslog.global.logDir", "op": "notmatch", "value": "^\\s*$|^/tmp|ramdisk", "absent": "unknown" },
       "rationale": "Logs on ramdisk are lost at reboot.",
       "mitigation": { "summary": "Point Syslog.global.logDir to a persistent datastore location.", "steps": ["Set advanced setting Syslog.global.logDir = [datastore] logs"], "workPackage": "WP-ESXI-LOGGING" }, "cis": "3.2", "scg": "Syslog.global.logDir",
       "limitations": "Cannot confirm the default scratch location is backed by persistent storage." },
-    { "id": "ESXI-COREDUMP", "title": "Core dumps are sent to a central collector", "domain": "esxi", "assetType": "host", "severity": "low",
+    { "id": "ESXI-COREDUMP", "changeCategory": "settings", "title": "Core dumps are sent to a central collector", "domain": "esxi", "assetType": "host", "severity": "low",
       "attack": { "mitigates": [], "mitigation": null, "status": "proposed", "none": "detection/forensics support, not a mitigation of a specific technique" },
       "check": { "type": "script", "name": "Coredump" },
       "rationale": "Core dumps can contain secrets and support forensic analysis; central collection controls both.",
       "mitigation": { "summary": "Configure network core dump to a secured collector.", "steps": ["esxcli system coredump network set / set --enable true (review first)"], "workPackage": "WP-ESXI-LOGGING" }, "cis": "3.1" },
-    { "id": "ESXI-FW-DEFAULT", "title": "Host firewall blocks incoming traffic by default", "domain": "esxi", "assetType": "host", "severity": "high",
+    { "id": "ESXI-FW-DEFAULT", "changeCategory": "firewall", "title": "Host firewall blocks incoming traffic by default", "domain": "esxi", "assetType": "host", "severity": "high",
       "attack": { "mitigates": ["T1021", "T1210"], "mitigation": "M1035", "status": "proposed" },
       "check": { "type": "setting", "fact": "firewall", "path": "defaultIncomingBlocked", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "A permissive default exposes every listening service.",
       "mitigation": { "summary": "Restore the default block policy for incoming traffic.", "steps": ["esxcli network firewall set --default-action false (review first)"], "workPackage": "WP-ESXI-HARDENING" }, "cis": "2.2" },
-    { "id": "ESXI-FW-ALLIP", "title": "Management services restrict allowed source IPs", "domain": "esxi", "assetType": "host", "severity": "medium",
+    { "id": "ESXI-FW-ALLIP", "changeCategory": "firewall", "title": "Management services restrict allowed source IPs", "domain": "esxi", "assetType": "host", "severity": "medium",
       "attack": { "mitigates": ["T1021", "T1210"], "mitigation": "M1035", "status": "proposed" },
       "check": { "type": "script", "name": "FirewallAllIp", "rulesets": ["sshServer", "vSphereClient", "webAccess", "CIMHttpServer", "CIMHttpsServer", "CIMSLP", "snmp", "vpxHeartbeats"] },
       "rationale": "Restricting management services to admin networks reduces reachable attack surface.",
@@ -7113,14 +7979,14 @@ $script:VsatEmbedded = [ordered]@{
     'rules/hyperv.json' = @'
 {
   "rules": [
-    { "id": "HV-OS-PATCH-AGE", "title": "Hyper-V host received updates recently", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "high",
+    { "id": "HV-OS-PATCH-AGE", "changeCategory": "patch", "title": "Hyper-V host received updates recently", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "high",
       "attack": { "mitigates": ["T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "PatchAge", "fact": "hotfix", "maxDays": 45 },
       "profiles": { "strict": { "maxDays": 31 } },
       "rationale": "Monthly cumulative updates fix Hyper-V and Windows vulnerabilities, including guest-to-host escapes. Patch age is a proxy: VSAT has no offline Windows update catalog.",
       "mitigation": { "summary": "Install the latest cumulative update (Cluster-Aware Updating for clusters).", "steps": ["Drain roles / live-migrate VMs", "Install the latest LCU and reboot"], "workPackage": "WP-PATCH" },
       "limitations": "Uses the most recent installed hotfix date, not a vulnerability-by-build evaluation.", "vsat": true },
-    { "id": "HV-OS-LIFECYCLE", "title": "Windows Server release is within vendor support", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "high",
+    { "id": "HV-OS-LIFECYCLE", "changeCategory": "patch", "title": "Windows Server release is within vendor support", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "high",
       "attack": { "mitigates": ["T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "OsLifecycle" },
       "rationale": "Unsupported Windows Server releases stop receiving security updates.",
@@ -7145,7 +8011,7 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "script", "name": "HvDeviceGuard", "service": 1 },
       "rationale": "Credential Guard isolates LSA secrets, limiting credential theft from compromised management hosts.",
       "mitigation": { "summary": "Enable Credential Guard.", "steps": ["Group Policy: Turn On Virtualization Based Security > Credential Guard Configuration"], "workPackage": "WP-HOST-HARDENING" }, "vsat": true },
-    { "id": "HV-FIREWALL", "title": "Windows Firewall is enabled on all profiles and blocks inbound by default", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "high",
+    { "id": "HV-FIREWALL", "changeCategory": "firewall", "title": "Windows Firewall is enabled on all profiles and blocks inbound by default", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "high",
       "attack": { "mitigates": ["T1021", "T1210"], "mitigation": "M1035", "status": "proposed" },
       "check": { "type": "script", "name": "HvFirewall" },
       "rationale": "Host firewall limits reachable management services.",
@@ -7160,7 +8026,7 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "setting", "fact": "smb", "path": "requireSigning", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "Unsigned SMB enables relay attacks against hosts that store VM files on SMB.",
       "mitigation": { "summary": "Require SMB signing.", "steps": ["Set-SmbServerConfiguration -RequireSecuritySignature $true (review first)"], "workPackage": "WP-HOST-HARDENING" }, "vsat": true },
-    { "id": "HV-SPOOLER", "title": "Print Spooler is disabled on the host", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "medium",
+    { "id": "HV-SPOOLER", "changeCategory": "service", "title": "Print Spooler is disabled on the host", "domain": "hyperv-host", "assetType": "hyperv-host", "severity": "medium",
       "attack": { "mitigates": ["T1210", "T1068"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "service", "key": "Spooler", "running": false, "policy": "Disabled" },
       "rationale": "The Print Spooler has a history of remote code execution flaws (e.g. PrintNightmare) and is not needed on virtualization hosts.",
@@ -7216,50 +8082,50 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "setting", "fact": "props", "path": "generation", "op": "eq", "value": 2, "absent": "unknown" },
       "rationale": "Generation 2 VMs support UEFI Secure Boot and virtual TPM.",
       "mitigation": { "summary": "Use Generation 2 for new VMs; plan migration for Gen1 workloads.", "steps": ["Rebuild or convert guest"], "workPackage": "WP-VM-HARDENING" }, "vsat": true },
-    { "id": "HV-VM-SECUREBOOT", "title": "VM Secure Boot is enabled", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "medium",
+    { "id": "HV-VM-SECUREBOOT", "changeCategory": "vm", "title": "VM Secure Boot is enabled", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "medium",
       "attack": { "mitigates": ["T1542"], "mitigation": "M1046", "status": "proposed" },
       "applies": { "props": [ { "path": "generation", "op": "eq", "value": 2 } ] },
       "check": { "type": "setting", "fact": "firmware", "path": "secureBoot", "op": "eq", "value": "On", "absent": "unknown" },
       "rationale": "Secure Boot blocks unsigned bootloaders and bootkits in the guest.",
       "mitigation": { "summary": "Enable Secure Boot with the correct template (Microsoft UEFI CA for Linux).", "steps": ["Set-VMFirmware -EnableSecureBoot On (review first)"], "workPackage": "WP-VM-HARDENING" }, "vsat": true },
-    { "id": "HV-VM-VTPM", "title": "VM has a virtual TPM", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "low", "profilesEnabled": ["strict"],
+    { "id": "HV-VM-VTPM", "changeCategory": "vm", "title": "VM has a virtual TPM", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "low", "profilesEnabled": ["strict"],
       "attack": { "mitigates": ["T1542"], "mitigation": "M1046", "status": "proposed" },
       "applies": { "props": [ { "path": "generation", "op": "eq", "value": 2 } ] },
       "check": { "type": "setting", "fact": "security", "path": "tpm", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "A vTPM enables guest BitLocker and measured boot.",
       "mitigation": { "summary": "Enable the virtual TPM (key protector required).", "steps": ["Enable-VMTPM (review first)"], "workPackage": "WP-VM-HARDENING" }, "vsat": true },
-    { "id": "HV-VM-ENCRYPT-STATE", "title": "VM state and migration traffic are encrypted", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "low", "profilesEnabled": ["strict"],
+    { "id": "HV-VM-ENCRYPT-STATE", "changeCategory": "vm", "title": "VM state and migration traffic are encrypted", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "low", "profilesEnabled": ["strict"],
       "attack": { "mitigates": ["T1040"], "mitigation": "M1041", "status": "proposed" },
       "applies": { "props": [ { "path": "generation", "op": "eq", "value": 2 } ] },
       "check": { "type": "setting", "fact": "security", "path": "encryptState", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "Protects VM memory in saved state and during live migration.",
       "mitigation": { "summary": "Enable state and migration traffic encryption (requires vTPM/key protector).", "steps": ["Set-VMSecurity -EncryptStateAndVmMigrationTraffic $true (review first)"], "workPackage": "WP-VM-HARDENING" }, "vsat": true },
-    { "id": "HV-VM-MACSPOOF", "title": "MAC address spoofing is disabled on VM adapters", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "high",
+    { "id": "HV-VM-MACSPOOF", "changeCategory": "vm", "title": "MAC address spoofing is disabled on VM adapters", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "high",
       "attack": { "mitigates": ["T1557", "T1557.002"], "mitigation": "M1037", "status": "proposed" },
       "check": { "type": "script", "name": "HvAdapters", "field": "macSpoofing", "bad": ["On"] },
       "rationale": "MAC spoofing lets a VM impersonate other hosts on the virtual switch.",
       "mitigation": { "summary": "Disable MAC spoofing except for approved appliances (record an exception).", "steps": ["Set-VMNetworkAdapter -MacAddressSpoofing Off (review first)"], "workPackage": "WP-NET-L2" }, "vsat": true },
-    { "id": "HV-VM-DHCPGUARD", "title": "DHCP guard is enabled on VM adapters", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "medium",
+    { "id": "HV-VM-DHCPGUARD", "changeCategory": "vm", "title": "DHCP guard is enabled on VM adapters", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "medium",
       "attack": { "mitigates": ["T1557.003"], "mitigation": "M1037", "status": "proposed" },
       "check": { "type": "script", "name": "HvAdapters", "field": "dhcpGuard", "bad": ["Off"] },
       "rationale": "Without DHCP guard a VM can act as a rogue DHCP server.",
       "mitigation": { "summary": "Enable DHCP guard on adapters of VMs that are not DHCP servers.", "steps": ["Set-VMNetworkAdapter -DhcpGuard On (review first)"], "workPackage": "WP-NET-L2" }, "vsat": true },
-    { "id": "HV-VM-ROUTERGUARD", "title": "Router guard is enabled on VM adapters", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "medium",
+    { "id": "HV-VM-ROUTERGUARD", "changeCategory": "vm", "title": "Router guard is enabled on VM adapters", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "medium",
       "attack": { "mitigates": ["T1557"], "mitigation": "M1037", "status": "proposed" },
       "check": { "type": "script", "name": "HvAdapters", "field": "routerGuard", "bad": ["Off"] },
       "rationale": "Without router guard a VM can send router advertisements and redirects to hijack traffic.",
       "mitigation": { "summary": "Enable router guard on adapters of VMs that are not routers.", "steps": ["Set-VMNetworkAdapter -RouterGuard On (review first)"], "workPackage": "WP-NET-L2" }, "vsat": true },
-    { "id": "HV-VM-PORTMIRROR", "title": "VM adapters are not mirroring traffic", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "medium",
+    { "id": "HV-VM-PORTMIRROR", "changeCategory": "vm", "title": "VM adapters are not mirroring traffic", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "medium",
       "attack": { "mitigates": ["T1040"], "mitigation": null, "status": "proposed" },
       "check": { "type": "script", "name": "HvAdapters", "field": "portMirroring", "bad": ["Source", "Destination"] },
       "rationale": "Port mirroring copies traffic of other workloads to the destination VM.",
       "mitigation": { "summary": "Remove unapproved port mirroring.", "steps": ["Set-VMNetworkAdapter -PortMirroring None (review first)"], "workPackage": "WP-NET-L2" }, "vsat": true },
-    { "id": "HV-VM-TRUNK", "title": "VM adapters are not in VLAN trunk mode without authorization", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "medium",
+    { "id": "HV-VM-TRUNK", "changeCategory": "vm", "title": "VM adapters are not in VLAN trunk mode without authorization", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "medium",
       "attack": { "mitigates": ["T1040", "T1210"], "mitigation": "M1030", "status": "proposed" },
       "check": { "type": "script", "name": "HvAdapters", "field": "vlanMode", "bad": ["Trunk"] },
       "rationale": "Trunk mode passes multiple VLANs to the guest (equivalent to VGT).",
       "mitigation": { "summary": "Use access mode, or record an exception for approved appliances.", "steps": ["Set-VMNetworkAdapterVlan -Access -VlanId <n> (review first)"], "workPackage": "WP-NET-L2" }, "vsat": true },
-    { "id": "HV-VM-GUESTSERVICE", "title": "Guest Service Interface is disabled", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "low",
+    { "id": "HV-VM-GUESTSERVICE", "changeCategory": "vm", "title": "Guest Service Interface is disabled", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "low",
       "attack": { "mitigates": ["T1570"], "mitigation": null, "status": "proposed" },
       "check": { "type": "script", "name": "HvIntegration", "service": "Guest Service Interface" },
       "rationale": "The Guest Service Interface allows host-initiated file copy into the guest.",
@@ -7269,12 +8135,12 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "script", "name": "HvCheckpointAge", "maxDays": 7 },
       "rationale": "Aged checkpoints grow differencing disks and are not backups.",
       "mitigation": { "summary": "Merge or delete aged checkpoints after confirming backups.", "steps": ["Remove-VMSnapshot (review first)"], "workPackage": "WP-VM-HYGIENE" }, "vsat": true },
-    { "id": "HV-VM-MEDIA", "title": "No ISO media or named-pipe COM ports attached", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "low",
+    { "id": "HV-VM-MEDIA", "changeCategory": "vm", "title": "No ISO media or named-pipe COM ports attached", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "low",
       "attack": { "mitigates": ["T1611"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "script", "name": "HvDevices", "types": ["dvd", "com"] },
       "rationale": "Attached media and COM pipes are unmonitored data paths into the guest.",
       "mitigation": { "summary": "Eject ISOs and remove COM pipe paths when not needed.", "steps": ["Set-VMDvdDrive -Path $null; Set-VMComPort -Path '' (review first)"], "workPackage": "WP-VM-HARDENING" }, "vsat": true },
-    { "id": "HV-VM-DDA", "title": "No devices assigned with Discrete Device Assignment", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "medium",
+    { "id": "HV-VM-DDA", "changeCategory": "vm", "title": "No devices assigned with Discrete Device Assignment", "domain": "hyperv-vm", "assetType": "hyperv-vm", "severity": "medium",
       "attack": { "mitigates": ["T1611"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "script", "name": "HvDevices", "types": ["dda"] },
       "rationale": "DDA gives the guest direct hardware access, bypassing hypervisor isolation (record exceptions for GPU/AI workloads).",
@@ -7285,38 +8151,38 @@ $script:VsatEmbedded = [ordered]@{
     'rules/kvm.json' = @'
 {
   "rules": [
-    { "id": "KVM-OS-PATCH-AGE", "title": "KVM host received package updates recently", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high",
+    { "id": "KVM-OS-PATCH-AGE", "changeCategory": "patch", "title": "KVM host received package updates recently", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high",
       "attack": { "mitigates": ["T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "PatchAge", "fact": "updates", "maxDays": 45 }, "profiles": { "strict": { "maxDays": 31 } },
       "rationale": "QEMU, libvirt and kernel updates fix guest-to-host escape and privilege-escalation flaws. Package database age is a proxy for patch level.",
       "mitigation": { "summary": "Apply distribution security updates and restart affected QEMU processes (or live-migrate guests).", "steps": ["dnf/apt security updates", "Reboot or restart guests to load patched QEMU"], "workPackage": "WP-PATCH" },
       "limitations": "Uses package database timestamps, not per-CVE evaluation.", "vsat": true },
-    { "id": "KVM-OS-LIFECYCLE", "title": "Host OS release is within vendor security support", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high",
+    { "id": "KVM-OS-LIFECYCLE", "changeCategory": "patch", "title": "Host OS release is within vendor security support", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high",
       "attack": { "mitigates": ["T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "OsLifecycle" },
       "rationale": "Unsupported releases stop receiving security fixes for the kernel, QEMU and libvirt.",
       "mitigation": { "summary": "Upgrade to a supported release.", "steps": ["Plan host upgrade with guest evacuation"], "workPackage": "WP-LIFECYCLE" }, "vsat": true },
-    { "id": "KVM-SVIRT", "title": "sVirt confinement is active (SELinux/AppArmor enforcing)", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high",
+    { "id": "KVM-SVIRT", "changeCategory": "settings", "title": "sVirt confinement is active (SELinux/AppArmor enforcing)", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high",
       "attack": { "mitigates": ["T1611"], "mitigation": "M1048", "status": "proposed" },
       "check": { "type": "script", "name": "Kvm", "mode": "svirt" },
       "rationale": "sVirt confines each QEMU process so a compromised guest cannot access other guests' disks or the host.",
       "mitigation": { "summary": "Keep security_driver enabled and SELinux enforcing / AppArmor enabled.", "steps": ["setenforce 1 and set SELINUX=enforcing (or enable AppArmor)", "Remove security_driver = \"none\" from qemu.conf"], "workPackage": "WP-HOST-HARDENING" }, "vsat": true },
-    { "id": "KVM-LIBVIRT-TCP", "title": "No unauthenticated or plain-TCP libvirt listener", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high",
+    { "id": "KVM-LIBVIRT-TCP", "changeCategory": "settings", "title": "No unauthenticated or plain-TCP libvirt listener", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high",
       "attack": { "mitigates": ["T1021", "T1059.012"], "mitigation": "M1035", "status": "proposed" },
       "check": { "type": "script", "name": "Kvm", "mode": "libvirt-tcp" },
       "rationale": "libvirt API access is equivalent to root on the host; plain TCP exposes it to the network.",
       "mitigation": { "summary": "Disable listen_tcp / the libvirtd-tcp socket; use TLS (16514) with client certificates or SSH.", "steps": ["systemctl disable --now libvirtd-tcp.socket (review first)"], "workPackage": "WP-HOST-SERVICES" }, "vsat": true },
-    { "id": "KVM-QEMU-USER", "title": "QEMU does not run as root", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high",
+    { "id": "KVM-QEMU-USER", "changeCategory": "settings", "title": "QEMU does not run as root", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high",
       "attack": { "mitigates": ["T1611", "T1068"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "script", "name": "Kvm", "mode": "qemu-user" },
       "rationale": "QEMU running as root turns any device-emulation escape into full host compromise.",
       "mitigation": { "summary": "Set user/group in qemu.conf to the distribution's unprivileged account.", "steps": ["Edit /etc/libvirt/qemu.conf user and group (review first)"], "workPackage": "WP-HOST-HARDENING" }, "vsat": true },
-    { "id": "KVM-VNC-TLS", "title": "Host VNC default is loopback-only or TLS-protected", "domain": "kvm-host", "assetType": "kvm-host", "severity": "medium",
+    { "id": "KVM-VNC-TLS", "changeCategory": "settings", "title": "Host VNC default is loopback-only or TLS-protected", "domain": "kvm-host", "assetType": "kvm-host", "severity": "medium",
       "attack": { "mitigates": ["T1021.005"], "mitigation": "M1037", "status": "proposed" },
       "check": { "type": "script", "name": "Kvm", "mode": "vnc-tls" },
       "rationale": "Unencrypted network VNC exposes guest consoles and keystrokes.",
       "mitigation": { "summary": "Keep vnc_listen on 127.0.0.1 (tunnel over SSH) or enable vnc_tls with certificates.", "steps": ["Edit qemu.conf vnc_listen / vnc_tls (review first)"], "workPackage": "WP-HOST-HARDENING" }, "vsat": true },
-    { "id": "KVM-SECCOMP", "title": "QEMU seccomp sandbox is not disabled", "domain": "kvm-host", "assetType": "kvm-host", "severity": "medium",
+    { "id": "KVM-SECCOMP", "changeCategory": "settings", "title": "QEMU seccomp sandbox is not disabled", "domain": "kvm-host", "assetType": "kvm-host", "severity": "medium",
       "attack": { "mitigates": ["T1611"], "mitigation": "M1048", "status": "proposed" },
       "check": { "type": "setting", "fact": "qemuConf", "key": "seccomp_sandbox", "op": "ne", "value": 0, "absent": "default", "default": 1 },
       "rationale": "The seccomp sandbox limits the system calls a compromised QEMU process can make.",
@@ -7326,17 +8192,17 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "setting", "fact": "secureBoot", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "Secure Boot protects the host kernel and boot chain.",
       "mitigation": { "summary": "Enable UEFI Secure Boot (with signed kernel modules).", "steps": ["Firmware setup > Secure Boot"], "workPackage": "WP-HOST-HARDENING" }, "vsat": true },
-    { "id": "KVM-FIREWALL", "title": "Host firewall service is active", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high",
+    { "id": "KVM-FIREWALL", "changeCategory": "firewall", "title": "Host firewall service is active", "domain": "kvm-host", "assetType": "kvm-host", "severity": "high",
       "attack": { "mitigates": ["T1021", "T1210"], "mitigation": "M1035", "status": "proposed" },
       "check": { "type": "script", "name": "Kvm", "mode": "firewall" },
       "rationale": "A host firewall limits exposure of libvirt, VNC/SPICE and management services.",
       "mitigation": { "summary": "Enable firewalld, nftables or ufw with a restrictive policy.", "steps": ["systemctl enable --now firewalld (review first)"], "workPackage": "WP-HOST-HARDENING" }, "vsat": true },
-    { "id": "KVM-SSH-ROOT", "title": "SSH does not allow root password login", "domain": "kvm-host", "assetType": "kvm-host", "severity": "medium",
+    { "id": "KVM-SSH-ROOT", "changeCategory": "access", "title": "SSH does not allow root password login", "domain": "kvm-host", "assetType": "kvm-host", "severity": "medium",
       "attack": { "mitigates": ["T1021.004", "T1110"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "setting", "fact": "sshd", "key": "PermitRootLogin", "op": "notin", "value": ["yes"], "absent": "default", "default": "prohibit-password" },
       "rationale": "Direct root password login enables brute force against the most privileged account.",
       "mitigation": { "summary": "Set PermitRootLogin no (or prohibit-password) and use named accounts with sudo.", "steps": ["Edit sshd_config (review first)"], "workPackage": "WP-HOST-ACCESS" }, "vsat": true },
-    { "id": "KVM-SSH-PASSWORD", "title": "SSH password authentication is disabled", "domain": "kvm-host", "assetType": "kvm-host", "severity": "low",
+    { "id": "KVM-SSH-PASSWORD", "changeCategory": "access", "title": "SSH password authentication is disabled", "domain": "kvm-host", "assetType": "kvm-host", "severity": "low",
       "attack": { "mitigates": ["T1021.004", "T1110"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "setting", "fact": "sshd", "key": "PasswordAuthentication", "op": "ne", "value": "yes", "absent": "unknown" },
       "rationale": "Key-based authentication resists password guessing and credential reuse.",
@@ -7351,42 +8217,42 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "setting", "fact": "nested", "op": "eq", "value": false, "absent": "pass" },
       "rationale": "Nested virtualization increases hypervisor attack surface.",
       "mitigation": { "summary": "Disable the kvm_intel/kvm_amd nested parameter unless required.", "steps": ["modprobe options (review first)"], "workPackage": "WP-HOST-HARDENING" }, "vsat": true },
-    { "id": "KVM-VM-SECLABEL", "title": "Guest uses dynamic sVirt labeling", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "high",
+    { "id": "KVM-VM-SECLABEL", "changeCategory": "vm", "title": "Guest uses dynamic sVirt labeling", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "high",
       "attack": { "mitigates": ["T1611"], "mitigation": "M1048", "status": "proposed" },
       "check": { "type": "script", "name": "Kvm", "mode": "vm-seclabel" },
       "rationale": "seclabel type='none' or relabel='no' removes the guest's confinement.",
       "mitigation": { "summary": "Remove static/none seclabel overrides from the domain XML.", "steps": ["virsh edit <domain> (review first)"], "workPackage": "WP-VM-HARDENING" }, "vsat": true },
-    { "id": "KVM-VM-GRAPHICS", "title": "Guest console is not exposed on the network", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "medium",
+    { "id": "KVM-VM-GRAPHICS", "changeCategory": "vm", "title": "Guest console is not exposed on the network", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "medium",
       "attack": { "mitigates": ["T1021.005"], "mitigation": "M1037", "status": "proposed" },
       "check": { "type": "script", "name": "Kvm", "mode": "vm-graphics" },
       "rationale": "Network-exposed VNC/SPICE allows console access and keystroke capture.",
       "mitigation": { "summary": "Bind graphics to 127.0.0.1 or a UNIX socket and tunnel access.", "steps": ["virsh edit <domain>: <listen type='address' address='127.0.0.1'/>"], "workPackage": "WP-VM-HARDENING" }, "vsat": true },
-    { "id": "KVM-VM-HOSTDEV", "title": "No host device passthrough", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "medium",
+    { "id": "KVM-VM-HOSTDEV", "changeCategory": "vm", "title": "No host device passthrough", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "medium",
       "attack": { "mitigates": ["T1611"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "script", "name": "Kvm", "mode": "vm-hostdev" },
       "rationale": "PCI/USB passthrough gives the guest direct hardware (DMA) access (record exceptions for GPU/AI workloads).",
       "mitigation": { "summary": "Remove passthrough devices or document the exception; ensure IOMMU is enabled.", "steps": ["virsh detach-device (review first)"], "workPackage": "WP-VM-HARDENING" }, "vsat": true },
-    { "id": "KVM-VM-CONSOLE-NET", "title": "No network-backed serial consoles", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "medium",
+    { "id": "KVM-VM-CONSOLE-NET", "changeCategory": "vm", "title": "No network-backed serial consoles", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "medium",
       "attack": { "mitigates": ["T1021"], "mitigation": "M1035", "status": "proposed" },
       "check": { "type": "script", "name": "Kvm", "mode": "vm-console-net" },
       "rationale": "TCP/telnet serial consoles are unauthenticated access paths into the guest.",
       "mitigation": { "summary": "Use pty/unix consoles accessed through virsh console.", "steps": ["virsh edit <domain>"], "workPackage": "WP-VM-HARDENING" }, "vsat": true },
-    { "id": "KVM-VM-USBREDIR", "title": "No USB redirection devices", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "low",
+    { "id": "KVM-VM-USBREDIR", "changeCategory": "vm", "title": "No USB redirection devices", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "low",
       "attack": { "mitigates": ["T1200"], "mitigation": "M1034", "status": "proposed" },
       "check": { "type": "script", "name": "Kvm", "mode": "vm-redir" },
       "rationale": "USB redirection lets console clients attach devices to the guest.",
       "mitigation": { "summary": "Remove redirdev elements.", "steps": ["virsh edit <domain>"], "workPackage": "WP-VM-HARDENING" }, "vsat": true },
-    { "id": "KVM-VM-NWFILTER", "title": "Guest interfaces use an anti-spoofing nwfilter", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "low",
+    { "id": "KVM-VM-NWFILTER", "changeCategory": "vm", "title": "Guest interfaces use an anti-spoofing nwfilter", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "low",
       "attack": { "mitigates": ["T1557", "T1557.002"], "mitigation": "M1037", "status": "proposed" },
       "check": { "type": "script", "name": "Kvm", "mode": "vm-nwfilter" },
       "rationale": "Without nwfilter (e.g. clean-traffic) a guest can spoof MAC/IP/ARP on shared bridges.",
       "mitigation": { "summary": "Add <filterref filter='clean-traffic'/> to interfaces.", "steps": ["virsh edit <domain>"], "workPackage": "WP-NET-L2" }, "vsat": true },
-    { "id": "KVM-VM-SECUREBOOT", "title": "Guest uses UEFI Secure Boot", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "low", "profilesEnabled": ["strict"],
+    { "id": "KVM-VM-SECUREBOOT", "changeCategory": "vm", "title": "Guest uses UEFI Secure Boot", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "low", "profilesEnabled": ["strict"],
       "attack": { "mitigates": ["T1542"], "mitigation": "M1046", "status": "proposed" },
       "check": { "type": "setting", "fact": "domain", "path": "secureBoot", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "Secure Boot blocks unsigned bootloaders in the guest.",
       "mitigation": { "summary": "Use OVMF secure boot firmware.", "steps": ["virt-install --boot uefi / edit loader secure='yes'"], "workPackage": "WP-VM-HARDENING" }, "vsat": true },
-    { "id": "KVM-VM-TPM", "title": "Guest has a virtual TPM", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "low", "profilesEnabled": ["strict"],
+    { "id": "KVM-VM-TPM", "changeCategory": "vm", "title": "Guest has a virtual TPM", "domain": "kvm-vm", "assetType": "kvm-vm", "severity": "low", "profilesEnabled": ["strict"],
       "attack": { "mitigates": ["T1542"], "mitigation": "M1046", "status": "proposed" },
       "check": { "type": "setting", "fact": "domain", "path": "tpm", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "A vTPM (swtpm) enables measured boot and disk encryption in the guest.",
@@ -7396,7 +8262,7 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "script", "name": "HvCheckpointAge", "fact": "snapshots", "maxDays": 7 },
       "rationale": "Aged snapshots grow overlays and are not backups.",
       "mitigation": { "summary": "Delete or merge aged snapshots after confirming backups.", "steps": ["virsh snapshot-delete (review first)"], "workPackage": "WP-VM-HYGIENE" }, "vsat": true },
-    { "id": "KVM-NET-OPEN", "title": "Virtual network is not in 'open' forward mode", "domain": "kvm-network", "assetType": "kvm-network", "severity": "medium",
+    { "id": "KVM-NET-OPEN", "changeCategory": "vm", "title": "Virtual network is not in 'open' forward mode", "domain": "kvm-network", "assetType": "kvm-network", "severity": "medium",
       "attack": { "mitigates": ["T1021", "T1210"], "mitigation": "M1030", "status": "proposed" },
       "check": { "type": "setting", "fact": "props", "path": "forwardMode", "op": "ne", "value": "open", "absent": "unknown" },
       "rationale": "Forward mode 'open' installs no libvirt firewall rules for the network.",
@@ -7427,37 +8293,37 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "setting", "fact": "policy", "path": "security", "op": "match", "value": "allowPromiscuous=False, macChanges=False, forgedTransmits=False", "absent": "unknown" },
       "rationale": "New port groups inherit the vSwitch default.", "cis": "7.1",
       "mitigation": { "summary": "Set the vSwitch security policy to Reject for all three settings.", "steps": ["Host > Networking > vSwitch > Edit > Security"], "workPackage": "WP-NET-L2" } },
-    { "id": "NET-VDS-PROMISC", "title": "Distributed port group rejects promiscuous mode", "domain": "network", "assetType": "dvportgroup", "severity": "high",
+    { "id": "NET-VDS-PROMISC", "changeCategory": "settings", "title": "Distributed port group rejects promiscuous mode", "domain": "network", "assetType": "dvportgroup", "severity": "high",
       "attack": { "mitigates": ["T1040", "T1557"], "mitigation": "M1037", "status": "proposed" },
       "applies": { "props": [ { "path": "uplink", "op": "eq", "value": false } ] },
       "check": { "type": "setting", "fact": "policy", "path": "security.allowPromiscuous", "op": "eq", "value": false, "absent": "unknown" },
       "rationale": "Promiscuous mode lets a VM capture traffic of other VMs.", "cis": "7.3",
       "mitigation": { "summary": "Set promiscuous mode to Reject on the distributed port group.", "steps": ["Networking > dvPortgroup > Edit Settings > Security"], "workPackage": "WP-NET-L2" } },
-    { "id": "NET-VDS-MAC", "title": "Distributed port group rejects MAC address changes", "domain": "network", "assetType": "dvportgroup", "severity": "medium",
+    { "id": "NET-VDS-MAC", "changeCategory": "settings", "title": "Distributed port group rejects MAC address changes", "domain": "network", "assetType": "dvportgroup", "severity": "medium",
       "attack": { "mitigates": ["T1557", "T1557.002"], "mitigation": "M1037", "status": "proposed" },
       "applies": { "props": [ { "path": "uplink", "op": "eq", "value": false } ] },
       "check": { "type": "setting", "fact": "policy", "path": "security.macChanges", "op": "eq", "value": false, "absent": "unknown" },
       "rationale": "Accepting MAC changes enables impersonation.", "cis": "7.2",
       "mitigation": { "summary": "Set MAC address changes to Reject.", "steps": ["Networking > dvPortgroup > Edit Settings > Security"], "workPackage": "WP-NET-L2" } },
-    { "id": "NET-VDS-FORGED", "title": "Distributed port group rejects forged transmits", "domain": "network", "assetType": "dvportgroup", "severity": "medium",
+    { "id": "NET-VDS-FORGED", "changeCategory": "settings", "title": "Distributed port group rejects forged transmits", "domain": "network", "assetType": "dvportgroup", "severity": "medium",
       "attack": { "mitigates": ["T1557", "T1557.002"], "mitigation": "M1037", "status": "proposed" },
       "applies": { "props": [ { "path": "uplink", "op": "eq", "value": false } ] },
       "check": { "type": "setting", "fact": "policy", "path": "security.forgedTransmits", "op": "eq", "value": false, "absent": "unknown" },
       "rationale": "Forged transmits allow spoofed source MAC addresses.", "cis": "7.1",
       "mitigation": { "summary": "Set forged transmits to Reject.", "steps": ["Networking > dvPortgroup > Edit Settings > Security"], "workPackage": "WP-NET-L2" } },
-    { "id": "NET-VDS-OVERRIDE-ALLOWED", "title": "Port-level security policy overrides are not allowed", "domain": "network", "assetType": "dvportgroup", "severity": "low",
+    { "id": "NET-VDS-OVERRIDE-ALLOWED", "changeCategory": "settings", "title": "Port-level security policy overrides are not allowed", "domain": "network", "assetType": "dvportgroup", "severity": "low",
       "attack": { "mitigates": ["T1040", "T1557"], "mitigation": "M1037", "status": "proposed" },
       "applies": { "props": [ { "path": "uplink", "op": "eq", "value": false } ] },
       "check": { "type": "setting", "fact": "policy", "path": "overrides.security", "op": "eq", "value": false, "absent": "unknown" },
       "rationale": "Allowing overrides lets individual ports diverge from the reviewed portgroup policy.", "cis": "7.8",
       "mitigation": { "summary": "Disable security policy override on the distributed port group.", "steps": ["dvPortgroup > Edit Settings > Advanced > Override port policies"], "workPackage": "WP-NET-L2" } },
-    { "id": "NET-VDS-PORT-OVERRIDES", "title": "No individual ports accept promiscuous, MAC change or forged transmits", "domain": "network", "assetType": "dvportgroup", "severity": "high",
+    { "id": "NET-VDS-PORT-OVERRIDES", "changeCategory": "settings", "title": "No individual ports accept promiscuous, MAC change or forged transmits", "domain": "network", "assetType": "dvportgroup", "severity": "high",
       "attack": { "mitigates": ["T1040", "T1557"], "mitigation": "M1037", "status": "proposed" },
       "applies": { "props": [ { "path": "uplink", "op": "eq", "value": false } ] },
       "check": { "type": "script", "name": "PortOverrides" },
       "rationale": "Effective per-port settings matter; a portgroup default does not prove every port is compliant.", "cis": "7.8",
       "mitigation": { "summary": "Reset permissive port overrides and disable override permission.", "steps": ["dvSwitch > Ports > Edit settings for affected ports"], "workPackage": "WP-NET-L2" } },
-    { "id": "NET-VDS-DEFAULT-POLICY", "title": "Distributed switch default security policy rejects all three", "domain": "network", "assetType": "vds", "severity": "low",
+    { "id": "NET-VDS-DEFAULT-POLICY", "changeCategory": "settings", "title": "Distributed switch default security policy rejects all three", "domain": "network", "assetType": "vds", "severity": "low",
       "attack": { "mitigates": ["T1040", "T1557"], "mitigation": "M1037", "status": "proposed" },
       "check": { "type": "setting", "fact": "policy", "path": "security", "op": "match", "value": "allowPromiscuous=False, macChanges=False, forgedTransmits=False", "absent": "unknown" },
       "rationale": "New distributed port groups inherit the switch default.", "cis": "7.1",
@@ -7479,12 +8345,12 @@ $script:VsatEmbedded = [ordered]@{
       "rationale": "Reserved VLANs on common switch platforms can cause traffic to be dropped or mishandled.", "cis": "7.5",
       "mitigation": { "summary": "Use VLANs outside the switch vendor's reserved ranges.", "steps": ["Port group > Edit > VLAN ID"], "workPackage": "WP-NET-L2" },
       "limitations": "Reserved ranges are vendor-specific; defaults reflect common Cisco platforms." },
-    { "id": "NET-VDS-NETFLOW", "title": "NetFlow/IPFIX is exported only to authorized collectors", "domain": "network", "assetType": "vds", "severity": "medium",
+    { "id": "NET-VDS-NETFLOW", "changeCategory": "settings", "title": "NetFlow/IPFIX is exported only to authorized collectors", "domain": "network", "assetType": "vds", "severity": "medium",
       "attack": { "mitigates": ["T1040"], "mitigation": null, "status": "proposed" },
       "check": { "type": "script", "name": "NetflowCollector" },
       "rationale": "Flow exports reveal traffic patterns of all workloads.", "cis": "7.7",
       "mitigation": { "summary": "Point IPFIX to an authorized collector or disable it.", "steps": ["dvSwitch > Configure > NetFlow"], "workPackage": "WP-NET-L2" } },
-    { "id": "NET-VDS-HEALTHCHECK", "title": "VDS health check is disabled", "domain": "network", "assetType": "vds", "severity": "low",
+    { "id": "NET-VDS-HEALTHCHECK", "changeCategory": "settings", "title": "VDS health check is disabled", "domain": "network", "assetType": "vds", "severity": "low",
       "attack": { "mitigates": ["T1016"], "mitigation": null, "status": "proposed" },
       "check": { "type": "script", "name": "HealthCheck" },
       "rationale": "Health check frames disclose VLAN and MTU configuration to the physical network.", "cis": "2.9",
@@ -7505,12 +8371,12 @@ $script:VsatEmbedded = [ordered]@{
     'rules/nsx.json' = @'
 {
   "rules": [
-    { "id": "NSX-MGR-ADV", "title": "NSX Manager version is not exposed to known security advisories", "domain": "nsx", "assetType": "nsx-manager", "severity": "high",
+    { "id": "NSX-MGR-ADV", "changeCategory": "patch", "title": "NSX Manager version is not exposed to known security advisories", "domain": "nsx", "assetType": "nsx-manager", "severity": "high",
       "attack": { "mitigates": ["T1190", "T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "Advisory" },
       "rationale": "NSX Manager controls network and security policy for every workload.",
       "mitigation": { "summary": "Upgrade NSX to the fixed version.", "steps": ["Back up NSX", "Upgrade via NSX Upgrade Coordinator"], "workPackage": "WP-PATCH" }, "vsat": true },
-    { "id": "NSX-MGR-LIFECYCLE", "title": "NSX release is within vendor general support", "domain": "nsx", "assetType": "nsx-manager", "severity": "high",
+    { "id": "NSX-MGR-LIFECYCLE", "changeCategory": "patch", "title": "NSX release is within vendor general support", "domain": "nsx", "assetType": "nsx-manager", "severity": "high",
       "attack": { "mitigates": ["T1190", "T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "Lifecycle" },
       "rationale": "Unsupported releases no longer receive routine security fixes.",
@@ -7561,59 +8427,59 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "script", "name": "NsxTransportNodes" },
       "rationale": "Hosts that failed realization may not enforce distributed firewall policy.",
       "mitigation": { "summary": "Resolve transport node realization errors.", "steps": ["System > Fabric > Hosts"], "workPackage": "WP-NSX-MGMT" }, "vsat": true },
-    { "id": "NSX-DFW-ENABLED", "title": "Distributed firewall is enabled", "domain": "nsx", "assetType": "nsx-manager", "severity": "critical",
+    { "id": "NSX-DFW-ENABLED", "changeCategory": "firewall", "title": "Distributed firewall is enabled", "domain": "nsx", "assetType": "nsx-manager", "severity": "critical",
       "attack": { "mitigates": ["T1021", "T1210"], "mitigation": "M1030", "status": "proposed" },
       "check": { "type": "setting", "fact": "dfwSettings", "path": "enable_firewall", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "With DFW disabled no east-west policy is enforced regardless of configured rules.",
       "mitigation": { "summary": "Enable the distributed firewall after validating policy.", "steps": ["Security > Distributed Firewall > Settings"], "workPackage": "WP-NSX-DFW" }, "vsat": true },
-    { "id": "NSX-DFW-DEFAULT", "title": "Default layer-3 DFW rule drops or rejects", "domain": "nsx", "assetType": "nsx-manager", "severity": "high",
+    { "id": "NSX-DFW-DEFAULT", "changeCategory": "firewall", "title": "Default layer-3 DFW rule drops or rejects", "domain": "nsx", "assetType": "nsx-manager", "severity": "high",
       "attack": { "mitigates": ["T1021", "T1210"], "mitigation": "M1030", "status": "proposed" },
       "check": { "type": "script", "name": "NsxDefaultRule", "mode": "action" },
       "rationale": "A default ALLOW makes every workload reachable unless an earlier rule denies it (no zero trust).",
       "mitigation": { "summary": "Move to default DROP after building allow rules from observed flows.", "steps": ["Stage with logging", "Change default rule action to DROP"], "workPackage": "WP-NSX-DFW" }, "scg": "nsx.dfw-default-rule" },
-    { "id": "NSX-DFW-DEFAULT-LOG", "title": "Default layer-3 DFW rule logs traffic", "domain": "nsx", "assetType": "nsx-manager", "severity": "low",
+    { "id": "NSX-DFW-DEFAULT-LOG", "changeCategory": "firewall", "title": "Default layer-3 DFW rule logs traffic", "domain": "nsx", "assetType": "nsx-manager", "severity": "low",
       "attack": { "mitigates": [], "mitigation": null, "status": "proposed", "none": "detection/forensics support, not a mitigation of a specific technique" },
       "check": { "type": "script", "name": "NsxDefaultRule", "mode": "log" },
       "rationale": "Logging the default rule reveals unexpected flows and supports policy tuning.",
       "mitigation": { "summary": "Enable logging on the default rule.", "steps": ["Security > Distributed Firewall > Default rule > Logging"], "workPackage": "WP-NSX-DFW" }, "vsat": true },
-    { "id": "NSX-DFW-EXCLUDE", "title": "DFW exclusion list contains no user workloads", "domain": "nsx", "assetType": "nsx-manager", "severity": "high",
+    { "id": "NSX-DFW-EXCLUDE", "changeCategory": "firewall", "title": "DFW exclusion list contains no user workloads", "domain": "nsx", "assetType": "nsx-manager", "severity": "high",
       "attack": { "mitigates": ["T1021", "T1210"], "mitigation": "M1030", "status": "proposed" },
       "check": { "type": "script", "name": "NsxExcludeList" },
       "rationale": "Excluded VMs are not protected by any distributed firewall rule.",
       "mitigation": { "summary": "Remove workloads from the exclusion list; use allow rules instead.", "steps": ["Security > Distributed Firewall > Actions > Exclusion List"], "workPackage": "WP-NSX-DFW" }, "vsat": true },
-    { "id": "NSX-DFW-ANYANY", "title": "No enabled any-any-any ALLOW rules", "domain": "nsx", "assetType": "nsx-rule", "severity": "high",
+    { "id": "NSX-DFW-ANYANY", "changeCategory": "firewall", "title": "No enabled any-any-any ALLOW rules", "domain": "nsx", "assetType": "nsx-rule", "severity": "high",
       "attack": { "mitigates": ["T1021", "T1210"], "mitigation": "M1030", "status": "proposed" },
       "check": { "type": "script", "name": "NsxRuleBroad", "mode": "anyany" },
       "rationale": "An any-any-any allow negates segmentation for everything it applies to.",
       "mitigation": { "summary": "Replace with specific source, destination and service rules.", "steps": ["Analyze flows", "Replace the rule"], "workPackage": "WP-NSX-DFW" }, "vsat": true },
-    { "id": "NSX-DFW-ANYSERVICE", "title": "Broad ALLOW rules restrict services", "domain": "nsx", "assetType": "nsx-rule", "severity": "medium",
+    { "id": "NSX-DFW-ANYSERVICE", "changeCategory": "firewall", "title": "Broad ALLOW rules restrict services", "domain": "nsx", "assetType": "nsx-rule", "severity": "medium",
       "attack": { "mitigates": ["T1021", "T1210"], "mitigation": "M1030", "status": "proposed" },
       "check": { "type": "script", "name": "NsxRuleBroad", "mode": "anyservice" },
       "rationale": "ANY source or destination combined with ANY service grants excessive reachability.",
       "mitigation": { "summary": "Restrict services to those required.", "steps": ["Edit rule services"], "workPackage": "WP-NSX-DFW" }, "vsat": true },
-    { "id": "NSX-DFW-APPLIEDTO", "title": "ALLOW rules scope Applied-To", "domain": "nsx", "assetType": "nsx-rule", "severity": "low",
+    { "id": "NSX-DFW-APPLIEDTO", "changeCategory": "firewall", "title": "ALLOW rules scope Applied-To", "domain": "nsx", "assetType": "nsx-rule", "severity": "low",
       "attack": { "mitigates": ["T1021", "T1210"], "mitigation": "M1030", "status": "proposed" },
       "applies": { "props": [ { "path": "firewall", "op": "eq", "value": "dfw" } ] },
       "check": { "type": "script", "name": "NsxRuleBroad", "mode": "appliedto" },
       "rationale": "DFW-wide Applied-To pushes rules everywhere, widening unintended matches and consuming rule tables.",
       "mitigation": { "summary": "Set Applied-To to the groups the rule protects.", "steps": ["Edit rule or policy Applied-To"], "workPackage": "WP-NSX-DFW" }, "vsat": true },
-    { "id": "NSX-DFW-EMPTY-GROUP", "title": "Rules reference groups with effective members", "domain": "nsx", "assetType": "nsx-rule", "severity": "medium",
+    { "id": "NSX-DFW-EMPTY-GROUP", "changeCategory": "firewall", "title": "Rules reference groups with effective members", "domain": "nsx", "assetType": "nsx-rule", "severity": "medium",
       "attack": { "mitigates": ["T1021", "T1210"], "mitigation": "M1030", "status": "proposed" },
       "check": { "type": "script", "name": "NsxEmptyGroups" },
       "rationale": "Configured policy is insufficient; groups without realized members make rules ineffective (Broadcom KB 414765).",
       "mitigation": { "summary": "Fix group criteria/tags or remove obsolete rules.", "steps": ["Inventory > Groups > View Members"], "workPackage": "WP-NSX-DFW" }, "vsat": true },
-    { "id": "NSX-DFW-SHADOW", "title": "Rules are not shadowed by earlier rules", "domain": "nsx", "assetType": "nsx-rule", "severity": "low",
+    { "id": "NSX-DFW-SHADOW", "changeCategory": "firewall", "title": "Rules are not shadowed by earlier rules", "domain": "nsx", "assetType": "nsx-rule", "severity": "low",
       "attack": { "mitigates": ["T1021", "T1210"], "mitigation": "M1030", "status": "proposed" },
       "check": { "type": "script", "name": "NsxShadow" },
       "rationale": "Shadowed rules never match, hiding intended denies or allows and complicating reviews.",
       "mitigation": { "summary": "Reorder, merge or delete shadowed rules.", "steps": ["Review rule order within the category"], "workPackage": "WP-NSX-DFW" },
       "vsat": true, "limitations": "Configuration-inferred; context profiles, negation and dynamic identity rules are sent to manual review." },
-    { "id": "NSX-DFW-DISABLED", "title": "No stale disabled rules", "domain": "nsx", "assetType": "nsx-rule", "severity": "info",
+    { "id": "NSX-DFW-DISABLED", "changeCategory": "firewall", "title": "No stale disabled rules", "domain": "nsx", "assetType": "nsx-rule", "severity": "info",
       "attack": { "mitigates": [], "mitigation": null, "status": "proposed", "none": "hygiene/review control; no ATT&CK technique is directly mitigated" },
       "check": { "type": "script", "name": "NsxRuleHygiene", "mode": "disabled" },
       "rationale": "Disabled rules accumulate and can be re-enabled accidentally.",
       "mitigation": { "summary": "Delete disabled rules that are no longer needed.", "steps": ["Review disabled rules"], "workPackage": "WP-NSX-DFW" }, "vsat": true },
-    { "id": "NSX-DFW-DENY-LOG", "title": "Deny rules log matched traffic", "domain": "nsx", "assetType": "nsx-rule", "severity": "low",
+    { "id": "NSX-DFW-DENY-LOG", "changeCategory": "firewall", "title": "Deny rules log matched traffic", "domain": "nsx", "assetType": "nsx-rule", "severity": "low",
       "attack": { "mitigates": [], "mitigation": null, "status": "proposed", "none": "detection/forensics support, not a mitigation of a specific technique" },
       "check": { "type": "script", "name": "NsxRuleHygiene", "mode": "logging" },
       "rationale": "Logged denies provide detection of lateral movement attempts.",
@@ -7624,12 +8490,12 @@ $script:VsatEmbedded = [ordered]@{
       "rationale": "Workloads outside all policy groups fall through to the default rule.",
       "mitigation": { "summary": "Tag or group the workload and add explicit policy.", "steps": ["Assign NSX tags / group membership"], "workPackage": "WP-NSX-DFW" },
       "vsat": true, "limitations": "Configuration-inferred from realized group membership; does not observe traffic." },
-    { "id": "NSX-GFW-DEFAULT", "title": "Gateway firewall default rules deny", "domain": "nsx", "assetType": "nsx-manager", "severity": "medium",
+    { "id": "NSX-GFW-DEFAULT", "changeCategory": "firewall", "title": "Gateway firewall default rules deny", "domain": "nsx", "assetType": "nsx-manager", "severity": "medium",
       "attack": { "mitigates": ["T1190", "T1133"], "mitigation": "M1030", "status": "proposed" },
       "check": { "type": "script", "name": "NsxGatewayDefault" },
       "rationale": "A default ALLOW on Tier-0 exposes internal segments to north-south traffic.",
       "mitigation": { "summary": "Set gateway default action to DROP after adding required allows.", "steps": ["Security > Gateway Firewall"], "workPackage": "WP-NSX-GATEWAY" }, "vsat": true },
-    { "id": "NSX-NAT-BYPASS", "title": "NAT rules do not bypass the gateway firewall", "domain": "nsx", "assetType": "nsx-t1", "severity": "medium",
+    { "id": "NSX-NAT-BYPASS", "changeCategory": "firewall", "title": "NAT rules do not bypass the gateway firewall", "domain": "nsx", "assetType": "nsx-t1", "severity": "medium",
       "attack": { "mitigates": ["T1190", "T1133"], "mitigation": "M1030", "status": "proposed" },
       "check": { "type": "script", "name": "NsxNatBypass" },
       "rationale": "firewall_match BYPASS lets translated traffic skip gateway firewall inspection.",
@@ -7726,17 +8592,17 @@ $script:VsatEmbedded = [ordered]@{
     'rules/vcenter-cluster-storage.json' = @'
 {
   "rules": [
-    { "id": "VC-PATCH-ADV", "title": "vCenter build is not exposed to known security advisories", "domain": "vcenter", "assetType": "vcenter", "severity": "critical",
+    { "id": "VC-PATCH-ADV", "changeCategory": "patch", "title": "vCenter build is not exposed to known security advisories", "domain": "vcenter", "assetType": "vcenter", "severity": "critical",
       "attack": { "mitigates": ["T1190", "T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "Advisory" },
       "rationale": "vCenter is the control plane for every host and VM; exploited vCenter vulnerabilities give full infrastructure compromise.",
       "mitigation": { "summary": "Patch vCenter to the fixed build.", "steps": ["Take a file-based backup", "Patch via VAMI or vCenter Lifecycle Manager"], "workPackage": "WP-PATCH" }, "vsat": true },
-    { "id": "VC-LIFECYCLE", "title": "vCenter release is within vendor general support", "domain": "vcenter", "assetType": "vcenter", "severity": "high",
+    { "id": "VC-LIFECYCLE", "changeCategory": "patch", "title": "vCenter release is within vendor general support", "domain": "vcenter", "assetType": "vcenter", "severity": "high",
       "attack": { "mitigates": ["T1190", "T1210", "T1068"], "mitigation": "M1051", "status": "proposed" },
       "check": { "type": "script", "name": "Lifecycle" },
       "rationale": "Unsupported releases no longer receive routine security fixes.",
       "mitigation": { "summary": "Upgrade vCenter to a supported release.", "steps": ["Plan upgrade"], "workPackage": "WP-LIFECYCLE" }, "vsat": true },
-    { "id": "VC-ADMIN-USERS", "title": "Administrator role is granted to groups, not individual users", "domain": "vcenter", "assetType": "vcenter", "severity": "medium",
+    { "id": "VC-ADMIN-USERS", "changeCategory": "access", "title": "Administrator role is granted to groups, not individual users", "domain": "vcenter", "assetType": "vcenter", "severity": "medium",
       "attack": { "mitigates": ["T1078"], "mitigation": "M1026", "status": "proposed" },
       "check": { "type": "script", "name": "VcAdminUsers" },
       "rationale": "Direct user grants bypass group lifecycle controls and complicate access reviews.",
@@ -7746,12 +8612,12 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "manual", "fact": "roles", "guidance": "Review custom roles, inherited permissions and global permissions for least privilege (privilege paths are shown in the report)" },
       "rationale": "Excess privilege on vCenter equals control over every workload.",
       "mitigation": { "summary": "Remove unneeded privileges and custom roles.", "steps": ["Administration > Roles"], "workPackage": "WP-MANUAL" }, "vsat": true },
-    { "id": "VC-PASSWORD-EXPIRY", "title": "vpxuser password rotation is 30 days or less", "domain": "vcenter", "assetType": "vcenter", "severity": "low",
+    { "id": "VC-PASSWORD-EXPIRY", "changeCategory": "settings", "title": "vpxuser password rotation is 30 days or less", "domain": "vcenter", "assetType": "vcenter", "severity": "low",
       "attack": { "mitigates": ["T1078.003"], "mitigation": "M1027", "status": "proposed" },
       "check": { "type": "setting", "fact": "settings", "key": "VirtualCenter.VimPasswordExpirationInDays", "op": "range", "value": [1, 30], "absent": "default", "default": 30 },
       "rationale": "vCenter uses the vpxuser account on every host; rotation limits the value of a stolen password.",
       "mitigation": { "summary": "Set VirtualCenter.VimPasswordExpirationInDays to 30 or less.", "steps": ["vCenter > Configure > Advanced Settings"], "workPackage": "WP-VC-ACCESS" }, "scg": "VirtualCenter.VimPasswordExpirationInDays" },
-    { "id": "VC-EVENT-RETENTION", "title": "Event and task retention meets investigation needs", "domain": "vcenter", "assetType": "vcenter", "severity": "low",
+    { "id": "VC-EVENT-RETENTION", "changeCategory": "settings", "title": "Event and task retention meets investigation needs", "domain": "vcenter", "assetType": "vcenter", "severity": "low",
       "attack": { "mitigates": [], "mitigation": null, "status": "proposed", "none": "detection/forensics support, not a mitigation of a specific technique" },
       "check": { "type": "setting", "fact": "settings", "key": "event.maxAge", "op": "ge", "value": 30, "absent": "unknown" },
       "rationale": "Short retention destroys audit history needed for incident response.",
@@ -7772,12 +8638,12 @@ $script:VsatEmbedded = [ordered]@{
       "rationale": "Encrypted VMs cannot start if the key provider is unavailable.",
       "mitigation": { "summary": "Deploy redundant KMS nodes outside the protected cluster.", "steps": ["vCenter > Configure > Key Providers"], "workPackage": "WP-MANUAL" }, "vsat": true },
 
-    { "id": "CL-HA", "title": "vSphere HA is enabled", "domain": "cluster", "assetType": "cluster", "severity": "medium",
+    { "id": "CL-HA", "changeCategory": "settings", "title": "vSphere HA is enabled", "domain": "cluster", "assetType": "cluster", "severity": "medium",
       "attack": { "mitigates": [], "mitigation": null, "status": "proposed", "none": "availability or operational control; no ATT&CK technique is directly mitigated" },
       "check": { "type": "setting", "fact": "ha", "path": "enabled", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "Without HA, host failures cause prolonged workload outages.",
       "mitigation": { "summary": "Enable vSphere HA.", "steps": ["Cluster > Configure > vSphere Availability"], "workPackage": "WP-RESILIENCE" }, "vsat": true },
-    { "id": "CL-HA-ADMISSION", "title": "HA admission control is enabled", "domain": "cluster", "assetType": "cluster", "severity": "low",
+    { "id": "CL-HA-ADMISSION", "changeCategory": "settings", "title": "HA admission control is enabled", "domain": "cluster", "assetType": "cluster", "severity": "low",
       "attack": { "mitigates": [], "mitigation": null, "status": "proposed", "none": "availability or operational control; no ATT&CK technique is directly mitigated" },
       "check": { "type": "setting", "fact": "ha", "path": "admissionControl", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "Without admission control, the cluster may lack capacity to restart workloads after a failure.",
@@ -7787,7 +8653,7 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "setting", "fact": "summary", "path": "hosts", "op": "ge", "value": 2, "absent": "unknown" },
       "rationale": "A single-host cluster is a single point of failure.",
       "mitigation": { "summary": "Add hosts or accept the risk with an exception.", "steps": ["Add host to cluster"], "workPackage": "WP-RESILIENCE" }, "vsat": true },
-    { "id": "CL-DRS", "title": "DRS is enabled", "domain": "cluster", "assetType": "cluster", "severity": "info",
+    { "id": "CL-DRS", "changeCategory": "settings", "title": "DRS is enabled", "domain": "cluster", "assetType": "cluster", "severity": "info",
       "attack": { "mitigates": [], "mitigation": null, "status": "proposed", "none": "availability or operational control; no ATT&CK technique is directly mitigated" },
       "check": { "type": "setting", "fact": "drs", "path": "enabled", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "DRS supports maintenance evacuation, which enables timely patching.",
@@ -7832,103 +8698,103 @@ $script:VsatEmbedded = [ordered]@{
     'rules/vm.json' = @'
 {
   "rules": [
-    { "id": "VM-COPY-DISABLE", "title": "Console copy operations are disabled", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-COPY-DISABLE", "changeCategory": "vm", "title": "Console copy operations are disabled", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1115"], "mitigation": null, "status": "proposed" },
       "check": { "type": "setting", "fact": "extraConfig", "key": "isolation.tools.copy.disable", "op": "eq", "value": true, "absent": "default", "default": true },
       "rationale": "Clipboard sharing between console and guest can leak sensitive data.", "cis": "8.4.21", "scg": "isolation.tools.copy.disable",
       "mitigation": { "summary": "Set isolation.tools.copy.disable = TRUE (or remove the override).", "steps": ["VM > Edit Settings > Advanced Parameters"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-PASTE-DISABLE", "title": "Console paste operations are disabled", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-PASTE-DISABLE", "changeCategory": "vm", "title": "Console paste operations are disabled", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1115"], "mitigation": null, "status": "proposed" },
       "check": { "type": "setting", "fact": "extraConfig", "key": "isolation.tools.paste.disable", "op": "eq", "value": true, "absent": "default", "default": true },
       "rationale": "Pasting into the guest bypasses guest input controls.", "cis": "8.4.24", "scg": "isolation.tools.paste.disable",
       "mitigation": { "summary": "Set isolation.tools.paste.disable = TRUE (or remove the override).", "steps": ["VM > Edit Settings > Advanced Parameters"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-DND-DISABLE", "title": "Console drag-and-drop is disabled", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-DND-DISABLE", "changeCategory": "vm", "title": "Console drag-and-drop is disabled", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1570"], "mitigation": null, "status": "proposed" },
       "check": { "type": "setting", "fact": "extraConfig", "key": "isolation.tools.dnd.disable", "op": "eq", "value": true, "absent": "default", "default": true },
       "rationale": "Drag-and-drop can move files across the console boundary.", "cis": "8.4.22", "scg": "isolation.tools.dnd.disable",
       "mitigation": { "summary": "Set isolation.tools.dnd.disable = TRUE (or remove the override).", "steps": ["VM > Edit Settings > Advanced Parameters"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-GUIOPTIONS", "title": "Console GUI options are disabled", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-GUIOPTIONS", "changeCategory": "vm", "title": "Console GUI options are disabled", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1115"], "mitigation": null, "status": "proposed" },
       "check": { "type": "setting", "fact": "extraConfig", "key": "isolation.tools.setGUIOptions.enable", "op": "eq", "value": false, "absent": "default", "default": false },
       "rationale": "GUI options enable copy/paste features between guest and console.", "cis": "8.4.23", "scg": "isolation.tools.setGUIOptions.enable",
       "mitigation": { "summary": "Set isolation.tools.setGUIOptions.enable = FALSE.", "steps": ["VM > Edit Settings > Advanced Parameters"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-DISKSHRINK", "title": "Virtual disk shrinking is disabled", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-DISKSHRINK", "changeCategory": "vm", "title": "Virtual disk shrinking is disabled", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1499"], "mitigation": null, "status": "proposed" },
       "check": { "type": "setting", "fact": "extraConfig", "key": "isolation.tools.diskShrink.disable", "op": "eq", "value": true, "absent": "fail" },
       "rationale": "Guest-initiated shrink operations can cause denial of service on the datastore.", "scg": "isolation.tools.diskShrink.disable",
       "mitigation": { "summary": "Set isolation.tools.diskShrink.disable = TRUE.", "steps": ["VM > Edit Settings > Advanced Parameters"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-DISKWIPER", "title": "Virtual disk wiping is disabled", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-DISKWIPER", "changeCategory": "vm", "title": "Virtual disk wiping is disabled", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1499"], "mitigation": null, "status": "proposed" },
       "check": { "type": "setting", "fact": "extraConfig", "key": "isolation.tools.diskWiper.disable", "op": "eq", "value": true, "absent": "fail" },
       "rationale": "Guest-initiated wipe operations can cause denial of service on the datastore.", "scg": "isolation.tools.diskWiper.disable",
       "mitigation": { "summary": "Set isolation.tools.diskWiper.disable = TRUE.", "steps": ["VM > Edit Settings > Advanced Parameters"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-CONSOLE-CONNECTIONS", "title": "Only one remote console connection is permitted", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-CONSOLE-CONNECTIONS", "changeCategory": "vm", "title": "Only one remote console connection is permitted", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1563"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "setting", "fact": "extraConfig", "key": "RemoteDisplay.maxConnections", "op": "le", "value": 1, "absent": "fail" },
       "rationale": "Multiple concurrent console sessions allow a second user to observe an administrator's session.", "cis": "8.1.2", "scg": "RemoteDisplay.maxConnections",
       "mitigation": { "summary": "Set RemoteDisplay.maxConnections = 1.", "steps": ["VM > Edit Settings > Advanced Parameters"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-SETINFO-LIMIT", "title": "VMX informational message size is limited", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-SETINFO-LIMIT", "changeCategory": "vm", "title": "VMX informational message size is limited", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1499"], "mitigation": null, "status": "proposed" },
       "check": { "type": "setting", "fact": "extraConfig", "key": "tools.setInfo.sizeLimit", "op": "le", "value": 1048576, "absent": "default", "default": 1048576 },
       "rationale": "Unbounded guest-to-VMX messages can fill the datastore.", "cis": "8.1.1", "scg": "tools.setInfo.sizeLimit",
       "mitigation": { "summary": "Set tools.setInfo.sizeLimit to 1048576 or less.", "steps": ["VM > Edit Settings > Advanced Parameters"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-HOSTINFO", "title": "Host information is not sent to guests", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-HOSTINFO", "changeCategory": "vm", "title": "Host information is not sent to guests", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1082"], "mitigation": null, "status": "proposed" },
       "check": { "type": "setting", "fact": "extraConfig", "key": "tools.guestlib.enableHostInfo", "op": "eq", "value": false, "absent": "default", "default": false },
       "rationale": "Host performance details help an attacker in the guest plan further attacks.", "scg": "tools.guestlib.enableHostInfo",
       "mitigation": { "summary": "Set tools.guestlib.enableHostInfo = FALSE.", "steps": ["VM > Edit Settings > Advanced Parameters"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-LOG-KEEPOLD", "title": "Number of retained VM log files is limited", "domain": "vm", "assetType": "vm", "severity": "info",
+    { "id": "VM-LOG-KEEPOLD", "changeCategory": "vm", "title": "Number of retained VM log files is limited", "domain": "vm", "assetType": "vm", "severity": "info",
       "attack": { "mitigates": ["T1499"], "mitigation": null, "status": "proposed" },
       "check": { "type": "setting", "fact": "extraConfig", "key": "log.keepOld", "op": "le", "value": 10, "absent": "default", "default": 10 },
       "rationale": "Unbounded log retention can exhaust datastore space.", "scg": "log.keepOld",
       "mitigation": { "summary": "Set log.keepOld = 10.", "steps": ["VM > Edit Settings > Advanced Parameters"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-LOG-ROTATE", "title": "VM log file size is limited", "domain": "vm", "assetType": "vm", "severity": "info",
+    { "id": "VM-LOG-ROTATE", "changeCategory": "vm", "title": "VM log file size is limited", "domain": "vm", "assetType": "vm", "severity": "info",
       "attack": { "mitigates": ["T1499"], "mitigation": null, "status": "proposed" },
       "check": { "type": "setting", "fact": "extraConfig", "key": "log.rotateSize", "op": "range", "value": [1, 2048000], "absent": "fail" },
       "rationale": "Unbounded log growth can exhaust datastore space.", "scg": "log.rotateSize",
       "mitigation": { "summary": "Set log.rotateSize = 2048000.", "steps": ["VM > Edit Settings > Advanced Parameters"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-DEVICE-CONNECTABLE", "title": "Guest cannot connect or disconnect devices", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-DEVICE-CONNECTABLE", "changeCategory": "vm", "title": "Guest cannot connect or disconnect devices", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1499"], "mitigation": null, "status": "proposed" },
       "check": { "type": "setting", "fact": "extraConfig", "key": "isolation.device.connectable.disable", "op": "eq", "value": true, "absent": "fail" },
       "rationale": "Unprivileged guest users could connect removable devices or disconnect network adapters.", "cis": "8.2.6",
       "mitigation": { "summary": "Set isolation.device.connectable.disable = TRUE.", "steps": ["VM > Edit Settings > Advanced Parameters"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-3D", "title": "Hardware 3D acceleration is disabled", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-3D", "changeCategory": "vm", "title": "Hardware 3D acceleration is disabled", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1611"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "setting", "fact": "extraConfig", "key": "mks.enable3d", "op": "eq", "value": false, "absent": "default", "default": false },
       "rationale": "3D acceleration increases the host attack surface reachable from the guest.", "scg": "mks.enable3d",
       "mitigation": { "summary": "Disable 3D acceleration unless required.", "steps": ["VM > Edit Settings > Video card"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-FLOPPY", "title": "No floppy devices are present", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-FLOPPY", "changeCategory": "vm", "title": "No floppy devices are present", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1611"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "script", "name": "VmDevices", "deviceTypes": ["VirtualFloppy"] },
       "rationale": "Unneeded virtual devices increase attack surface.", "cis": "8.2.1",
       "mitigation": { "summary": "Remove floppy devices.", "steps": ["Power off, VM > Edit Settings > remove Floppy drive"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-CDROM", "title": "No CD/DVD devices are connected", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-CDROM", "changeCategory": "vm", "title": "No CD/DVD devices are connected", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1611"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "script", "name": "VmDevices", "deviceTypes": ["VirtualCdrom"], "connectedOnly": true },
       "profiles": { "strict": { "connectedOnly": false } },
       "rationale": "Connected media can introduce untrusted content.", "cis": "8.2.2",
       "mitigation": { "summary": "Disconnect (or remove) CD/DVD devices.", "steps": ["VM > Edit Settings > CD/DVD drive > uncheck Connected / Connect at power on"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-SERIAL", "title": "No serial ports are present", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-SERIAL", "changeCategory": "vm", "title": "No serial ports are present", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1611"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "script", "name": "VmDevices", "deviceTypes": ["VirtualSerialPort"] },
       "rationale": "Serial ports, especially network-backed, provide an unmonitored channel into the guest.", "cis": "8.2.4",
       "mitigation": { "summary": "Remove serial ports, or use secure network backing (telnets/ssl) with an exception.", "steps": ["Power off, VM > Edit Settings > remove Serial port"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-PARALLEL", "title": "No parallel ports are present", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-PARALLEL", "changeCategory": "vm", "title": "No parallel ports are present", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1611"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "script", "name": "VmDevices", "deviceTypes": ["VirtualParallelPort"] },
       "rationale": "Unneeded virtual devices increase attack surface.", "cis": "8.2.3",
       "mitigation": { "summary": "Remove parallel ports.", "steps": ["Power off, VM > Edit Settings > remove Parallel port"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-USB", "title": "No USB controllers or devices are present", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-USB", "changeCategory": "vm", "title": "No USB controllers or devices are present", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1611", "T1200"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "script", "name": "VmDevices", "deviceTypes": ["VirtualUSB", "VirtualUSBController", "VirtualUSBXHCIController"] },
       "rationale": "USB passthrough allows data exfiltration and malicious device attachment.", "cis": "8.2.5",
       "mitigation": { "summary": "Remove USB controllers unless required.", "steps": ["Power off, VM > Edit Settings > remove USB controller"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-PASSTHROUGH", "title": "No PCI/PCIe passthrough devices", "domain": "vm", "assetType": "vm", "severity": "medium",
+    { "id": "VM-PASSTHROUGH", "changeCategory": "vm", "title": "No PCI/PCIe passthrough devices", "domain": "vm", "assetType": "vm", "severity": "medium",
       "attack": { "mitigates": ["T1611"], "mitigation": "M1042", "status": "proposed" },
       "check": { "type": "script", "name": "VmDevices", "deviceTypes": ["VirtualPCIPassthrough", "VirtualSriovEthernetCard"] },
       "rationale": "Direct hardware access bypasses hypervisor isolation and can enable DMA attacks.", "cis": "8.2.8",
       "mitigation": { "summary": "Remove passthrough devices or document an exception (e.g. GPU for AI workloads).", "steps": ["VM > Edit Settings > PCI device"], "workPackage": "WP-VM-HARDENING" } },
-    { "id": "VM-NONPERSISTENT", "title": "Independent non-persistent disks are not used", "domain": "vm", "assetType": "vm", "severity": "low",
+    { "id": "VM-NONPERSISTENT", "changeCategory": "vm", "title": "Independent non-persistent disks are not used", "domain": "vm", "assetType": "vm", "severity": "low",
       "attack": { "mitigates": ["T1070"], "mitigation": null, "status": "proposed" },
       "check": { "type": "script", "name": "VmDevices", "deviceTypes": ["VirtualDisk"], "diskMode": ["independent_nonpersistent"] },
       "rationale": "Non-persistent disks discard attacker activity and forensic evidence at power-off.", "scg": "vm.disk-persistent-mode",
@@ -7943,12 +8809,12 @@ $script:VsatEmbedded = [ordered]@{
       "check": { "type": "script", "name": "VmTools" },
       "rationale": "Outdated Tools carry known vulnerabilities (e.g. SAML token and authentication bypass advisories).",
       "mitigation": { "summary": "Upgrade VMware Tools / open-vm-tools.", "steps": ["Upgrade via vSphere Lifecycle Manager or guest package manager"], "workPackage": "WP-VM-HYGIENE" }, "vsat": true },
-    { "id": "VM-SECUREBOOT", "title": "VM uses UEFI firmware with Secure Boot", "domain": "vm", "assetType": "vm", "severity": "low", "profilesEnabled": ["strict"],
+    { "id": "VM-SECUREBOOT", "changeCategory": "vm", "title": "VM uses UEFI firmware with Secure Boot", "domain": "vm", "assetType": "vm", "severity": "low", "profilesEnabled": ["strict"],
       "attack": { "mitigates": ["T1542"], "mitigation": "M1046", "status": "proposed" },
       "check": { "type": "setting", "fact": "security", "path": "secureBoot", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "Secure Boot prevents unsigned bootloaders and kernel rootkits in the guest.",
       "mitigation": { "summary": "Use EFI firmware and enable Secure Boot (guest OS support required).", "steps": ["VM > Edit Settings > VM Options > Boot Options"], "workPackage": "WP-VM-HARDENING" }, "scg": "vm.secure-boot" },
-    { "id": "VM-ENCRYPTION", "title": "VM is encrypted", "domain": "vm", "assetType": "vm", "severity": "low", "profilesEnabled": ["strict"],
+    { "id": "VM-ENCRYPTION", "changeCategory": "vm", "title": "VM is encrypted", "domain": "vm", "assetType": "vm", "severity": "low", "profilesEnabled": ["strict"],
       "attack": { "mitigates": ["T1005"], "mitigation": null, "status": "proposed" },
       "check": { "type": "setting", "fact": "security", "path": "encrypted", "op": "eq", "value": true, "absent": "unknown" },
       "rationale": "VM encryption protects disks and memory files at rest, including in backups and on stolen media.",
@@ -8116,6 +8982,99 @@ $script:VsatEmbedded = [ordered]@{
     { "product": "nsx", "branch": "4.x", "endOfGeneralSupport": null, "endOfTechnicalGuidance": "2028-10-11", "url": "https://ftpdocs.broadcom.com/cadocs/0/contentimages/Product_EOTG_Dates.pdf", "verifiedDate": "2026-09-23", "notes": "The Broadcom EoTG list has one row, 'NSX 4.x', for 4.0/4.1/4.2. No official page with a per-minor EoGS date was found (the Broadcom lifecycle portal is a JavaScript app and could not be read)." },
     { "product": "nsx", "branch": "3.2", "endOfGeneralSupport": "2025-10-02", "endOfTechnicalGuidance": "2026-04-07", "url": "https://knowledge.broadcom.com/external/article/421705/vmware-nsx-versions-that-are-end-of-serv.html", "eotgUrl": "https://ftpdocs.broadcom.com/cadocs/0/contentimages/Product_EOTG_Dates.pdf", "verifiedDate": "2026-09-23", "notes": "NSX-T Data Center 3.2. EoGS is the 'End of Service Date' in KB 421705. The EoTG comes from the 'NSX-T Data Center 3.x' row of the Broadcom EoTG PDF, while KB 421705 only says 'Check Guide'." }
   ]
+}
+'@
+    'data/change-categories.json' = @'
+{
+  "version": "2026.09",
+  "note": "Maps platform change records to VSAT change categories (src/78-Changes.ps1). A rule's optional changeCategory is matched against these. Records that map to no category are not kept.",
+  "categories": {
+    "access": "Permissions, roles, group membership, lockdown and remote-access settings",
+    "service": "Service start/stop and startup policy",
+    "firewall": "Host and distributed firewall rules and settings",
+    "settings": "Advanced and security-relevant configuration settings",
+    "vm": "Virtual machine configuration",
+    "patch": "Software updates, images and packages",
+    "login": "Sign-ins (used by the earlier-runs detector)"
+  },
+  "vcenter": {
+    "eventTypes": {
+      "PermissionAddedEvent": "access",
+      "PermissionRemovedEvent": "access",
+      "PermissionUpdatedEvent": "access",
+      "RoleAddedEvent": "access",
+      "RoleRemovedEvent": "access",
+      "RoleUpdatedEvent": "access",
+      "VmReconfiguredEvent": "vm",
+      "HostProfileAppliedEvent": "settings",
+      "UserLoginSessionEvent": "login"
+    },
+    "descriptionIdPrefixes": [
+      { "prefix": "host.ServiceSystem.", "category": "service" },
+      { "prefix": "host.FirewallSystem.", "category": "firewall" },
+      { "prefix": "HostSystem.enterLockdownMode", "category": "access" },
+      { "prefix": "HostSystem.exitLockdownMode", "category": "access" },
+      { "prefix": "host.HostAccessManager.", "category": "access" },
+      { "prefix": "AuthorizationManager.", "category": "access" },
+      { "prefix": "host.LocalAccountManager.", "category": "access" },
+      { "prefix": "host.ActiveDirectoryAuthentication.", "category": "access" },
+      { "prefix": "option.OptionManager.", "category": "settings" },
+      { "prefix": "OptionManager.", "category": "settings" },
+      { "prefix": "host.DateTimeSystem.", "category": "settings" },
+      { "prefix": "host.CertificateManager.", "category": "settings" },
+      { "prefix": "ClusterComputeResource.reconfigure", "category": "settings" },
+      { "prefix": "ComputeResource.reconfigure", "category": "settings" },
+      { "prefix": "dvs.DistributedVirtualPortgroup.reconfigure", "category": "settings" },
+      { "prefix": "DistributedVirtualSwitch.reconfigure", "category": "settings" },
+      { "prefix": "host.NetworkSystem.update", "category": "settings" },
+      { "prefix": "VirtualMachine.reconfigure", "category": "vm" },
+      { "prefix": "host.PatchManager.", "category": "patch" },
+      { "prefix": "host.ImageConfigManager.", "category": "patch" },
+      { "prefix": "com.vmware.vcIntegrity.", "category": "patch" },
+      { "prefix": "com.vmware.vcenter.lcm.", "category": "patch" },
+      { "prefix": "com.vmware.esx.settings.", "category": "patch" }
+    ],
+    "eventTypeIdPrefixes": [
+      { "prefix": "esx.audit.lockdownmode.", "category": "access" },
+      { "prefix": "esx.audit.account.", "category": "access" },
+      { "prefix": "esx.audit.ssh.enabled", "category": "service" },
+      { "prefix": "esx.audit.ssh.disabled", "category": "service" },
+      { "prefix": "esx.audit.shell.enabled", "category": "service" },
+      { "prefix": "esx.audit.shell.disabled", "category": "service" },
+      { "prefix": "esx.audit.net.firewall.", "category": "firewall" },
+      { "prefix": "esx.audit.host.boot", "category": "patch" },
+      { "prefix": "esx.audit.esximage.", "category": "patch" },
+      { "prefix": "com.vmware.vc.sso.", "category": "access" }
+    ]
+  },
+  "windows": {
+    "System": { "7040": "service" },
+    "Security": { "4728": "access", "4729": "access", "4732": "access", "4733": "access", "4756": "access", "4757": "access" },
+    "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall": { "2004": "firewall", "2005": "firewall", "2006": "firewall", "2052": "firewall", "2097": "firewall", "2099": "firewall" },
+    "Microsoft-Windows-Hyper-V-VMMS-Admin": { "*": "vm" }
+  },
+  "kvm": {
+    "files": [
+      { "pattern": "/etc/ssh/sshd_config", "category": "access" },
+      { "pattern": "/etc/ssh/sshd_config.d/*", "category": "access" },
+      { "pattern": "/etc/group", "category": "access" },
+      { "pattern": "/etc/sudoers", "category": "access" },
+      { "pattern": "/etc/sudoers.d/*", "category": "access" },
+      { "pattern": "/etc/libvirt/qemu/networks/*.xml", "category": "vm" },
+      { "pattern": "/etc/libvirt/qemu/*.xml", "category": "vm" },
+      { "pattern": "/etc/libvirt/*.conf", "category": "settings" },
+      { "pattern": "/etc/firewalld/*", "category": "firewall" },
+      { "pattern": "/etc/firewalld/zones/*", "category": "firewall" },
+      { "pattern": "/etc/nftables.conf", "category": "firewall" },
+      { "pattern": "/etc/sysconfig/nftables.conf", "category": "firewall" }
+    ],
+    "packageLog": "patch",
+    "wtmp": "login"
+  },
+  "nsx": {
+    "assetTypes": { "nsx-rule": "firewall", "nsx-policy": "firewall", "nsx-group": "firewall", "nsx-segment": "settings", "nsx-t0": "settings", "nsx-t1": "settings" },
+    "managerFacts": { "dfwSettings": "firewall", "excludeList": "firewall" }
+  }
 }
 '@
     'data/os-lifecycle.json' = @'
@@ -9851,6 +10810,8 @@ main:focus { outline: none; }
 .notice-warn { border-color: var(--warn-border); border-left-color: var(--warn); background: var(--warn-bg); }
 .notice-bad { border-color: var(--bad-border); border-left-color: var(--bad); background: var(--bad-bg); }
 .notice-info { border-left-color: var(--accent); background: var(--accent-soft); }
+.notice-ok { border-color: var(--ok); border-left-color: var(--ok); background: var(--ok-bg); }
+.notice ul.plain { margin: 4px 0; padding-left: 18px; }
 .notice strong { display: block; margin-bottom: 2px; }
 
 .status-banner { display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: start; border-radius: var(--radius); padding: 18px 22px; border: 1px solid; border-left-width: 8px; margin-bottom: 16px; }
@@ -10124,6 +11085,17 @@ dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .br { --attack: var(--res-fail); --safe: var(--res-pass); --attack-soft: var(--sev-critical-bg); }
 .big-num.bad-num { color: var(--res-fail); }
 .big-num.ok-num { color: var(--res-pass); }
+.big-num.warn-num { color: var(--warn); }
+/* ---------- engagement timeline (Changes page) ---------- */
+.badge.chg-badge { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); text-transform: none; letter-spacing: 0; }
+.timeline .metric-row { margin-bottom: 12px; }
+.tl-filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.timeline td.tl-asset { min-width: 10rem; }
+.timeline td.tl-asset .linklike, .timeline td.tl-user { overflow-wrap: anywhere; }
+.timeline td.tl-user { min-width: 8.5rem; }
+.timeline td.tl-change { min-width: 14rem; }
+.chk-list { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+.chk { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 /* blast radius (shared by the report and the local UI; the build appends this file to each host
    stylesheet). Uses only the host tokens plus --attack, --attack-soft and --safe, which each host
    aliases to its own fail / pass tokens. Every selector is scoped under .br. */
@@ -11066,7 +12038,7 @@ var VsatBlastView = (function () {
   const RESULTS = ['FAIL', 'UNKNOWN', 'ERROR', 'MANUAL', 'PASS', 'NOT_APPLICABLE'];
   const RESULT_RANK = { FAIL: 5, ERROR: 4, UNKNOWN: 3, MANUAL: 2, PASS: 1, NOT_APPLICABLE: 0 };
   const RESULT_LABEL = { PASS: 'Pass', FAIL: 'Fail', MANUAL: 'Manual', UNKNOWN: 'Unknown', ERROR: 'Error', NOT_APPLICABLE: 'N/A' };
-  const DOMAIN_LABEL = { vcenter: 'vCenter', esxi: 'ESXi', cluster: 'Cluster', vm: 'VM', network: 'Network', nsx: 'NSX', storage: 'Storage' };
+  const DOMAIN_LABEL = { vcenter: 'vCenter', esxi: 'ESXi', cluster: 'Cluster', vm: 'VM', network: 'Network', nsx: 'NSX', storage: 'Storage', 'change-history': 'Change history' };
   const TYPE_LABEL = {
     site: 'Site', vcenter: 'vCenter', datacenter: 'Datacenter', cluster: 'Cluster', host: 'Host', vm: 'VM', vss: 'Std switch', vds: 'Dist. switch',
     portgroup: 'Port group', dvportgroup: 'DV port group', pnic: 'Physical NIC', vmknic: 'VMkernel NIC', datastore: 'Datastore',
@@ -11128,6 +12100,25 @@ var VsatBlastView = (function () {
   function worstOf(list) { let w = null; list.forEach(function (f) { const s = sevOk(f.severity); if (f.result === 'FAIL' && s && (w === null || SEV_RANK[s] > SEV_RANK[w])) w = s; }); return w; }
   function assetWorst(a) { const s = sevOk(a && a.worstSeverity); return s || worstOf(findingsByAsset.get(str(a && a.id)) || []); }
   function assetFails(a) { const c = obj(a && a.findingCounts); if (c.FAIL !== undefined) return num(c.FAIL); return (findingsByAsset.get(str(a && a.id)) || []).filter(function (f) { return f.result === 'FAIL'; }).length; }
+
+  // ---------- engagement change timeline (results.analysis.changes; absent before VSAT 2.4) ----------
+  const hasChanges = !!(analysis.changes && typeof analysis.changes === 'object');
+  const changes = obj(analysis.changes);
+  const changeEntries = arr(changes.entries).filter(function (e) { return e && typeof e === 'object' && e.id !== undefined && e.id !== null; });
+  const changeById = new Map();
+  changeEntries.forEach(function (e) { changeById.set(str(e.id), e); });
+  const findingsByChange = new Map();
+  findings.forEach(function (f) {
+    arr(f.changedInWindow).forEach(function (id) { const k = str(id); if (!findingsByChange.has(k)) findingsByChange.set(k, []); findingsByChange.get(k).push(f); });
+  });
+  const endpointById = new Map();
+  arr(obj(D.scope).endpoints).forEach(function (e) { if (e && e.id !== undefined) endpointById.set(str(e.id), e); });
+  const CAT_LABEL = { access: 'Access', service: 'Service', firewall: 'Firewall', settings: 'Settings', vm: 'VM', patch: 'Patch', login: 'Sign-in' };
+  const SRC_LABEL = { 'vcenter-event': 'vCenter event', 'nsx-object': 'NSX object timestamp', 'windows-event': 'Windows event log', 'file-mtime': 'File modification time', 'package-log': 'Package history', 'wtmp': 'Login record (wtmp)' };
+  function isChanged(f) { return arr(f && f.changedInWindow).length > 0; }
+  function changedBadge(f) { return isChanged(f) ? h('span', { class: 'badge no-dot chg-badge', title: 'The setting this check reads was changed during the engagement. The result shows the current state.' }, 'Changed during engagement') : null; }
+  function endpointLabel(id) { const e = endpointById.get(str(id)); return e ? str(e.address) || str(id) : str(id); }
+  function day(s) { return str(s).slice(0, 10) || '-'; }
 
   // ---------- badges ----------
   function sevBadge(s) { const v = sevOk(s); return h('span', { class: 'badge sev-' + (v || 'none') }, v ? v : 'none'); }
@@ -11235,7 +12226,8 @@ var VsatBlastView = (function () {
       h('div', { class: 'badges' }, resBadge(f.result), sevBadge(f.severity),
         h('span', { class: 'badge no-dot sev-info' }, 'Priority ' + num(pr.score)),
         h('span', { class: 'badge no-dot sev-info' }, 'Confidence: ' + (str(f.confidence) || 'n/a')),
-        ex ? h('span', { class: 'badge no-dot ' + (ex.active ? 'sev-low' : 'sev-high') }, ex.active ? 'Exception active' : 'Exception expired') : null),
+        ex ? h('span', { class: 'badge no-dot ' + (ex.active ? 'sev-low' : 'sev-high') }, ex.active ? 'Exception active' : 'Exception expired') : null,
+        changedBadge(f)),
       h('h3', null, str(fx(f, 'title')) || str(f.ruleId)),
       isCompact(f) ? h('p', { class: 'small muted' }, 'Compact result: description, frameworks and mitigation shown from the rule catalogue.') : null,
       h('p', { class: 'muted small mono break' }, str(f.ruleId) + (f.ruleVersion ? ' v' + str(f.ruleVersion) : '') + ' · ' + str(f.id) + ' · ' + (DOMAIN_LABEL[f.domain] || str(f.domain))),
@@ -11243,6 +12235,14 @@ var VsatBlastView = (function () {
       h('div', { class: 'actions' },
         btn('Show on topology', function () { showOnTopology(f.assetId); }, 'btn-primary btn-sm'),
         m.workPackage ? btn('Open work package', function () { gotoWorkPackage(m.workPackage); }, 'btn-sm') : null),
+      isChanged(f) ? section('Changed during engagement', h('div', null,
+        h('p', { class: 'small muted' }, 'The result above reflects the setting as collected. It was changed during the engagement window:'),
+        h('ul', { class: 'mini-list' }, arr(f.changedInWindow).map(function (id) {
+          const e = changeById.get(str(id));
+          if (!e) return h('li', null, h('span', { class: 'mono small' }, str(id)));
+          return h('li', null, h('span', { class: 'grow' }, h('strong', null, fmtTime(e.utc)), ' · ', str(e.user) || 'user not recorded', h('span', { class: 'sub small break' }, str(e.action))));
+        })),
+        linkBtn('Open the engagement timeline', function () { closePanel(); go('changes'); }))) : null,
       section('Why it matters', rationale ? h('p', { class: 'break' }, str(rationale)) : null),
       section('Observed vs expected', h('div', { class: 'obs-exp' },
         h('div', null, h('div', { class: 'lbl' }, 'Observed'), h('div', { class: 'val' }, str(f.observed) || '-')),
@@ -11487,6 +12487,11 @@ var VsatBlastView = (function () {
     const exitMap = { 0: 'clean', 1: 'findings present', 2: 'incomplete', 3: 'fatal', 4: 'canceled' };
     const rp = obj(D.rulePack), adv = obj(D.advisory);
     el.appendChild(pageHead('h-overview', 'Overview', 'Security findings, assessment coverage and evidence confidence are separate dimensions — read all three.'));
+    const rv = obj(D.receiptVerification);
+    if (rv.verified === true) {
+      el.appendChild(h('div', { class: 'notice notice-ok', role: 'status' }, h('strong', null, 'Receipt verified'),
+        'This evidence package matches receipt ', h('span', { class: 'mono' }, str(rv.code)), ', the code read out when it was collected (', h('span', { class: 'mono' }, str(rv.package)), ').'));
+    }
     el.appendChild(h('div', { class: 'status-banner ' + cls, role: 'status' },
       h('div', { class: 'st-icon', 'aria-hidden': 'true' }, icon),
       h('div', null,
@@ -11544,6 +12549,20 @@ var VsatBlastView = (function () {
         crownN ? h('p', null, h('span', { class: 'big-num' + (reachN ? ' bad-num' : ' ok-num') }, fmtN(reachN)), ' of ' + fmtN(crownN) + ' crown jewels are reachable from ' + fmtN(arr(br.entries).length) + ' starting points, through ' + fmtN(pathN) + ' attack paths.')
           : h('p', null, 'No crown jewels in this assessment. Mark critical assets in the scope file to trace paths to them.'),
         h('p', { class: 'small muted' }, 'Based on collected configuration; not proof of exploitability.' + (bb.truncated ? ' Results are partial (search bounds hit).' : '')))));
+    }
+
+    // engagement timeline summary
+    if (hasChanges) {
+      const cs = obj(changes.summary);
+      const sess = arr(changes.accountSessions).filter(function (x) { return x && num(x.count) > 0; });
+      const gaps = arr(changes.gaps);
+      const passing = num(cs.changedPassing);
+      el.appendChild(h('div', { class: 'section' }, h('div', { class: 'card' },
+        h('div', { class: 'card-head' }, h('h2', null, 'Engagement timeline'), btn('Open timeline →', function () { go('changes'); }, 'btn-sm')),
+        h('p', null, h('span', { class: 'big-num' + (passing ? ' warn-num' : '') }, fmtN(passing)), ' checks pass now but changed during the engagement.'),
+        h('p', { class: 'small muted' }, fmtN(changeEntries.length) + ' platform change' + (changeEntries.length === 1 ? '' : 's') + ' recorded since ' + day(changes.windowStartUtc) + '.'),
+        sess.length ? h('p', { class: 'small' }, h('span', { class: 'state state-warn' }, 'Earlier runs'), ' ', sess.map(function (x, i) { return (i ? '; ' : '') + str(x.user) + ' signed in ' + fmtN(x.count) + ' time' + (num(x.count) === 1 ? '' : 's') + ' before this run on ' + endpointLabel(x.endpointId); }).join('') + '.') : null,
+        gaps.length ? h('p', { class: 'small' }, h('span', { class: 'state state-warn' }, 'History gap'), ' ', gaps.map(function (g) { return endpointLabel(g.endpointId) + ': ' + str(g.text); }).join('; ') + '.') : null)));
     }
 
     // coverage domain cards
@@ -11605,7 +12624,7 @@ var VsatBlastView = (function () {
     doms.sort(function (a, b) { return (b.mandatory ? 1 : 0) - (a.mandatory ? 1 : 0); });
     return doms;
   }
-  const PLATFORM_LABEL = { vmware: 'VMware vSphere / NSX', hyperv: 'Microsoft Hyper-V', kvm: 'KVM', 'cross-platform': 'Cross-platform lenses' };
+  const PLATFORM_LABEL = { vmware: 'VMware vSphere / NSX', hyperv: 'Microsoft Hyper-V', kvm: 'KVM', 'cross-platform': 'Cross-platform lenses', audit: 'Audit integrity' };
   function coverageGroups(domains) {
     const hasPlatform = domains.some(function (d) { return d.platform; });
     if (!hasPlatform) return h('div', { class: 'grid grid-auto' }, domains.map(coverageCard));
@@ -11702,7 +12721,7 @@ var VsatBlastView = (function () {
           { key: 'priority', label: 'Priority', num: true, defaultDir: 'desc', sort: function (f) { return num(obj(f.priority).score); }, render: function (f) { return h('span', { class: 'score' }, String(num(obj(f.priority).score))); } },
           { key: 'result', label: 'Result', defaultDir: 'desc', sort: function (f) { return RESULT_RANK[f.result] || 0; }, render: function (f) { return resBadge(f.result); } },
           { key: 'severity', label: 'Severity', defaultDir: 'desc', sort: function (f) { return SEV_RANK[f.severity] || 0; }, render: function (f) { return sevBadge(f.severity); } },
-          { key: 'title', label: 'Finding', cls: 'title-cell', sort: function (f) { return str(f.title); }, render: function (f) { return [linkBtn(str(f.title) || str(f.ruleId), function () { openFinding(f); }), h('span', { class: 'sub mono' }, str(f.ruleId) + ' · ' + str(f.id))]; } },
+          { key: 'title', label: 'Finding', cls: 'title-cell', sort: function (f) { return str(f.title); }, render: function (f) { return [linkBtn(str(f.title) || str(f.ruleId), function () { openFinding(f); }), changedBadge(f) ? ' ' : null, changedBadge(f), h('span', { class: 'sub mono' }, str(f.ruleId) + ' · ' + str(f.id))]; } },
           { key: 'asset', label: 'Asset', sort: function (f) { return str(f.assetName); }, render: function (f) { return h('span', { class: 'break' }, str(f.assetName)); } },
           { key: 'type', label: 'Type', sort: function (f) { return str(f.assetType); }, render: function (f) { return typeLabel(f.assetType); } },
           { key: 'domain', label: 'Domain', sort: function (f) { return str(f.domain); }, render: function (f) { return DOMAIN_LABEL[f.domain] || str(f.domain); } },
@@ -12641,10 +13660,87 @@ var VsatBlastView = (function () {
   // Changes page
   // =====================================================================
   renderers.changes = function (el) {
+    el.appendChild(pageHead('h-changes', 'Changes', 'What changed on the platforms during the engagement, and how this run compares with a previous VSAT run.'));
+    renderTimeline(el);
+    const dw = h('section', { class: 'section', 'aria-labelledby': 'h-drift' }, h('h2', { id: 'h-drift' }, 'Comparison with a previous run'));
+    el.appendChild(dw);
+    renderDrift(dw);
+  };
+  function renderTimeline(el) {
+    const sec = h('section', { class: 'section timeline', 'aria-labelledby': 'h-timeline' });
+    el.appendChild(sec);
+    const src = str(changes.windowSource);
+    sec.appendChild(h('div', { class: 'card-head' }, h('h2', { id: 'h-timeline' }, 'Engagement timeline'),
+      hasChanges ? h('span', { class: 'muted small' }, 'Since ' + day(changes.windowStartUtc) + (src === 'operator' ? ' (engagement start)' : ' (default: 30 days before the run)') + ' until ' + day(changes.windowEndUtc)) : null));
+    if (!hasChanges) {
+      sec.appendChild(h('div', { class: 'card' }, h('h3', null, 'This report has no engagement timeline'),
+        h('p', null, 'It was produced by a VSAT version before 2.4. Replaying its evidence package with the current version adds the timeline where the package holds change history; missing history is reported as UNKNOWN, never as "no changes".')));
+      return;
+    }
+    const dom = arr(obj(D.coverage).domains).find(function (d) { return d && d.id === 'change-history'; });
+    const sess = arr(changes.accountSessions).filter(function (x) { return x && num(x.count) > 0; });
+    const gaps = arr(changes.gaps);
+    if (sess.length) {
+      sec.appendChild(h('div', { class: 'notice notice-warn', role: 'note' }, h('strong', null, 'Earlier sessions by the VSAT account'),
+        h('ul', { class: 'plain' }, sess.map(function (x) {
+          return h('li', null, h('span', { class: 'mono' }, str(x.user)), ' signed in ' + fmtN(x.count) + ' time' + (num(x.count) === 1 ? '' : 's') + ' on ' + endpointLabel(x.endpointId) + ' before this run (first ' + fmtTime(x.firstUtc) + ', last ' + fmtTime(x.lastUtc) + ').');
+        })),
+        h('p', { class: 'small' }, 'Private dry runs show up here. Ask whether they were planned.')));
+    }
+    if (gaps.length) {
+      sec.appendChild(h('div', { class: 'notice notice-warn', role: 'note' }, h('strong', null, 'History does not cover the whole engagement'),
+        h('ul', { class: 'plain' }, gaps.map(function (g) { return h('li', null, endpointLabel(g.endpointId) + ': ' + str(g.text) + '.'); })),
+        h('p', { class: 'small' }, 'Changes before the history start are not visible (short retention, rotated or cleared logs).')));
+    }
+    if (dom && str(dom.state) === 'UNKNOWN') {
+      sec.appendChild(h('div', { class: 'notice notice-bad', role: 'note' }, h('strong', null, str(dom.label) || 'Change history not readable'), str(dom.detail), listOf(dom.missing)));
+    } else if (dom && str(dom.state) === 'PARTIAL' && arr(dom.missing).length > gaps.length) {
+      sec.appendChild(h('div', { class: 'notice notice-warn', role: 'note' }, h('strong', null, 'Some change sources were incomplete'), listOf(dom.missing)));
+    }
+    const cs = obj(changes.summary);
+    const signins = sess.reduce(function (a, x) { return a + num(x.count); }, 0);
+    const tiles = [[changeEntries.length, 'Changes', 'Recorded by the platforms in the window'], [cs.changedPassing, 'Pass now, changed', 'Checks passing now whose setting changed'],
+      [cs.changedChecks, 'Checks changed', 'All checks whose setting changed'], [signins, 'Earlier VSAT sign-ins', 'Before this run, same account'], [gaps.length, 'History gaps', 'Endpoints whose history starts late']];
+    sec.appendChild(h('div', { class: 'metric-row' }, tiles.map(function (t) {
+      return h('div', { class: 'metric' }, h('div', { class: 'm-val' }, fmtN(t[0])), h('div', { class: 'm-lbl' }, t[1]), h('div', { class: 'small muted' }, t[2]));
+    })));
+    const assetIds = Array.from(new Set(changeEntries.map(function (e) { return str(e.assetId); }))).sort(function (a, b) { return assetName(a).localeCompare(assetName(b), 'en', { numeric: true }); });
+    const cats = Array.from(new Set(changeEntries.map(function (e) { return str(e.category); }))).sort();
+    const assetSel = h('select', { id: 'tl-asset' }, h('option', { value: '' }, 'All assets'), assetIds.map(function (id) { return h('option', { value: id }, trunc(assetName(id), 60)); }));
+    const catSel = h('select', { id: 'tl-cat' }, h('option', { value: '' }, 'All categories'), cats.map(function (c) { return h('option', { value: c }, CAT_LABEL[c] || c); }));
+    const t = new DataTable({
+      caption: 'Engagement timeline', sortKey: 'time', sortDir: 'desc', empty: 'No changes recorded in the engagement window.',
+      columns: [
+        { key: 'time', label: 'Time (UTC)', defaultDir: 'desc', cls: 'nowrap', sort: function (e) { return str(e.utc); }, render: function (e) { const t = fmtTime(e.utc).replace(' UTC', ''); return h('span', null, t.slice(0, 10), h('span', { class: 'sub small muted' }, t.slice(11))); } },
+        { key: 'cat', label: 'Category', sort: function (e) { return str(e.category); }, render: function (e) { return h('span', { class: 'state state-' + (e.category === 'login' ? 'warn' : 'neutral') }, CAT_LABEL[e.category] || str(e.category) || '?'); } },
+        { key: 'asset', label: 'Asset', cls: 'tl-asset', sort: function (e) { return str(e.assetName) || assetName(e.assetId); }, render: function (e) {
+          const nm = str(e.assetName) || assetName(e.assetId);
+          return h('span', null, assetById.has(str(e.assetId)) ? linkBtn(nm, function () { openAsset(e.assetId); }) : h('span', { class: 'break' }, nm), h('span', { class: 'sub small muted' }, typeLabel(assetType(e.assetId)) || endpointLabel(e.endpointId)));
+        } },
+        { key: 'action', label: 'Change', cls: 'tl-change', sort: function (e) { return str(e.action); }, render: function (e) { return h('span', null, h('span', { class: 'break' }, str(e.action)), h('span', { class: 'sub small muted' }, SRC_LABEL[e.source] || str(e.source))); } },
+        { key: 'user', label: 'User', cls: 'tl-user', sort: function (e) { return str(e.user); }, render: function (e) { return e.user ? h('span', { class: 'mono small break' }, str(e.user)) : h('span', { class: 'muted small' }, 'not recorded'); } },
+        { key: 'checks', label: 'Checks', sort: function (e) { return (findingsByChange.get(str(e.id)) || []).length; }, defaultDir: 'desc', render: function (e) {
+          const fs = findingsByChange.get(str(e.id)) || [];
+          if (!fs.length) return h('span', { class: 'muted small' }, '—');
+          return h('span', { class: 'chk-list' }, fs.slice(0, 3).map(function (f) { return h('span', { class: 'chk' }, resBadge(f.result), ' ', linkBtn(str(f.ruleId), function () { openFinding(f); }, { title: str(fx(f, 'title')) })); }),
+            fs.length > 3 ? h('span', { class: 'muted small' }, '+' + (fs.length - 3) + ' more') : null);
+        } }
+      ]
+    });
+    function apply() { t.setRows(changeEntries.filter(function (e) { return (!assetSel.value || str(e.assetId) === assetSel.value) && (!catSel.value || str(e.category) === catSel.value); })); }
+    on(assetSel, 'change', apply); on(catSel, 'change', apply);
+    apply();
+    sec.appendChild(h('div', { class: 'card section' },
+      h('div', { class: 'card-head' }, h('span', { class: 'muted small' }, 'Newest first. Only changes the platforms recorded themselves; a check marked "Changed during engagement" keeps its current result.'),
+        h('div', { class: 'tl-filters' }, h('label', { class: 'field', for: 'tl-asset' }, h('span', null, 'Asset'), assetSel), h('label', { class: 'field', for: 'tl-cat' }, h('span', null, 'Category'), catSel))),
+      t.el));
+    const nsx = arr(changes.sources).filter(function (x) { return x && x.note; });
+    if (nsx.length) sec.appendChild(h('p', { class: 'small muted' }, nsx.map(function (x) { return endpointLabel(x.endpointId) + ': ' + str(x.note); }).join(' ')));
+  }
+  function renderDrift(el) {
     const d = analysis.drift;
-    el.appendChild(pageHead('h-changes', 'Changes', 'Comparison against a previous VSAT run (baseline).'));
     if (!d || typeof d !== 'object') {
-      el.appendChild(h('div', { class: 'card' }, h('h2', null, 'No baseline comparison in this report'),
+      el.appendChild(h('div', { class: 'card' }, h('h3', null, 'No baseline comparison in this report'),
         h('p', null, 'To track drift, keep the results.json from a previous run and pass it as the baseline on the next run:'),
         h('pre', { class: 'mono card' }, '.\\vsat.ps1 -Baseline .\\previous\\results.json'),
         h('p', { class: 'muted small' }, 'The comparison shows new, resolved, changed and unassessed findings (keyed by rule and asset), added/removed assets and NSX rule changes.')));
@@ -12681,7 +13777,7 @@ var VsatBlastView = (function () {
     on(changeSel, 'change', function () { t.setRows(items.filter(function (x) { return !changeSel.value || x.change === changeSel.value; })); });
     t.setRows(items);
     el.appendChild(h('div', { class: 'card section' }, h('div', { class: 'card-head' }, h('h2', null, 'Finding changes'), h('label', { class: 'field', for: 'd-change' }, h('span', null, 'Filter'), changeSel)), t.el));
-  };
+  }
 
   // =====================================================================
   // Remediation page
@@ -12741,6 +13837,12 @@ var VsatBlastView = (function () {
     return '"' + s.replace(/"/g, '""') + '"';
   }
   function toCsv(header, rows) { return '﻿' + [header].concat(rows).map(function (r) { return r.map(csvCell).join(','); }).join('\r\n') + '\r\n'; }
+  function changesCsv() {
+    const header = ['id', 'utc', 'endpointId', 'assetId', 'assetName', 'user', 'category', 'action', 'source', 'checks'];
+    return toCsv(header, changeEntries.map(function (e) {
+      return [e.id, e.utc, e.endpointId, e.assetId, e.assetName, e.user, e.category, e.action, e.source, (findingsByChange.get(str(e.id)) || []).map(function (f) { return str(f.ruleId) + ' ' + str(f.result); }).join('; ')];
+    }));
+  }
   function findingsCsv(list) {
     const header = ['id', 'key', 'ruleId', 'title', 'domain', 'result', 'severity', 'priorityScore', 'confidence', 'assetId', 'assetName', 'assetType', 'observed', 'expected', 'exceptionOwner', 'exceptionExpires', 'exceptionActive', 'workPackage', 'mitigation', 'frameworks'];
     const rows = list.map(function (f) {
@@ -12775,6 +13877,7 @@ var VsatBlastView = (function () {
       card('Findings CSV', 'One row per finding. Cells beginning with = + - @ are prefixed with a quote to prevent spreadsheet formula execution.', [
         btn('All findings', function () { download(base + '-findings.csv', new Blob([findingsCsv(findings)], { type: 'text/csv;charset=utf-8' })); }, 'btn-primary'),
         btn('FAIL / UNKNOWN / ERROR', function () { download(base + '-findings-open.csv', new Blob([findingsCsv(findings.filter(function (f) { return f.result === 'FAIL' || f.result === 'UNKNOWN' || f.result === 'ERROR'; }))], { type: 'text/csv;charset=utf-8' })); })]),
+      hasChanges ? card('Engagement timeline CSV', 'One row per platform change in the engagement window, with the checks it touches.', [btn('Download timeline', function () { download(base + '-changes.csv', new Blob([changesCsv()], { type: 'text/csv;charset=utf-8' })); }, 'btn-primary')]) : null,
       card('Worklist CSV', 'Work packages expanded to one row per linked finding, for ticketing and change planning.', [btn('Download worklist', function () { download(base + '-worklist.csv', new Blob([worklistCsv()], { type: 'text/csv;charset=utf-8' })); }, 'btn-primary')]),
       card('Topology image', 'Current topology view with legend and scope label (run ID and time). Expand the graph first to include more detail.', [btn('SVG', exportSvg, 'btn-primary'), btn('PNG', exportPng)]),
       card('Print / PDF', 'Prints all sections with navigation hidden. Use your browser’s "Save as PDF" for a PDF copy.', [btn('Print report', function () { PAGES.forEach(ensureRendered); window.print(); })])));
@@ -13043,6 +14146,10 @@ summary { cursor: pointer; font-weight: 650; }
 /* blast radius: rules in assets/report/blast.css (appended by the build); colors map to UI tokens. */
 .br { --attack: var(--bad); --safe: var(--ok); --attack-soft: var(--bad-bg); }
 .blast-card { margin-top: 16px; }
+/* Receipt code (final step): large, monospaced, easy to read out on a call. */
+.receipt-card { text-align: center; border-left: 8px solid var(--accent); }
+.receipt-lead { font-size: 1.05rem; font-weight: 700; margin: 0 0 6px; }
+.receipt-code { font-family: var(--mono); font-size: clamp(1.4rem, 4.2vw, 2.6rem); font-weight: 750; letter-spacing: .08em; margin: 4px 0 10px; overflow-wrap: anywhere; user-select: all; }
 /* blast radius (shared by the report and the local UI; the build appends this file to each host
    stylesheet). Uses only the host tokens plus --attack, --attack-soft and --safe, which each host
    aliases to its own fail / pass tokens. Every selector is scoped under .br. */
@@ -14021,8 +15128,9 @@ var VsatBlastView = (function () {
     const max = maxStep();
     STEPS.forEach(function (s) {
       const done = s.n < max && s.n !== current;
-      const b = btn([h('span', { class: 'num', 'aria-hidden': 'true' }, done ? '✓' : String(s.n)), h('span', { class: 'lbl-text' }, s.label), s.req ? h('span', { class: 'req' }, 'Required') : null], function () { go(s.n); }, '', {
-        'aria-current': s.n === current ? 'step' : null, disabled: s.n > max, 'aria-label': 'Step ' + s.n + ': ' + s.label + (s.n > max ? ' (not available yet)' : done ? ' (completed)' : '')
+      const label = s.n === 6 && S && S.collectOnly ? 'Receipt' : s.label;
+      const b = btn([h('span', { class: 'num', 'aria-hidden': 'true' }, done ? '✓' : String(s.n)), h('span', { class: 'lbl-text' }, label), s.req ? h('span', { class: 'req' }, 'Required') : null], function () { go(s.n); }, '', {
+        'aria-current': s.n === current ? 'step' : null, disabled: s.n > max, 'aria-label': 'Step ' + s.n + ': ' + label + (s.n > max ? ' (not available yet)' : done ? ' (completed)' : '')
       });
       b.className = done ? 'done' : '';
       ol.appendChild(h('li', null, b));
@@ -14255,8 +15363,18 @@ var VsatBlastView = (function () {
   };
 
   // 6 Results
+  // The receipt code ties the evidence package to this session: the customer reads it to the auditor.
+  function receiptCard(code) {
+    return h('div', { class: 'card receipt-card', role: 'status' },
+      h('p', { class: 'receipt-lead' }, 'Read this code to your auditor'),
+      h('p', { class: 'receipt-code', 'aria-label': 'Receipt code ' + str(code).split('').join(' ') }, str(code)),
+      h('p', { class: 'small muted' }, 'It is derived from the evidence package (assessment.vsat.zip). The auditor checks it with -Replay assessment.vsat.zip -Receipt <code>; any change to the package gives a different code.'));
+  }
   BUILDERS[6] = function (root) {
-    root.appendChild(head('Results', 'The assessment has finished. The report contains sensitive infrastructure data — store it securely.'));
+    const collectOnly = !!(S && S.collectOnly);
+    root.appendChild(collectOnly
+      ? head('Receipt', 'Evidence was collected. No findings are shown in collect-only mode; your auditor evaluates the package.')
+      : head('Results', 'The assessment has finished. The report contains sensitive infrastructure data — store it securely.'));
     const body = h('div');
     root.appendChild(body);
     // Blast radius: the same view as the report (assets/report/blast-view.js), mounted once per result.
@@ -14296,6 +15414,15 @@ var VsatBlastView = (function () {
       if (!r) {
         body.appendChild(h('div', { class: 'status-banner st-bad' }, h('p', { class: 'label' }, phase() === 'canceled' ? 'CANCELED' : phase() === 'failed' ? 'FAILED' : 'NO RESULT'),
           h('p', null, phase() === 'canceled' ? 'The run was canceled before results were produced.' : 'The run did not produce results. See the log in the terminal window for details.')));
+        return;
+      }
+      if (r.receipt) body.appendChild(receiptCard(r.receipt));
+      if (r.collectOnly) {
+        // Collect-only: receipt and files only, never findings, blast radius or the report.
+        body.appendChild(h('div', { class: 'card' }, h('h2', null, 'Output'),
+          h('p', null, 'Send only assessment.vsat.zip to your auditor. It contains sensitive infrastructure data.'),
+          h('dl', { class: 'kv' }, h('dt', null, 'Folder'), h('dd', { class: 'mono' }, str(r.outputDir) || '-'),
+            h('dt', null, 'Files'), h('dd', null, arr(r.files).length ? arr(r.files).map(function (f) { return h('div', { class: 'mono' }, str(f)); }) : '-'))));
         return;
       }
       const st = obj(r.status), overall = str(st.overall).toLowerCase();
@@ -14373,14 +15500,15 @@ var VsatBlastView = (function () {
   "schemaVersion": "2.3",
   "tool": {
     "name": "VSAT",
-    "version": "2.3.0"
+    "version": "2.4.0"
   },
   "run": {
     "id": "00000000-0000-4000-8000-000000000d30",
     "startedUtc": "2026-09-23T08:00:00Z",
     "endedUtc": "2026-09-23T08:03:41Z",
     "mode": "demo",
-    "status": "complete"
+    "status": "complete",
+    "engagementStartUtc": "2026-09-09T00:00:00Z"
   },
   "scope": {
     "endpoints": [
@@ -14615,6 +15743,135 @@ var VsatBlastView = (function () {
               ]
             }
           ]
+        },
+        "events": {
+          "status": "ok",
+          "value": {
+            "windowStartUtc": "2026-09-09T00:00:00Z",
+            "oldestUtc": "2026-09-09T00:04:12Z",
+            "coversWindowStart": true,
+            "truncated": false,
+            "maxSamples": 50000,
+            "recordsCapped": false,
+            "account": "EXAMPLE\\svc-vsat",
+            "currentSessionKey": "52d0c0de-0000-4000-8000-00000000c0de",
+            "records": [
+              {
+                "utc": "2026-09-23T08:00:04Z",
+                "type": "UserLoginSessionEvent",
+                "descriptionId": null,
+                "eventTypeId": null,
+                "user": "EXAMPLE\\svc-vsat",
+                "message": "User EXAMPLE\\svc-vsat@10.0.0.5 logged in as PowerCLI",
+                "entity": null,
+                "sessionId": "52d0c0de-0000-4000-8000-00000000c0de"
+              },
+              {
+                "utc": "2026-09-21T16:20:00Z",
+                "type": "VmReconfiguredEvent",
+                "descriptionId": null,
+                "eventTypeId": null,
+                "user": "EXAMPLE\\ops1",
+                "message": "Reconfigured web01 on esx01.example.local in DC1",
+                "entity": {
+                  "type": "VirtualMachine",
+                  "moref": "vm-201",
+                  "name": "web01"
+                },
+                "sessionId": null
+              },
+              {
+                "utc": "2026-09-20T14:03:11Z",
+                "type": "TaskEvent",
+                "descriptionId": "host.ServiceSystem.updatePolicy",
+                "eventTypeId": null,
+                "user": "EXAMPLE\\j.doe",
+                "message": "Task: Update service activation policy (SSH: start and stop manually)",
+                "entity": {
+                  "type": "HostSystem",
+                  "moref": "host-10",
+                  "name": "esx01.example.local"
+                },
+                "sessionId": null
+              },
+              {
+                "utc": "2026-09-20T14:02:50Z",
+                "type": "TaskEvent",
+                "descriptionId": "host.ServiceSystem.stop",
+                "eventTypeId": null,
+                "user": "EXAMPLE\\j.doe",
+                "message": "Task: Stop service (SSH)",
+                "entity": {
+                  "type": "HostSystem",
+                  "moref": "host-10",
+                  "name": "esx01.example.local"
+                },
+                "sessionId": null
+              },
+              {
+                "utc": "2026-09-19T21:05:00Z",
+                "type": "UserLoginSessionEvent",
+                "descriptionId": null,
+                "eventTypeId": null,
+                "user": "EXAMPLE\\svc-vsat",
+                "message": "User EXAMPLE\\svc-vsat@10.0.0.77 logged in as PowerCLI",
+                "entity": null,
+                "sessionId": "52d0c0de-0000-4000-8000-000000000002"
+              },
+              {
+                "utc": "2026-09-18T09:15:00Z",
+                "type": "PermissionAddedEvent",
+                "descriptionId": null,
+                "eventTypeId": null,
+                "user": "VSPHERE.LOCAL\\Administrator",
+                "message": "Permission created for EXAMPLE\\j.doe on cl-prod, role is Admin, propagation is Enabled",
+                "entity": {
+                  "type": "ClusterComputeResource",
+                  "moref": "domain-c8",
+                  "name": "cl-prod"
+                },
+                "sessionId": null
+              },
+              {
+                "utc": "2026-09-16T11:00:00Z",
+                "type": "TaskEvent",
+                "descriptionId": "option.OptionManager.updateValues",
+                "eventTypeId": null,
+                "user": "EXAMPLE\\ops1",
+                "message": "Task: Update option values (Security.AccountLockFailures)",
+                "entity": {
+                  "type": "HostSystem",
+                  "moref": "host-50",
+                  "name": "esx05.example.local"
+                },
+                "sessionId": null
+              },
+              {
+                "utc": "2026-09-15T19:40:00Z",
+                "type": "UserLoginSessionEvent",
+                "descriptionId": null,
+                "eventTypeId": null,
+                "user": "EXAMPLE\\svc-vsat",
+                "message": "User EXAMPLE\\svc-vsat@10.0.0.77 logged in as PowerCLI",
+                "entity": null,
+                "sessionId": "52d0c0de-0000-4000-8000-000000000001"
+              },
+              {
+                "utc": "2026-09-12T08:00:00Z",
+                "type": "EventEx",
+                "descriptionId": null,
+                "eventTypeId": "esx.audit.lockdownmode.disabled",
+                "user": "",
+                "message": "Administrator access to the host has been enabled.",
+                "entity": {
+                  "type": "HostSystem",
+                  "moref": "host-50",
+                  "name": "esx05.example.local"
+                },
+                "sessionId": null
+              }
+            ]
+          }
         }
       }
     },
@@ -19398,7 +20655,9 @@ var VsatBlastView = (function () {
       "props": {
         "path": "/infra/tier-0s/t0-core",
         "haMode": "ACTIVE_STANDBY",
-        "failoverMode": "NON_PREEMPTIVE"
+        "failoverMode": "NON_PREEMPTIVE",
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "localeServices": {
@@ -19441,7 +20700,9 @@ var VsatBlastView = (function () {
         "routeAdvertisement": [
           "TIER1_CONNECTED",
           "TIER1_NAT"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "natRules": {
@@ -19478,7 +20739,9 @@ var VsatBlastView = (function () {
         "routeAdvertisement": [
           "TIER1_CONNECTED",
           "TIER1_NAT"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "natRules": {
@@ -19529,7 +20792,9 @@ var VsatBlastView = (function () {
           "10.10.1.1/24"
         ],
         "adminState": "UP",
-        "type": "overlay"
+        "type": "overlay",
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -19556,7 +20821,9 @@ var VsatBlastView = (function () {
           "10.10.2.1/24"
         ],
         "adminState": "UP",
-        "type": "overlay"
+        "type": "overlay",
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -19583,7 +20850,9 @@ var VsatBlastView = (function () {
           "10.10.3.1/24"
         ],
         "adminState": "UP",
-        "type": "overlay"
+        "type": "overlay",
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -19610,7 +20879,9 @@ var VsatBlastView = (function () {
           "203.0.113.1/24"
         ],
         "adminState": "UP",
-        "type": "overlay"
+        "type": "overlay",
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -19632,7 +20903,9 @@ var VsatBlastView = (function () {
         "expressionCount": 1,
         "tags": [
           "zone=app"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -19694,7 +20967,9 @@ var VsatBlastView = (function () {
         "expressionCount": 1,
         "tags": [
           "zone=db"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -19741,7 +21016,9 @@ var VsatBlastView = (function () {
         "expressionCount": 1,
         "tags": [
           "zone=dmz"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -19778,7 +21055,9 @@ var VsatBlastView = (function () {
         "expressionCount": 1,
         "tags": [
           "zone=empty-decom"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -19808,7 +21087,9 @@ var VsatBlastView = (function () {
         "expressionCount": 1,
         "tags": [
           "zone=legacy-excluded"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -19845,7 +21126,9 @@ var VsatBlastView = (function () {
         "expressionCount": 1,
         "tags": [
           "zone=mgmt"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -19897,7 +21180,9 @@ var VsatBlastView = (function () {
         "expressionCount": 1,
         "tags": [
           "zone=web"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -19958,7 +21243,9 @@ var VsatBlastView = (function () {
           "ANY"
         ],
         "stateful": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20008,7 +21295,9 @@ var VsatBlastView = (function () {
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20057,7 +21346,9 @@ var VsatBlastView = (function () {
         ],
         "disabled": false,
         "logged": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20083,7 +21374,9 @@ var VsatBlastView = (function () {
           "ANY"
         ],
         "stateful": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20132,7 +21425,9 @@ var VsatBlastView = (function () {
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20158,7 +21453,9 @@ var VsatBlastView = (function () {
           "ANY"
         ],
         "stateful": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20207,7 +21504,9 @@ var VsatBlastView = (function () {
         ],
         "disabled": false,
         "logged": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20259,7 +21558,9 @@ var VsatBlastView = (function () {
         ],
         "disabled": false,
         "logged": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20311,7 +21612,9 @@ var VsatBlastView = (function () {
         ],
         "disabled": false,
         "logged": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20360,7 +21663,9 @@ var VsatBlastView = (function () {
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-09-17T13:25:00Z",
+        "lastModifiedUser": "EXAMPLE\\netops"
       },
       "facts": {}
     },
@@ -20409,7 +21714,9 @@ var VsatBlastView = (function () {
         ],
         "disabled": true,
         "logged": false,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20435,7 +21742,9 @@ var VsatBlastView = (function () {
           "ANY"
         ],
         "stateful": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20484,7 +21793,9 @@ var VsatBlastView = (function () {
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20533,7 +21844,9 @@ var VsatBlastView = (function () {
         ],
         "disabled": false,
         "logged": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20582,7 +21895,9 @@ var VsatBlastView = (function () {
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20608,7 +21923,9 @@ var VsatBlastView = (function () {
           "ANY"
         ],
         "stateful": true,
-        "isDefault": true
+        "isDefault": true,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20657,7 +21974,9 @@ var VsatBlastView = (function () {
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": true
+        "isDefault": true,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20683,7 +22002,9 @@ var VsatBlastView = (function () {
           "/infra/tier-0s/t0-core"
         ],
         "stateful": true,
-        "isDefault": true
+        "isDefault": true,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -20734,7 +22055,9 @@ var VsatBlastView = (function () {
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": true
+        "isDefault": true,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     }
@@ -22294,6 +23617,16 @@ var VsatBlastView = (function () {
         "affects": []
       },
       {
+        "name": "vsphere.events",
+        "endpoint": "ep-vc01",
+        "status": "ok",
+        "startedUtc": "2026-09-23T08:00:05Z",
+        "endedUtc": "2026-09-23T08:03:30Z",
+        "objectCount": 9,
+        "error": null,
+        "affects": []
+      },
+      {
         "name": "vsphere.inventory",
         "endpoint": "ep-vc01",
         "status": "ok",
@@ -22451,7 +23784,7 @@ if (-not $LibraryMode) {
         Cli = [bool]$Cli; Doctor = [bool]$Doctor; Replay = $Replay; Baseline = $Baseline; Redact = [bool]$Redact
         TrustedThumbprint = $TrustedThumbprint; Port = $Port; NoBrowser = [bool]$NoBrowser; Demo = [bool]$Demo; Version = [bool]$Version
     }
-    foreach ($vsatOpt in 'HyperVServer', 'HyperVCredential', 'HyperVEvidence', 'ExportCollector', 'KvmServer', 'KvmUser', 'KvmEvidence') {
+    foreach ($vsatOpt in 'HyperVServer', 'HyperVCredential', 'HyperVEvidence', 'ExportCollector', 'KvmServer', 'KvmUser', 'KvmEvidence', 'EngagementStart', 'CollectOnly', 'Receipt') {
         $vsatVar = Get-Variable -Name $vsatOpt -Scope Script -ErrorAction SilentlyContinue
         if ($vsatVar) { $vsatArgs[$vsatOpt] = $vsatVar.Value }
     }

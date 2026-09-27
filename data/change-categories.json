@@ -1,0 +1,91 @@
+{
+  "version": "2026.09",
+  "note": "Maps platform change records to VSAT change categories (src/78-Changes.ps1). A rule's optional changeCategory is matched against these. Records that map to no category are not kept.",
+  "categories": {
+    "access": "Permissions, roles, group membership, lockdown and remote-access settings",
+    "service": "Service start/stop and startup policy",
+    "firewall": "Host and distributed firewall rules and settings",
+    "settings": "Advanced and security-relevant configuration settings",
+    "vm": "Virtual machine configuration",
+    "patch": "Software updates, images and packages",
+    "login": "Sign-ins (used by the earlier-runs detector)"
+  },
+  "vcenter": {
+    "eventTypes": {
+      "PermissionAddedEvent": "access",
+      "PermissionRemovedEvent": "access",
+      "PermissionUpdatedEvent": "access",
+      "RoleAddedEvent": "access",
+      "RoleRemovedEvent": "access",
+      "RoleUpdatedEvent": "access",
+      "VmReconfiguredEvent": "vm",
+      "HostProfileAppliedEvent": "settings",
+      "UserLoginSessionEvent": "login"
+    },
+    "descriptionIdPrefixes": [
+      { "prefix": "host.ServiceSystem.", "category": "service" },
+      { "prefix": "host.FirewallSystem.", "category": "firewall" },
+      { "prefix": "HostSystem.enterLockdownMode", "category": "access" },
+      { "prefix": "HostSystem.exitLockdownMode", "category": "access" },
+      { "prefix": "host.HostAccessManager.", "category": "access" },
+      { "prefix": "AuthorizationManager.", "category": "access" },
+      { "prefix": "host.LocalAccountManager.", "category": "access" },
+      { "prefix": "host.ActiveDirectoryAuthentication.", "category": "access" },
+      { "prefix": "option.OptionManager.", "category": "settings" },
+      { "prefix": "OptionManager.", "category": "settings" },
+      { "prefix": "host.DateTimeSystem.", "category": "settings" },
+      { "prefix": "host.CertificateManager.", "category": "settings" },
+      { "prefix": "ClusterComputeResource.reconfigure", "category": "settings" },
+      { "prefix": "ComputeResource.reconfigure", "category": "settings" },
+      { "prefix": "dvs.DistributedVirtualPortgroup.reconfigure", "category": "settings" },
+      { "prefix": "DistributedVirtualSwitch.reconfigure", "category": "settings" },
+      { "prefix": "host.NetworkSystem.update", "category": "settings" },
+      { "prefix": "VirtualMachine.reconfigure", "category": "vm" },
+      { "prefix": "host.PatchManager.", "category": "patch" },
+      { "prefix": "host.ImageConfigManager.", "category": "patch" },
+      { "prefix": "com.vmware.vcIntegrity.", "category": "patch" },
+      { "prefix": "com.vmware.vcenter.lcm.", "category": "patch" },
+      { "prefix": "com.vmware.esx.settings.", "category": "patch" }
+    ],
+    "eventTypeIdPrefixes": [
+      { "prefix": "esx.audit.lockdownmode.", "category": "access" },
+      { "prefix": "esx.audit.account.", "category": "access" },
+      { "prefix": "esx.audit.ssh.enabled", "category": "service" },
+      { "prefix": "esx.audit.ssh.disabled", "category": "service" },
+      { "prefix": "esx.audit.shell.enabled", "category": "service" },
+      { "prefix": "esx.audit.shell.disabled", "category": "service" },
+      { "prefix": "esx.audit.net.firewall.", "category": "firewall" },
+      { "prefix": "esx.audit.host.boot", "category": "patch" },
+      { "prefix": "esx.audit.esximage.", "category": "patch" },
+      { "prefix": "com.vmware.vc.sso.", "category": "access" }
+    ]
+  },
+  "windows": {
+    "System": { "7040": "service" },
+    "Security": { "4728": "access", "4729": "access", "4732": "access", "4733": "access", "4756": "access", "4757": "access" },
+    "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall": { "2004": "firewall", "2005": "firewall", "2006": "firewall", "2052": "firewall", "2097": "firewall", "2099": "firewall" },
+    "Microsoft-Windows-Hyper-V-VMMS-Admin": { "*": "vm" }
+  },
+  "kvm": {
+    "files": [
+      { "pattern": "/etc/ssh/sshd_config", "category": "access" },
+      { "pattern": "/etc/ssh/sshd_config.d/*", "category": "access" },
+      { "pattern": "/etc/group", "category": "access" },
+      { "pattern": "/etc/sudoers", "category": "access" },
+      { "pattern": "/etc/sudoers.d/*", "category": "access" },
+      { "pattern": "/etc/libvirt/qemu/networks/*.xml", "category": "vm" },
+      { "pattern": "/etc/libvirt/qemu/*.xml", "category": "vm" },
+      { "pattern": "/etc/libvirt/*.conf", "category": "settings" },
+      { "pattern": "/etc/firewalld/*", "category": "firewall" },
+      { "pattern": "/etc/firewalld/zones/*", "category": "firewall" },
+      { "pattern": "/etc/nftables.conf", "category": "firewall" },
+      { "pattern": "/etc/sysconfig/nftables.conf", "category": "firewall" }
+    ],
+    "packageLog": "patch",
+    "wtmp": "login"
+  },
+  "nsx": {
+    "assetTypes": { "nsx-rule": "firewall", "nsx-policy": "firewall", "nsx-group": "firewall", "nsx-segment": "settings", "nsx-t0": "settings", "nsx-t1": "settings" },
+    "managerFacts": { "dfwSettings": "firewall", "excludeList": "firewall" }
+  }
+}

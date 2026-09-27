@@ -1,0 +1,28 @@
+==VSAT:SECTION change-window==
+since=1789171200
+since_day=2026-09-12
+tz=+0200
+account=vsat
+
+==VSAT:SECTION file-mtimes==
+1790400000 /etc/ssh/sshd_config
+1788000000 /etc/group
+1788000000 /etc/sudoers
+1790200000 /etc/libvirt/qemu/web-kvm01.xml
+1788000000 /etc/libvirt/qemu.conf
+1790300000 /etc/firewalld/zones/public.xml
+
+==VSAT:SECTION package-log==
+source=/var/log/dnf.rpm.log
+first=2026-09-15T03:00:00+0000 INFO --- logging initialized ---
+2026-09-23T10:11:12+0000 SUBDEBUG Upgraded: openssl-libs-1:3.0.7-28.el9.x86_64
+2026-09-23T10:11:12+0000 SUBDEBUG Upgraded: openssl-1:3.0.7-28.el9.x86_64
+2026-09-23T10:11:13+0000 SUBDEBUG Installed: kernel-5.14.0-503.el9.x86_64
+
+==VSAT:SECTION logins==
+vsat     pts/0        10.0.0.5         Thu Sep 24 23:10:00 2026 - Thu Sep 24 23:40:00 2026  (00:30)
+admin    pts/1        10.0.0.7         Wed Sep 23 12:00:00 2026 - Wed Sep 23 12:30:00 2026  (00:30)
+reboot   system boot  5.14.0-503.el9.x Wed Sep 23 10:15:00 2026   still running
+vsat     pts/0        10.0.0.5         Mon Sep 21 10:00:00 2026 - Mon Sep 21 10:05:00 2026  (00:05)
+
+wtmp begins Tue Sep  1 00:00:01 2026

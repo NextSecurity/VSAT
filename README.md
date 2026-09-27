@@ -71,11 +71,11 @@ The `Unblock-File` step clears Windows' Mark-of-the-Web on the download; `-EA 0`
 Use these instead of the lines above when you want a specific release rather than always the newest:
 
 ```powershell
-$v='2.3.0';$u="https://github.com/NextSecurity/VSAT/releases/download/v$v";iwr "$u/vsat.ps1" -OutFile vsat.ps1;iwr "$u/SHA256SUMS.txt" -OutFile SHA256SUMS.txt;$h=((gc SHA256SUMS.txt|?{$_ -match '\svsat\.ps1$'}) -split '\s+')[0];if((Get-FileHash vsat.ps1).Hash -ne $h){throw 'checksum mismatch - do not run'};Unblock-File vsat.ps1 -EA 0;./vsat.ps1 -Demo
+$v='2.4.0';$u="https://github.com/NextSecurity/VSAT/releases/download/v$v";iwr "$u/vsat.ps1" -OutFile vsat.ps1;iwr "$u/SHA256SUMS.txt" -OutFile SHA256SUMS.txt;$h=((gc SHA256SUMS.txt|?{$_ -match '\svsat\.ps1$'}) -split '\s+')[0];if((Get-FileHash vsat.ps1).Hash -ne $h){throw 'checksum mismatch - do not run'};Unblock-File vsat.ps1 -EA 0;./vsat.ps1 -Demo
 ```
 
 ```bash
-v=2.3.0; u=https://github.com/NextSecurity/VSAT/releases/download/v$v; curl -fsSLO $u/vsat.ps1 -O $u/SHA256SUMS.txt && grep ' vsat.ps1$' SHA256SUMS.txt | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -) && pwsh ./vsat.ps1 -Demo
+v=2.4.0; u=https://github.com/NextSecurity/VSAT/releases/download/v$v; curl -fsSLO $u/vsat.ps1 -O $u/SHA256SUMS.txt && grep ' vsat.ps1$' SHA256SUMS.txt | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -) && pwsh ./vsat.ps1 -Demo
 ```
 
 VSAT is also published on the PowerShell Gallery as the script `VSAT`: `Install-PSResource VSAT -Repository PSGallery; vsat.ps1 -Demo`. The checksum one-liner above stays the documented default because it works without Gallery access.
@@ -157,7 +157,8 @@ Each result is one of `PASS`, `FAIL`, `MANUAL`, `NOT_APPLICABLE`, `UNKNOWN` or `
 5. **Explainable attack paths:** inferred from configuration. Each path lists the firewall rules and prerequisites involved, plus its uncertainty. These paths are not proof of exploitability.
 6. **Failure-impact explorer:** pick a host, uplink, datastore or Edge and see which workloads could be affected. This is a configuration model. VSAT injects no failures.
 7. **Remediation work packages:** findings grouped by corrective action and team, with impact, maintenance window, rollback and validation steps. VSAT writes guidance and never applies changes.
-8. **Collect once, replay, share safely:** `-Replay` re-evaluates saved evidence offline. `-Redact` writes a separate sharing copy that uses consistent pseudonyms.
+8. **Audit integrity:** when the customer runs VSAT for you, the report shows what changed during the engagement (from vCenter events, NSX, Windows event logs and KVM host history), earlier runs by the same account, and a warning when log history is too short. `-CollectOnly` shows no findings, and a receipt code (`VSAT-XXXX-XXXX-XXXX-XXXX`) read aloud at the end of the session proves later that the package you received is the one from that session: `-Replay assessment.vsat.zip -Receipt <code>`.
+9. **Collect once, replay, share safely:** `-Replay` re-evaluates saved evidence offline. `-Redact` writes a separate sharing copy that uses consistent pseudonyms.
 
 ## Sample report and topology
 
@@ -170,6 +171,7 @@ Every run writes these files to the output folder:
 | `report.html` | A standalone interactive report that works offline from `file://` |
 | `results.json` / `evidence.json` | Machine-readable results and normalized evidence ([data model](docs/architecture/data-model.md)) |
 | `findings.csv` / `worklist.csv` | Findings and the remediation worklist, protected against spreadsheet formula injection |
+| `changes.csv` | The engagement change timeline: who changed what, when, and which checks it touched |
 | `attack-layer.json` | A MITRE ATT&CK Navigator layer (format 4.5) scored by open attack paths and failing controls |
 | `collection.log` | Collection log with secrets redacted |
 | `manifest.json` | SHA-256 hashes of all outputs |

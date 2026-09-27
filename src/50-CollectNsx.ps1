@@ -62,6 +62,14 @@ function ConvertTo-VsatComputeManagerFact {
     }
 }
 
+function Add-VsatNsxModified {
+    # Adds lastModifiedUtc/lastModifiedUser (from the object's own _last_modified_* fields, no
+    # extra API call) to asset props for the engagement change timeline.
+    param($Object, [System.Collections.IDictionary]$Props)
+    foreach ($kv in (ConvertTo-VsatNsxModified $Object).GetEnumerator()) { $Props[$kv.Key] = $kv.Value }
+    return $Props
+}
+
 function ConvertTo-VsatNsxRef {
     # Normalizes NSX group/service references: "ANY" stays ANY, paths are kept verbatim.
     param($Values)
@@ -148,7 +156,7 @@ function Invoke-VsatNsxCollection {
         $t0s = Get-VsatNsxPaged -Session $Session -Path '/policy/api/v1/infra/tier-0s'
         foreach ($g in $t0s.items) {
             $path = [string](Get-VsatProp $g 'path'); $id = "${ep}:$path"
-            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-t0' -Name (Get-VsatProp $g 'display_name') -Endpoint $ep -Props ([ordered]@{ path = $path; haMode = Get-VsatProp $g 'ha_mode'; failoverMode = Get-VsatProp $g 'failover_mode' })
+            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-t0' -Name (Get-VsatProp $g 'display_name') -Endpoint $ep -Props (Add-VsatNsxModified $g ([ordered]@{ path = $path; haMode = Get-VsatProp $g 'ha_mode'; failoverMode = Get-VsatProp $g 'failover_mode' }))
             Add-VsatNsxLocaleServices -Evidence $Evidence -Session $Session -Asset $a -Path $path -Endpoint $ep
             $count++
         }
@@ -156,7 +164,7 @@ function Invoke-VsatNsxCollection {
         foreach ($g in $t1s.items) {
             $path = [string](Get-VsatProp $g 'path'); $id = "${ep}:$path"
             $t0 = Get-VsatProp $g 'tier0_path'
-            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-t1' -Name (Get-VsatProp $g 'display_name') -Endpoint $ep -Props ([ordered]@{ path = $path; tier0Path = $t0; routeAdvertisement = @(Get-VsatProp $g 'route_advertisement_types' @()) })
+            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-t1' -Name (Get-VsatProp $g 'display_name') -Endpoint $ep -Props (Add-VsatNsxModified $g ([ordered]@{ path = $path; tier0Path = $t0; routeAdvertisement = @(Get-VsatProp $g 'route_advertisement_types' @()) }))
             if ($t0) { Add-VsatRelationship -Evidence $Evidence -Source $id -Target "${ep}:$t0" -Type routes -Provenance 'nsx.networking' }
             Add-VsatNsxLocaleServices -Evidence $Evidence -Session $Session -Asset $a -Path $path -Endpoint $ep
             try {
@@ -171,7 +179,7 @@ function Invoke-VsatNsxCollection {
             $path = [string](Get-VsatProp $s 'path'); $id = "${ep}:$path"
             $subnets = @(Get-VsatProp $s 'subnets' @() | Where-Object { $null -ne $_ } | ForEach-Object { Get-VsatProp $_ 'gateway_address' })
             $conn = Get-VsatProp $s 'connectivity_path'
-            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-segment' -Name (Get-VsatProp $s 'display_name') -Endpoint $ep -Props ([ordered]@{ path = $path; uniqueId = Get-VsatProp $s 'unique_id'; vlanIds = @(Get-VsatProp $s 'vlan_ids' @()); transportZone = Get-VsatProp $s 'transport_zone_path'; connectivityPath = $conn; subnets = $subnets; adminState = Get-VsatProp $s 'admin_state'; type = $(if (@(Get-VsatProp $s 'vlan_ids' @()).Count -gt 0) { 'vlan' } else { 'overlay' }) })
+            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-segment' -Name (Get-VsatProp $s 'display_name') -Endpoint $ep -Props (Add-VsatNsxModified $s ([ordered]@{ path = $path; uniqueId = Get-VsatProp $s 'unique_id'; vlanIds = @(Get-VsatProp $s 'vlan_ids' @()); transportZone = Get-VsatProp $s 'transport_zone_path'; connectivityPath = $conn; subnets = $subnets; adminState = Get-VsatProp $s 'admin_state'; type = $(if (@(Get-VsatProp $s 'vlan_ids' @()).Count -gt 0) { 'vlan' } else { 'overlay' }) }))
             if ($conn) { Add-VsatRelationship -Evidence $Evidence -Source $id -Target "${ep}:$conn" -Type routes -Provenance 'nsx.networking' }
             $count++
         }
@@ -183,7 +191,7 @@ function Invoke-VsatNsxCollection {
         $n = 0
         foreach ($g in $groups.items) {
             $path = [string](Get-VsatProp $g 'path'); $id = "${ep}:$path"
-            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-group' -Name (Get-VsatProp $g 'display_name') -Endpoint $ep -Props ([ordered]@{ path = $path; expressionCount = @(Get-VsatProp $g 'expression' @()).Count; tags = @(Get-VsatProp $g 'tags' @() | Where-Object { $null -ne $_ } | ForEach-Object { "$(Get-VsatProp $_ 'scope')=$(Get-VsatProp $_ 'tag')" }) })
+            $a = Add-VsatAsset -Evidence $Evidence -Id $id -Type 'nsx-group' -Name (Get-VsatProp $g 'display_name') -Endpoint $ep -Props (Add-VsatNsxModified $g ([ordered]@{ path = $path; expressionCount = @(Get-VsatProp $g 'expression' @()).Count; tags = @(Get-VsatProp $g 'tags' @() | Where-Object { $null -ne $_ } | ForEach-Object { "$(Get-VsatProp $_ 'scope')=$(Get-VsatProp $_ 'tag')" }) }))
             if (Test-VsatCancel) { break }
             # Effective (realized) membership; configured expressions alone are insufficient.
             try {
@@ -247,10 +255,10 @@ function Add-VsatNsxPolicies {
     $ptype = if ($Kind -eq 'security-policies') { 'dfw' } else { 'gfw' }
     foreach ($p in $policies.items) {
         $path = [string](Get-VsatProp $p 'path'); $polId = "${ep}:$path"
-        $pa = Add-VsatAsset -Evidence $Evidence -Id $polId -Type 'nsx-policy' -Name (Get-VsatProp $p 'display_name') -Endpoint $ep -Props ([ordered]@{
-                path = $path; firewall = $ptype; category = Get-VsatProp $p 'category'; sequence = [long](Get-VsatProp $p 'sequence_number' 0)
-                scope = @(ConvertTo-VsatNsxRef (Get-VsatProp $p 'scope')); stateful = Get-VsatProp $p 'stateful'; isDefault = [bool](Get-VsatProp $p 'is_default' $false)
-            })
+        $pa = Add-VsatAsset -Evidence $Evidence -Id $polId -Type 'nsx-policy' -Name (Get-VsatProp $p 'display_name') -Endpoint $ep -Props (Add-VsatNsxModified $p ([ordered]@{
+                    path = $path; firewall = $ptype; category = Get-VsatProp $p 'category'; sequence = [long](Get-VsatProp $p 'sequence_number' 0)
+                    scope = @(ConvertTo-VsatNsxRef (Get-VsatProp $p 'scope')); stateful = Get-VsatProp $p 'stateful'; isDefault = [bool](Get-VsatProp $p 'is_default' $false)
+                }))
         try {
             $rules = Get-VsatNsxPaged -Session $Session -Path "/policy/api/v1$path/rules"
             if ($rules.truncated) { $partial = $true }
@@ -267,6 +275,7 @@ function Add-VsatNsxPolicies {
                         disabled = [bool](Get-VsatProp $r 'disabled' $false); logged = [bool](Get-VsatProp $r 'logged' $false)
                         isDefault = ($pa.props.isDefault -or ([string](Get-VsatProp $r 'id') -match '^default-layer[23]-rule$'))
                     })
+                foreach ($kv in (ConvertTo-VsatNsxModified $r).GetEnumerator()) { $ra.props[$kv.Key] = $kv.Value }
                 Add-VsatRelationship -Evidence $Evidence -Source $polId -Target $rid -Type contains -Provenance "nsx.$ptype"
                 foreach ($g in @($ra.props.appliedTo + $ra.props.policyAppliedTo | Where-Object { $_ -ne 'ANY' } | Select-Object -Unique)) {
                     Add-VsatRelationship -Evidence $Evidence -Source $rid -Target "${ep}:$g" -Type applies-to -Provenance "nsx.$ptype"

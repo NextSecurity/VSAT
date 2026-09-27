@@ -71,7 +71,8 @@ Describe 'Hyper-V rules' {
         $p = Export-VsatCollector -Platform hyperv -OutputDir $d
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($p, [ref]$null, [ref]$null)
         $cmds = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() } | Where-Object { $_ } | Select-Object -Unique)
-        $allowedNonGet = @('ConvertTo-Json', 'Where-Object', 'ForEach-Object', 'Sort-Object', 'F', 'Confirm-SecureBootUEFI')
+        # W reads one event log with Get-WinEvent (change history, 2.4).
+        $allowedNonGet = @('ConvertTo-Json', 'Where-Object', 'ForEach-Object', 'Sort-Object', 'F', 'W', 'Confirm-SecureBootUEFI')
         @($cmds | Where-Object { $_ -notlike 'Get-*' -and $allowedNonGet -notcontains $_ }) | Should -BeNullOrEmpty
         Remove-Item -Recurse -Force $d
     }

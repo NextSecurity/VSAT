@@ -181,7 +181,7 @@
   <div class="wrap">
     <div class="sec-head">
       <h2 id="report-title" class="display">One file you can carry out of the room</h2>
-      <p class="sec-lede">Every run writes a standalone <code>report.html</code> that works offline, next to an evidence package and CSV worklists. Eight features go beyond a checklist, and each one says plainly how much it can tell you.</p>
+      <p class="sec-lede">Every run writes a standalone <code>report.html</code> that works offline, next to an evidence package and CSV worklists. Nine features go beyond a checklist, and each one says plainly how much it can tell you.</p>
     </div>
 
     <div class="viewer" data-tabs>
@@ -240,6 +240,11 @@
           <dt>MITRE ATT&amp;CK mapping</dt>
           <dd class="is">Attack-path hops and rules map to ATT&amp;CK techniques. Every run writes <code>attack-layer.json</code> for the ATT&amp;CK Navigator.</dd>
           <dd class="not">Technique scores reflect configuration, not observed adversary activity.</dd>
+        </div>
+        <div class="ledger-row">
+          <dt>Audit integrity</dt>
+          <dd class="is">When the customer runs VSAT for you: the platforms' own change history for the engagement, earlier runs by the same account, <code>-CollectOnly</code>, and a receipt code read aloud that proves later the package is the one from that session.</dd>
+          <dd class="not">History only goes back as far as the platforms keep logs. Short or cleared history is reported, never hidden.</dd>
         </div>
         <div class="ledger-row">
           <dt>Drift between runs</dt>
@@ -377,8 +382,10 @@
 <span class="c"># Air-gapped hosts: write a collector script</span>
 .\vsat.ps1 -ExportCollector kvm
 
-<span class="c"># Re-evaluate saved evidence, no credentials</span>
-.\vsat.ps1 -Replay .\assessment.vsat.zip</code></pre>
+<span class="c"># Customer runs it: collect only, read the receipt aloud</span>
+.\vsat.ps1 -CollectOnly -EngagementStart 2026-09-20
+<span class="c"># Re-evaluate saved evidence and verify the receipt</span>
+.\vsat.ps1 -Replay .\assessment.vsat.zip -Receipt VSAT-XXXX-XXXX-XXXX-XXXX</code></pre>
       <div class="outputs">
         <h3 class="outputs-title">Each run writes</h3>
         <ul>
@@ -386,7 +393,9 @@
           <li><code>assessment.vsat.zip</code><span>Evidence package for replay and drift</span></li>
           <li><code>findings.csv</code><span>One row per finding</span></li>
           <li><code>worklist.csv</code><span>Work packages for ticketing</span></li>
-          <li><code>manifest.json</code><span>SHA-256 of every output</span></li>
+          <li><code>changes.csv</code><span>Engagement change timeline</span></li>
+          <li><code>attack-layer.json</code><span>MITRE ATT&amp;CK Navigator layer</span></li>
+          <li><code>manifest.json</code><span>SHA-256 of every output and the receipt code</span></li>
         </ul>
       </div>
     </div>

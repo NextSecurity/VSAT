@@ -135,3 +135,7 @@ summary { cursor: pointer; font-weight: 650; }
 /* blast radius: rules in assets/report/blast.css (appended by the build); colors map to UI tokens. */
 .br { --attack: var(--bad); --safe: var(--ok); --attack-soft: var(--bad-bg); }
 .blast-card { margin-top: 16px; }
+/* Receipt code (final step): large, monospaced, easy to read out on a call. */
+.receipt-card { text-align: center; border-left: 8px solid var(--accent); }
+.receipt-lead { font-size: 1.05rem; font-weight: 700; margin: 0 0 6px; }
+.receipt-code { font-family: var(--mono); font-size: clamp(1.4rem, 4.2vw, 2.6rem); font-weight: 750; letter-spacing: .08em; margin: 4px 0 10px; overflow-wrap: anywhere; user-select: all; }

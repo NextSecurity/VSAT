@@ -52,7 +52,7 @@ function Invoke-VsatLiveCollection {
     param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Targets)
     $vs = @($Targets | Where-Object { $_.type -in @('vcenter', 'esxi') })
     $nsx = @($Targets | Where-Object { $_.type -eq 'nsx' })
-    $script:VsatProgress.totalSteps = ($vs.Count * 6) + ($nsx.Count * 7)
+    $script:VsatProgress.totalSteps = ($vs.Count * 7) + ($nsx.Count * 7)
     $script:VsatProgress.step = 0
     try {
         foreach ($t in $vs) {
@@ -150,8 +150,28 @@ function Open-VsatBrowser {
     catch { Write-Host "Open this address in a browser: $Target" }
 }
 
+function Write-VsatReceiptLine {
+    # Always the last line of the CLI output, so it can be read out on the call.
+    param([string]$Receipt)
+    if (-not $Receipt) { return }
+    Write-Host ''
+    Write-Host (" Receipt: {0}   (read this code to your auditor)" -f $Receipt) -ForegroundColor Cyan
+}
+
+function Write-VsatCollectSummary {
+    param([Parameter(Mandatory)]$Evidence, [string]$OutputDir, [string[]]$Files, [string]$Receipt)
+    Write-Host ''
+    Write-Host ("=" * 78)
+    Write-Host ' EVIDENCE COLLECTED (collect-only: no findings are shown)' -ForegroundColor Green
+    foreach ($e in @($Evidence.scope.endpoints)) { Write-Host ("   {0,-8} {1,-40} {2}" -f $e.type, (Protect-VsatText $e.address), $e.status) }
+    Write-Host ("=" * 78)
+    Write-Host ' Send only assessment.vsat.zip to your auditor. It contains sensitive infrastructure data.' -ForegroundColor Cyan
+    foreach ($f in @($Files)) { Write-Host ("   {0}" -f (Join-Path $OutputDir $f)) }
+    Write-VsatReceiptLine $Receipt
+}
+
 function Write-VsatSummary {
-    param([Parameter(Mandatory)]$Results, [string]$OutputDir, [string[]]$Files)
+    param([Parameter(Mandatory)]$Results, [string]$OutputDir, [string[]]$Files, [string]$Receipt)
     $st = $Results.status
     $color = switch ($st.overall) { 'complete' { if ($st.exitCode -eq 0) { 'Green' } else { 'Yellow' } } default { 'Red' } }
     Write-Host ''
@@ -164,6 +184,14 @@ function Write-VsatSummary {
         $c = switch ($d.state) { 'ASSESSED' { 'Green' } 'NOT_APPLICABLE' { 'Gray' } 'PARTIAL' { 'Yellow' } default { 'Red' } }
         Write-Host ("   {0,-24} {1,-15} {2}" -f $d.name, $d.state, $(if ($d.mandatory) { 'mandatory' } else { '' })) -ForegroundColor $c
     }
+    $ch = Get-VsatProp $Results 'analysis.changes' $null
+    if ($ch) {
+        Write-Host ' Engagement timeline' -ForegroundColor Cyan
+        Write-Host ("   {0} change(s) since {1}; {2} passing check(s) changed during the engagement" -f @($ch.entries).Count, ([string]$ch.windowStartUtc).Substring(0, 10), $ch.summary.changedPassing)
+        foreach ($a in @($ch.accountSessions | Where-Object { $_ -and $_.count })) { Write-Host ("   Earlier sessions by the VSAT account {0}: {1} (first {2}, last {3})" -f (Protect-VsatText $a.user), $a.count, $a.firstUtc, $a.lastUtc) -ForegroundColor Yellow }
+        foreach ($g in @($ch.gaps)) { Write-Host ("   {0}: {1}" -f (Protect-VsatText $g.address), $g.text) -ForegroundColor Yellow }
+    }
+    if ($Results.Contains('receiptVerification') -and $Results.receiptVerification.verified) { Write-Host (" Receipt verified: {0}" -f $Results.receiptVerification.code) -ForegroundColor Green }
     $s = $Results.summary
     Write-Host ' Findings (FAIL by severity)' -ForegroundColor Cyan
     Write-Host ("   critical {0}  high {1}  medium {2}  low {3}  info {4}" -f $s.severity.critical, $s.severity.high, $s.severity.medium, $s.severity.low, $s.severity.info)
@@ -178,16 +206,38 @@ function Write-VsatSummary {
         Write-Host ' Output (contains sensitive infrastructure data)' -ForegroundColor Cyan
         foreach ($f in @($Files)) { Write-Host ("   {0}" -f (Join-Path $OutputDir $f)) }
     }
+    Write-VsatReceiptLine $Receipt
     Write-Host ''
 }
 
 function Complete-VsatRun {
     # Shared tail for CLI, replay and demo: analysis, outputs, summary.
-    param($Evidence, [string]$ProfileName, [string]$OutputDir, $BaselineEvidence, [switch]$Redact)
+    param($Evidence, [string]$ProfileName, [string]$OutputDir, $BaselineEvidence, [switch]$Redact, $ReceiptCheck)
     $results = Invoke-VsatAnalysisPipeline -Evidence $Evidence -ProfileName $ProfileName -BaselineEvidence $BaselineEvidence
+    if ($ReceiptCheck) { $results.receiptVerification = $ReceiptCheck }
     Update-VsatProgress -Phase 'writing' -Message 'Writing report and evidence package'
+    $script:VsatLastReceipt = $null
     $files = Write-VsatOutputs -Evidence $Evidence -Results $results -OutputDir $OutputDir -Redact:$Redact
-    return @{ results = $results; files = $files }
+    return @{ results = $results; files = $files; receipt = $script:VsatLastReceipt }
+}
+
+function Set-VsatEngagementWindow {
+    # Stores -EngagementStart on the evidence (run.engagementStartUtc) so collectors read the
+    # right window and a replay shows the same timeline.
+    param([Parameter(Mandatory)]$Evidence, $Engagement)
+    if (-not $Engagement) { return }
+    $Evidence.run.engagementStartUtc = $Engagement.utc
+    if ($Engagement.clamped) { Write-VsatLog -Level warn -Source 'changes' -Message "-EngagementStart is more than $($script:VsatChangeMaxLookbackDays) days back; the change window starts $($Engagement.utc.Substring(0, 10))" }
+}
+
+function Test-VsatReplayReceipt {
+    # -Replay <zip> -Receipt <code>: the package must hash to the code read out on the call.
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Code)
+    if ($Path -match '\.json$') { throw 'A receipt verifies an evidence package (.vsat.zip), not a plain evidence.json.' }
+    $want = ConvertTo-VsatReceiptNormalized $Code
+    $full = (Resolve-Path -LiteralPath $Path).ProviderPath
+    $got = Get-VsatReceipt -Path $full
+    return [ordered]@{ verified = ($got -eq $want); code = $want; actual = $got; package = [IO.Path]::GetFileName($full); sha256 = (Get-VsatSha256 -Path $full); verifiedUtc = (Get-VsatUtcNow) }
 }
 
 function Read-VsatBaseline {
@@ -251,6 +301,9 @@ function Invoke-VsatMain {
         return 0
     }
 
+    if ($A.Receipt -and -not $A.Replay) { throw 'The -Receipt parameter verifies a package and requires -Replay <assessment.vsat.zip>.' }
+    $engagement = if ($A.EngagementStart) { Resolve-VsatEngagementStart -Value $A.EngagementStart -RunStartUtc (Get-VsatUtcNow) } else { $null }
+
     $outDir = Resolve-VsatOutputDir $A.OutputPath
     [void](New-Item -ItemType Directory -Path $outDir -Force)
     [void](Protect-VsatDirectory -Path $outDir)
@@ -259,15 +312,29 @@ function Invoke-VsatMain {
     $baseline = Read-VsatBaseline $A.Baseline
 
     if ($A.Replay) {
+        if ($A.CollectOnly) { Write-VsatLog -Level warn -Source 'replay' -Message '-CollectOnly has no effect with -Replay; the package is evaluated' }
+        $receiptCheck = $null
+        if ($A.Receipt) {
+            # Verified before the package is opened: a mismatch never produces a report.
+            try { $receiptCheck = Test-VsatReplayReceipt -Path $A.Replay -Code $A.Receipt }
+            catch { Write-VsatLog -Level error -Source 'receipt' -Message $_.Exception.Message; Write-Host (" RECEIPT NOT VERIFIED: {0}" -f (Protect-VsatText $_.Exception.Message)) -ForegroundColor Red; return 3 }
+            if (-not $receiptCheck.verified) {
+                Write-VsatLog -Level error -Source 'receipt' -Message "Receipt mismatch: $($A.Replay) has receipt $($receiptCheck.actual), expected $($receiptCheck.code). This is not the package from that session, or it was changed."
+                Write-Host (" RECEIPT MISMATCH: this package has {0}, expected {1}. It is not the package from that session, or it was changed." -f $receiptCheck.actual, $receiptCheck.code) -ForegroundColor Red
+                return 3
+            }
+            Write-VsatLog -Source 'receipt' -Message "Receipt verified: $($receiptCheck.code) matches $($receiptCheck.package)"
+        }
         $pkg = Read-VsatPackage -Path $A.Replay
         Write-VsatLog -Source 'replay' -Message "Replaying evidence from $($A.Replay) (integrity: $($pkg.integrity)); no connectivity or credentials used"
         $ev = ConvertTo-VsatLiveEvidence $pkg.evidence
         $ev.run.replayedUtc = Get-VsatUtcNow
+        Set-VsatEngagementWindow -Evidence $ev -Engagement $engagement
         # Re-applies the operator's current scope.json overrides onto replayed evidence (see
         # Merge-VsatScopeOverrides in 20-Model.ps1).
-        Merge-VsatScopeOverrides -Scope $scope -EvidenceScope $ev.scope
-        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact
-        Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files
+        if ($scope) { Merge-VsatScopeOverrides -Scope $scope -EvidenceScope $ev.scope }
+        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact -ReceiptCheck $receiptCheck
+        Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files -Receipt $r.receipt
         if (-not $A.Cli -and -not $A.NoBrowser) { Open-VsatBrowser (Join-Path $outDir 'report.html') }
         return $r.results.status.exitCode
     }
@@ -275,8 +342,14 @@ function Invoke-VsatMain {
     if ($A.Demo -and $A.Cli) {
         Write-VsatLog -Source 'demo' -Message 'Running against the built-in synthetic lab (no connectivity)'
         $ev = Get-VsatDemoEvidence
+        Set-VsatEngagementWindow -Evidence $ev -Engagement $engagement
+        if ($A.CollectOnly) {
+            $c = Write-VsatCollectOnly -Evidence $ev -OutputDir $outDir
+            Write-VsatCollectSummary -Evidence $ev -OutputDir $outDir -Files $c.files -Receipt $c.receipt
+            return 0
+        }
         $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact
-        Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files
+        Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files -Receipt $r.receipt
         return $r.results.status.exitCode
     }
 
@@ -286,6 +359,7 @@ function Invoke-VsatMain {
         $t = Get-VsatCliTargets -Servers $A.Server -NsxServers $A.NsxServer -Scope $scope -Credential $A.Credential -NsxCred $A.NsxCredential -Interactive:$interactive
         if ($t.declaredAbsent) { if (-not $scope) { $scope = [ordered]@{} }; $scope.nsxDeclaredAbsent = $true }
         $ev = New-VsatEvidence -Mode live -Scope $scope
+        Set-VsatEngagementWindow -Evidence $ev -Engagement $engagement
         $cancelHandler = $null
         try {
             [Console]::TreatControlCAsInput = $false
@@ -293,12 +367,26 @@ function Invoke-VsatMain {
             Invoke-VsatPlatformCollection -Evidence $ev -A $A
         }
         catch { Write-VsatLog -Level error -Message "Collection aborted: $($_.Exception.Message)" }
+        if ($A.CollectOnly) {
+            $c = Write-VsatCollectOnly -Evidence $ev -OutputDir $outDir
+            Write-VsatCollectSummary -Evidence $ev -OutputDir $outDir -Files $c.files -Receipt $c.receipt
+            return (Get-VsatCollectOnlyExitCode -Evidence $ev)
+        }
         $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact
-        Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files
+        Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files -Receipt $r.receipt
         return $r.results.status.exitCode
     }
 
     return (Invoke-VsatUi -A $A -Scope $scope -OutputDir $outDir -ProfileName $profileName -Baseline $baseline)
+}
+
+function Get-VsatCollectOnlyExitCode {
+    # 0 when the package holds evidence from at least one endpoint, 3 when nothing was collected.
+    param([Parameter(Mandatory)]$Evidence)
+    if ($Evidence.run.mode -ne 'live') { return 0 }
+    if ($Evidence.run.status -eq 'canceled') { return 4 }
+    if (@($Evidence.scope.endpoints | Where-Object { $_.status -in @('collected', 'partial') }).Count) { return 0 }
+    return 3
 }
 
 function Invoke-VsatUi {
@@ -307,6 +395,7 @@ function Invoke-VsatUi {
     $state.version = $script:VsatVersion
     $state.mode = $(if ($A.Demo) { 'demo' } else { 'live' })
     $state.profile = $ProfileName
+    $state.collectOnly = [bool]$A.CollectOnly
     $state.phase = 'setup'
     $state.token = New-VsatToken
     $state.cookieToken = New-VsatToken
@@ -337,6 +426,7 @@ function Invoke-VsatUi {
     if (-not $A.NoBrowser) { Open-VsatBrowser $url }
     $evidenceScope = $Scope
     $lastEvidence = $null; $exit = 2
+    $engagement = if ($A.EngagementStart) { Resolve-VsatEngagementStart -Value $A.EngagementStart -RunStartUtc (Get-VsatUtcNow) } else { $null }
     try {
         while (-not $state.shutdown) {
             $cmd = $null
@@ -401,19 +491,30 @@ function Invoke-VsatUi {
                         if ($state.mode -eq 'demo') {
                             $ev = Get-VsatDemoEvidence
                             $ev.scope.nsxDeclaredAbsent = $sc.nsxDeclaredAbsent
+                            Set-VsatEngagementWindow -Evidence $ev -Engagement $engagement
                             $state.progress.totalSteps = 3
                             foreach ($i in 1..3) { Update-VsatProgress -Phase 'collecting' -Message "Loading synthetic lab ($i/3)" -Step; Start-Sleep -Milliseconds 300 }
                         }
                         else {
                             $ev = New-VsatEvidence -Mode live -Scope $sc
+                            Set-VsatEngagementWindow -Evidence $ev -Engagement $engagement
                             Invoke-VsatLiveCollection -Evidence $ev -Targets @($targets.Values)
+                        }
+                        if ($state.collectOnly) {
+                            # Collect-only: the browser shows the receipt, never findings or the report.
+                            $c = Write-VsatCollectOnly -Evidence $ev -OutputDir $OutputDir
+                            $state.result = @{ collectOnly = $true; receipt = $c.receipt; outputDir = $OutputDir; runId = [string]$ev.run.id; files = @($c.files) }
+                            $exit = Get-VsatCollectOnlyExitCode -Evidence $ev
+                            $state.phase = $(if ($ev.run.status -eq 'canceled') { 'canceled' } else { 'done' })
+                            Write-VsatCollectSummary -Evidence $ev -OutputDir $OutputDir -Files $c.files -Receipt $c.receipt
+                            break
                         }
                         $r = Complete-VsatRun -Evidence $ev -ProfileName $cmd.profile -OutputDir $OutputDir -BaselineEvidence $Baseline -Redact:$A.Redact
                         $state.reportHtml = [System.IO.File]::ReadAllText((Join-Path $OutputDir 'report.html'))
-                        $state.result = @{ status = $r.results.status; summary = $r.results.summary; outputDir = $OutputDir; runId = [string]$r.results.run.id; reportUrl = '/report'; files = @($r.files); blastRadius = $r.results.analysis.blastRadius; workPackageCatalog = @($r.results.analysis.workPackageCatalog); workPackages = @($r.results.analysis.workPackages | ForEach-Object { [ordered]@{ id = $_.id; title = $_.title } }) }
+                        $state.result = @{ status = $r.results.status; summary = $r.results.summary; outputDir = $OutputDir; runId = [string]$r.results.run.id; reportUrl = '/report'; files = @($r.files); receipt = $r.receipt; blastRadius = $r.results.analysis.blastRadius; workPackageCatalog = @($r.results.analysis.workPackageCatalog); workPackages = @($r.results.analysis.workPackages | ForEach-Object { [ordered]@{ id = $_.id; title = $_.title } }) }
                         $state.phase = $(if ($r.results.status.overall -eq 'canceled') { 'canceled' } else { 'done' })
                         $exit = $r.results.status.exitCode
-                        Write-VsatSummary -Results $r.results -OutputDir $OutputDir -Files $r.files
+                        Write-VsatSummary -Results $r.results -OutputDir $OutputDir -Files $r.files -Receipt $r.receipt
                     }
                     catch {
                         Write-VsatLog -Level error -Message "Assessment failed: $($_.Exception.Message)"

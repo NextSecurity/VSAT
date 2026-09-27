@@ -1,0 +1,21 @@
+{
+  "note": "The 'events' fact produced by the Hyper-V collector script (Get-WinEvent). The Security log read was denied (no Event Log Readers membership).",
+  "status": "denied",
+  "error": "Security: Attempted to perform an unauthorized operation.",
+  "value": {
+    "windowStartUtc": "2026-09-12T00:00:00Z",
+    "account": "EXAMPLE\\svc-vsat",
+    "sources": [
+      { "log": "System", "status": "ok", "oldestUtc": "2026-08-01T00:00:00Z", "count": 2, "truncated": false },
+      { "log": "Security", "status": "denied", "oldestUtc": null, "count": 0, "truncated": false, "error": "Attempted to perform an unauthorized operation." },
+      { "log": "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall", "status": "ok", "oldestUtc": "2026-09-14T06:00:00Z", "count": 1, "truncated": false },
+      { "log": "Microsoft-Windows-Hyper-V-VMMS-Admin", "status": "ok", "oldestUtc": "2026-07-01T00:00:00Z", "count": 1, "truncated": false }
+    ],
+    "entries": [
+      { "utc": "2026-09-22T09:30:00Z", "log": "System", "id": 7040, "user": "EXAMPLE\\jdoe", "message": "The start type of the Print Spooler service was changed from auto start to disabled.", "target": "Spooler" },
+      { "utc": "2026-09-20T09:00:00Z", "log": "System", "id": 7045, "user": "NT AUTHORITY\\SYSTEM", "message": "A service was installed in the system.", "target": "" },
+      { "utc": "2026-09-21T13:00:00Z", "log": "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall", "id": 2005, "user": "EXAMPLE\\jdoe", "message": "A rule has been modified in the Windows Defender Firewall exception list.", "target": "Remote Desktop - User Mode (TCP-In)" },
+      { "utc": "2026-09-19T08:00:00Z", "log": "Microsoft-Windows-Hyper-V-VMMS-Admin", "id": 18304, "user": "EXAMPLE\\ops1", "message": "The virtual machine 'web-hv01' was modified.", "target": "" }
+    ]
+  }
+}

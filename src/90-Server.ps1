@@ -124,7 +124,7 @@ $script:VsatServerScript = {
     function Get-PublicState {
         $p = $State.progress
         return [ordered]@{
-            version = $State.version; mode = $State.mode; profile = $State.profile; phase = $State.phase
+            version = $State.version; mode = $State.mode; profile = $State.profile; phase = $State.phase; collectOnly = [bool]$State.collectOnly
             doctor = $State.doctor; endpoints = @($State.endpoints); nsx = $State.nsx
             progress = [ordered]@{ phase = $p.phase; message = $p.message; step = $p.step; totalSteps = $p.totalSteps; counts = $p.counts; log = @($p.log | Select-Object -Last 50) }
             result = $State.result

@@ -34,6 +34,9 @@ and namespaced by endpoint; names and IP addresses are never used as identity.
                       "rationale": "…", "expires": "2026-12-31" } ],
     "nsxDeclaredAbsent": false
   },
+  // 2.4: run.engagementStartUtc (change window start) and run.collectOnly (true for -CollectOnly runs).
+  // New facts: 'events' on vCenter/ESXi endpoint roots (Get-VIEvent) and on hyperv-host (Get-WinEvent),
+  // 'changes' on kvm-host (file mtimes, package log, logins); NSX objects carry props.lastModifiedUtc/lastModifiedUser.
   "assets": [
     {
       "id": "ep-vc01:host-12",            // <endpointId>:<moref|nsx-path>
@@ -185,6 +188,17 @@ does not expose it). Only `ok` and `absent` can yield `PASS`/`FAIL`.
                       "findingKeys": [], "workPackage": "WP-MGMT-ISOLATION", "note": null } ],
       "notes":    [ "AD group nesting not collected; principals are joined by exact normalized name only" ]
     },
+    "changes": {       // 2.4: change timeline from the platforms' own logs (pure function of evidence; replay reproduces it)
+      "windowStartUtc": "2026-09-09T00:00:00Z", "windowEndUtc": "…", "windowSource": "parameter|default",   // -EngagementStart, default 30 days back
+      "entries": [ { "id": "C-4003315a", "utc": "…", "endpointId": "ep-vc01", "assetId": "ep-vc01:host-10", "assetName": "esx01",
+                     "user": "EXAMPLE\\ops1", "category": "access|service|firewall|settings|vm|patch|login",
+                     "action": "Task: Stop service (SSH)", "source": "vcenter-event|nsx-object|windows-event|file-mtime|package-log|wtmp" } ],
+      "historyStartUtcByEndpoint": { "ep-vc01": "…" },    // oldest record each endpoint returned
+      "gaps": [ { "endpointId", "reason" } ],             // history shorter than the window, log full or cleared, reads denied
+      "sources": [ … ],                                   // per endpoint: which logs were read and their status
+      "accountSessions": [ { "endpointId", "user", "count", "firstUtc", "lastUtc", "entryIds": [] } ],   // earlier sign-ins by the account VSAT used
+      "summary": { "entries": 9, "changedChecks": 30, "changedPassing": 25 }
+    },
     "drift": null  // or { "baselineRunId", "baselineUtc", "counts": { "new":0,"resolved":0,"changed":0,"unassessed":0,"unchanged":0 },
                    //       "items": [ { "key", "ruleId", "assetId", "assetName", "change": "new|resolved|changed|unassessed", "before", "after" } ],
                    //       "assets": { "added": [], "removed": [] }, "nsxRules": { "added":0, "removed":0, "modified":0 } }
@@ -196,6 +210,12 @@ does not expose it). Only `ok` and `absent` can yield `PASS`/`FAIL`.
   "nsx": { /* copied from evidence.nsx */ }
 }
 ```
+
+Findings may carry `changedInWindow: ["C-…"]` (2.4): the change entries inside the engagement window that touched the
+checked setting or service (or, when the entry does not name one, the rule's `changeCategory` on that asset). The result
+itself is never changed by it. `manifest.json` next to the package carries `package { name, sha256, bytes }` and the
+`receipt` code (`VSAT-XXXX-XXXX-XXXX-XXXX`, the first 80 bits of the package SHA-256 in Crockford base32); a replay
+with `-Receipt` records `receiptVerification { expected, actual, match }` in the results.
 
 ## 3. Result semantics
 

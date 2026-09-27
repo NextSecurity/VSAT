@@ -6,6 +6,24 @@ The format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-09-27
+
+Adds **Audit integrity** for audits the customer runs with their own rights: the auditor can see what changed during the engagement and prove the evidence package is the one from the session.
+
+### Added
+
+- Change timeline from the platforms' own history since the engagement started: vCenter/ESXi events, NSX "last modified" data, Windows event logs on Hyper-V hosts, and file changes, package history and logins on KVM hosts. `-EngagementStart <yyyy-MM-dd>` sets the window (default 30 days, up to 180).
+- "Changed during engagement" on findings whose setting or service changed inside the window. The result itself is unchanged.
+- Earlier-runs detector: earlier sign-ins by the account VSAT uses.
+- Coverage domain `change-history` (non-mandatory): reports when a platform's history starts after the engagement start, when logs were full or cleared, or when reads were denied.
+- Receipt code `VSAT-XXXX-XXXX-XXXX-XXXX` at the end of every run, derived from the evidence package hash. `-Replay <zip> -Receipt <code>` verifies it; a mismatch exits with code 3.
+- `-CollectOnly`: writes only the evidence package, collection log and manifest, and shows the receipt instead of findings.
+- `changes.csv` and an Engagement timeline section on the report's Changes page.
+
+### Fixed
+
+- `-Replay` without `-ScopeFile` no longer fails on an empty scope.
+
 ## [2.3.0] - 2026-09-27
 
 Adds **Blast radius**: pick a compromised account or VM and see what an attacker reaches across VMware, NSX, Hyper-V and KVM, and which fixes break the most paths.
@@ -152,7 +170,8 @@ These 1.x defects are covered by regression fixtures:
 - First release: the VMware vSphere security audit script `vsat.ps1`. It had PowerCLI-based `Ensure-*` checks derived from CIS VMware ESXi benchmark controls, console output and `vsat.log`.
 - The static ESXi patch list `vmware/patches.json`.
 
-[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.4.0
 [2.3.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.3.0
 [2.2.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.2.0
 [2.1.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.1.0

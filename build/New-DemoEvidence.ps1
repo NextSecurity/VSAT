@@ -35,6 +35,8 @@ $scope = [ordered]@{
 $ev = New-VsatEvidence -Mode demo -Scope $scope
 $ev.run.id = '00000000-0000-4000-8000-000000000d30'
 $ev.run.startedUtc = '2026-09-23T08:00:00Z'; $ev.run.endedUtc = '2026-09-23T08:03:41Z'; $ev.run.status = 'complete'
+# Fixed engagement start, so the demo timeline is the same whenever -Demo runs.
+$ev.run.engagementStartUtc = '2026-09-09T00:00:00Z'
 
 $vc = Add-VsatEndpoint -Evidence $ev -Type vcenter -Address 'vc01.example.local'
 $vc.resolvedAddresses = @('10.0.0.20')   # recorded at connect time; the vcsa01 VM below carries this IP
@@ -57,6 +59,27 @@ Set-VsatFact $root 'permissions' -Value @(
 Set-VsatFact $root 'roles' -Value @([ordered]@{ name = 'Admin'; system = $true; privilegeCount = 600; adminPrivileges = @('Authorization.ModifyPermissions', 'Host.Config.Settings') }, [ordered]@{ name = 'VirtualMachinePowerUser'; system = $false; privilegeCount = 40; adminPrivileges = @() })
 Set-VsatFact $root 'settings' -Value ([ordered]@{ 'event.maxAge' = '30'; 'task.maxAge' = '30'; 'VirtualCenter.VimPasswordExpirationInDays' = '30' })
 Set-VsatFact $root 'keyProviders' -Value @([ordered]@{ cluster = 'kms-cluster-01'; servers = @('kms01.example.local') })
+# Change history (Get-VIEvent projection, see ConvertTo-VsatVIEventFact): SSH on esx01 was stopped
+# three days before the run (its check now passes), web01 was reconfigured, esx05 settings changed,
+# and the VSAT account signed in twice before this run (private dry runs).
+function DemoEvent([string]$utc, [string]$type, [string]$desc, [string]$etid, [string]$user, [string]$msg, [string]$etype, [string]$moref, [string]$name, [string]$session) {
+    return [ordered]@{ utc = $utc; type = $type; descriptionId = $(if ($desc) { $desc } else { $null }); eventTypeId = $(if ($etid) { $etid } else { $null }); user = $user; message = $msg; entity = $(if ($moref) { [ordered]@{ type = $etype; moref = $moref; name = $name } } else { $null }); sessionId = $(if ($session) { $session } else { $null }) }
+}
+Set-VsatFact $root 'events' -Value ([ordered]@{
+        windowStartUtc = '2026-09-09T00:00:00Z'; oldestUtc = '2026-09-09T00:04:12Z'; coversWindowStart = $true; truncated = $false; maxSamples = 50000; recordsCapped = $false
+        account = 'EXAMPLE\svc-vsat'; currentSessionKey = '52d0c0de-0000-4000-8000-00000000c0de'
+        records = @(
+            (DemoEvent '2026-09-23T08:00:04Z' 'UserLoginSessionEvent' '' '' 'EXAMPLE\svc-vsat' 'User EXAMPLE\svc-vsat@10.0.0.5 logged in as PowerCLI' '' '' '' '52d0c0de-0000-4000-8000-00000000c0de')
+            (DemoEvent '2026-09-21T16:20:00Z' 'VmReconfiguredEvent' '' '' 'EXAMPLE\ops1' 'Reconfigured web01 on esx01.example.local in DC1' 'VirtualMachine' 'vm-201' 'web01' '')
+            (DemoEvent '2026-09-20T14:03:11Z' 'TaskEvent' 'host.ServiceSystem.updatePolicy' '' 'EXAMPLE\j.doe' 'Task: Update service activation policy (SSH: start and stop manually)' 'HostSystem' 'host-10' 'esx01.example.local' '')
+            (DemoEvent '2026-09-20T14:02:50Z' 'TaskEvent' 'host.ServiceSystem.stop' '' 'EXAMPLE\j.doe' 'Task: Stop service (SSH)' 'HostSystem' 'host-10' 'esx01.example.local' '')
+            (DemoEvent '2026-09-19T21:05:00Z' 'UserLoginSessionEvent' '' '' 'EXAMPLE\svc-vsat' 'User EXAMPLE\svc-vsat@10.0.0.77 logged in as PowerCLI' '' '' '' '52d0c0de-0000-4000-8000-000000000002')
+            (DemoEvent '2026-09-18T09:15:00Z' 'PermissionAddedEvent' '' '' 'VSPHERE.LOCAL\Administrator' 'Permission created for EXAMPLE\j.doe on cl-prod, role is Admin, propagation is Enabled' 'ClusterComputeResource' 'domain-c8' 'cl-prod' '')
+            (DemoEvent '2026-09-16T11:00:00Z' 'TaskEvent' 'option.OptionManager.updateValues' '' 'EXAMPLE\ops1' 'Task: Update option values (Security.AccountLockFailures)' 'HostSystem' 'host-50' 'esx05.example.local' '')
+            (DemoEvent '2026-09-15T19:40:00Z' 'UserLoginSessionEvent' '' '' 'EXAMPLE\svc-vsat' 'User EXAMPLE\svc-vsat@10.0.0.77 logged in as PowerCLI' '' '' '' '52d0c0de-0000-4000-8000-000000000001')
+            (DemoEvent '2026-09-12T08:00:00Z' 'EventEx' '' 'esx.audit.lockdownmode.disabled' '' 'Administrator access to the host has been enabled.' 'HostSystem' 'host-50' 'esx05.example.local' '')
+        )
+    })
 
 $dc = Add-VsatAsset -Evidence $ev -Id "${E}:datacenter-2" -Type datacenter -Name 'DC1' -Endpoint $E
 $dc.site = 'DC1'
@@ -332,9 +355,13 @@ $gr = "$gp/rules/default_rule"
 $gra = Add-VsatAsset -Evidence $ev -Id "${NX}:$gr" -Type 'nsx-rule' -Name 'default_rule (t0-core)' -Endpoint $NX -Props ([ordered]@{ path = $gr; firewall = 'gfw'; policy = $gpa.id; policyName = 'Policy_Default_Infra'; category = 'Default'; policySequence = 0L; sequence = 1L; ruleId = 2; action = 'ALLOW'; direction = 'IN_OUT'; ipProtocol = 'IPV4_IPV6'; sources = @('ANY'); sourcesExcluded = $false; destinations = @('ANY'); destinationsExcluded = $false; services = @('ANY'); profiles = @('ANY'); appliedTo = @('/infra/tier-0s/t0-core'); policyAppliedTo = @('/infra/tier-0s/t0-core'); disabled = $false; logged = $false; isDefault = $true })
 Add-VsatRelationship -Evidence $ev -Source $gpa.id -Target $gra.id -Type contains
 
+# NSX objects carry their own last-modified stamp; one DFW rule was edited during the engagement.
+foreach ($a in @($ev.assets | Where-Object { $_.type -in @('nsx-rule', 'nsx-policy', 'nsx-group', 'nsx-segment', 'nsx-t0', 'nsx-t1') })) { $a.props.lastModifiedUtc = '2026-06-02T10:00:00Z'; $a.props.lastModifiedUser = 'admin' }
+foreach ($a in @($ev.assets | Where-Object { $_.type -eq 'nsx-rule' -and $_.name -eq 'decom-app-access' })) { $a.props.lastModifiedUtc = '2026-09-17T13:25:00Z'; $a.props.lastModifiedUser = 'EXAMPLE\netops' }
+
 # Collector records (all successful in the synthetic lab)
 $collectors = @(
-    @('vsphere.vcenter', $E, 1), @('vsphere.inventory', $E, 1), @('vsphere.hosts', $E, 5), @('vsphere.vds', $E, 8), @('vsphere.datastores', $E, 3), @('vsphere.vms', $E, $vmDefs.Count),
+    @('vsphere.vcenter', $E, 1), @('vsphere.events', $E, 9), @('vsphere.inventory', $E, 1), @('vsphere.hosts', $E, 5), @('vsphere.vds', $E, 8), @('vsphere.datastores', $E, 3), @('vsphere.vms', $E, $vmDefs.Count),
     @('nsx.manager', $NX, 1), @('nsx.fabric', $NX, 8), @('nsx.networking', $NX, 7), @('nsx.groups', $NX, 7), @('nsx.dfw', $NX, 13), @('nsx.gfw', $NX, 1), @('nsx.inventory', $NX, $vmDefs.Count))
 foreach ($c in $collectors) { $ev.collection.collectors.Add([ordered]@{ name = $c[0]; endpoint = $c[1]; status = 'ok'; startedUtc = '2026-09-23T08:00:05Z'; endedUtc = '2026-09-23T08:03:30Z'; objectCount = $c[2]; error = $null; affects = @() }) }
 foreach ($a in $ev.assets) { $a.observedUtc = '2026-09-23T08:02:00Z' }

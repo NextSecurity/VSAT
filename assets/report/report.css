@@ -151,6 +151,8 @@ main:focus { outline: none; }
 .notice-warn { border-color: var(--warn-border); border-left-color: var(--warn); background: var(--warn-bg); }
 .notice-bad { border-color: var(--bad-border); border-left-color: var(--bad); background: var(--bad-bg); }
 .notice-info { border-left-color: var(--accent); background: var(--accent-soft); }
+.notice-ok { border-color: var(--ok); border-left-color: var(--ok); background: var(--ok-bg); }
+.notice ul.plain { margin: 4px 0; padding-left: 18px; }
 .notice strong { display: block; margin-bottom: 2px; }
 
 .status-banner { display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: start; border-radius: var(--radius); padding: 18px 22px; border: 1px solid; border-left-width: 8px; margin-bottom: 16px; }
@@ -424,3 +426,14 @@ dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .br { --attack: var(--res-fail); --safe: var(--res-pass); --attack-soft: var(--sev-critical-bg); }
 .big-num.bad-num { color: var(--res-fail); }
 .big-num.ok-num { color: var(--res-pass); }
+.big-num.warn-num { color: var(--warn); }
+/* ---------- engagement timeline (Changes page) ---------- */
+.badge.chg-badge { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); text-transform: none; letter-spacing: 0; }
+.timeline .metric-row { margin-bottom: 12px; }
+.tl-filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.timeline td.tl-asset { min-width: 10rem; }
+.timeline td.tl-asset .linklike, .timeline td.tl-user { overflow-wrap: anywhere; }
+.timeline td.tl-user { min-width: 8.5rem; }
+.timeline td.tl-change { min-width: 14rem; }
+.chk-list { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+.chk { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }

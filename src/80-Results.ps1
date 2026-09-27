@@ -18,7 +18,10 @@ function Invoke-VsatAnalysisPipeline {
     $eval = Invoke-VsatRules -Evidence $Evidence -ProfileName $ProfileName
     $findings = $eval.findings
     Set-VsatExceptions -Evidence $Evidence -Findings $findings
-    $coverage = Get-VsatCoverage -Evidence $Evidence -Findings $findings
+    Update-VsatProgress -Message 'Building the engagement change timeline'
+    $changes = Get-VsatChangeAnalysis -Evidence $Evidence
+    Set-VsatChangedInWindow -Findings $findings -Changes $changes
+    $coverage = Get-VsatCoverage -Evidence $Evidence -Findings $findings -Changes $changes
     $status = Get-VsatRunStatus -Evidence $Evidence -Coverage $coverage -Findings $findings
     Update-VsatProgress -Message 'Modeling attack paths and failure impact'
     $paths = Get-VsatAttackPaths -Context $eval.context
@@ -34,7 +37,7 @@ function Invoke-VsatAnalysisPipeline {
     $impact = Get-VsatImpact -Context $eval.context
     $wps = Get-VsatWorkPackages -Findings $findings
     $results = New-VsatResultsObject -Evidence $Evidence -Eval $eval -Coverage $coverage -Status $status -ProfileName $ProfileName
-    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; workPackageCatalog = @(Get-VsatWorkPackageCatalog) }
+    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; workPackageCatalog = @(Get-VsatWorkPackageCatalog); changes = $changes }
     if ($BaselineEvidence) {
         Update-VsatProgress -Message 'Comparing with baseline'
         $saveIdx = $script:VsatAssetIndex
@@ -130,7 +133,9 @@ function Get-VsatReportData {
     foreach ($k in $Results.Keys) { $data[$k] = $Results[$k] }
     $data.findings = @(foreach ($f in $Results.findings) {
             if ($f.result -in @('PASS', 'NOT_APPLICABLE')) {
-                [ordered]@{ id = $f.id; key = $f.key; ruleId = $f.ruleId; title = $f.title; domain = $f.domain; assetId = $f.assetId; assetName = $f.assetName; assetType = $f.assetType; result = $f.result; severity = $f.severity; observed = $f.observed; expected = $f.expected; confidence = $f.confidence; exception = $f.exception }
+                $c = [ordered]@{ id = $f.id; key = $f.key; ruleId = $f.ruleId; title = $f.title; domain = $f.domain; assetId = $f.assetId; assetName = $f.assetName; assetType = $f.assetType; result = $f.result; severity = $f.severity; observed = $f.observed; expected = $f.expected; confidence = $f.confidence; exception = $f.exception }
+                if ($f.Contains('changedInWindow')) { $c.changedInWindow = $f.changedInWindow }
+                $c
             }
             else { $f }
         })
@@ -200,13 +205,15 @@ function Write-VsatOutputs {
         }
     }
     Export-VsatCsv -Rows @($wl) -Columns @('workPackage', 'title', 'team', 'maintenanceWindow', 'findingId', 'severity', 'ruleId', 'asset', 'action', 'validation', 'rollback') -Path (Join-Path $OutputDir 'worklist.csv')
-    $logText = ($script:VsatLog | ForEach-Object { "{0} [{1}] {2}: {3}" -f $_.t, $_.level, $_.source, $_.message }) -join [Environment]::NewLine
-    Write-VsatFile -Path (Join-Path $OutputDir 'collection.log') -Content $logText
-    $manifest = New-VsatManifest -Results $Results -OutputDir $OutputDir -Names @('evidence.json', 'results.json', 'report.html', 'attack-layer.json', 'findings.csv', 'worklist.csv', 'collection.log')
+    Export-VsatCsv -Rows @(Get-VsatChangeRows -Results $Results) -Columns @('id', 'utc', 'endpointId', 'assetId', 'assetName', 'user', 'category', 'action', 'source', 'checks') -Path (Join-Path $OutputDir 'changes.csv')
+    Write-VsatFile -Path (Join-Path $OutputDir 'collection.log') -Content (Get-VsatLogText)
+    $names = @('evidence.json', 'results.json', 'report.html', 'attack-layer.json', 'findings.csv', 'worklist.csv', 'changes.csv', 'collection.log')
+    $manifest = New-VsatManifest -Results $Results -OutputDir $OutputDir -Names $names
     Write-VsatFile -Path (Join-Path $OutputDir 'manifest.json') -Content (ConvertTo-VsatJson $manifest)
     $zip = Join-Path $OutputDir 'assessment.vsat.zip'
-    New-VsatPackage -Path $zip -SourceDir $OutputDir -Names @('evidence.json', 'results.json', 'report.html', 'attack-layer.json', 'findings.csv', 'worklist.csv', 'collection.log', 'manifest.json')
-    $out = @('report.html', 'results.json', 'evidence.json', 'attack-layer.json', 'findings.csv', 'worklist.csv', 'collection.log', 'manifest.json', 'assessment.vsat.zip')
+    New-VsatPackage -Path $zip -SourceDir $OutputDir -Names @($names + 'manifest.json')
+    $script:VsatLastReceipt = Complete-VsatReceipt -OutputDir $OutputDir -Manifest $manifest -Names $names
+    $out = @('report.html', 'results.json', 'evidence.json', 'attack-layer.json', 'findings.csv', 'worklist.csv', 'changes.csv', 'collection.log', 'manifest.json', 'assessment.vsat.zip')
     if ($Redact) {
         $red = Get-VsatRedactedCopy -Evidence $Evidence -Results $Results
         $rdir = Join-Path $OutputDir 'redacted'
@@ -225,17 +232,63 @@ function Write-VsatOutputs {
     return $out
 }
 
+function Get-VsatLogText {
+    return (($script:VsatLog | ForEach-Object { "{0} [{1}] {2}: {3}" -f $_.t, $_.level, $_.source, $_.message }) -join [Environment]::NewLine)
+}
+
+function Complete-VsatReceipt {
+    # The receipt is computed AFTER the zip is written (no circularity): it goes into the
+    # on-disk manifest.json and collection.log only. The copies inside the zip stay as zipped,
+    # and the on-disk manifest is re-hashed so its file list keeps matching the folder.
+    param([Parameter(Mandatory)][string]$OutputDir, [Parameter(Mandatory)]$Manifest, [Parameter(Mandatory)][string[]]$Names)
+    $zip = Join-Path $OutputDir 'assessment.vsat.zip'
+    $code = Get-VsatReceipt -Path $zip
+    $sha = Get-VsatSha256 -Path $zip
+    Write-VsatLog -Source 'receipt' -Message "Receipt code $code (SHA-256 of assessment.vsat.zip: $sha). Read this code to your auditor."
+    Write-VsatFile -Path (Join-Path $OutputDir 'collection.log') -Content (Get-VsatLogText)
+    $Manifest.files = @($Names | ForEach-Object { $p = Join-Path $OutputDir $_; [ordered]@{ name = $_; sha256 = (Get-VsatSha256 -Path $p); bytes = (Get-Item -LiteralPath $p).Length } })
+    $Manifest.package = [ordered]@{ name = 'assessment.vsat.zip'; sha256 = $sha; bytes = (Get-Item -LiteralPath $zip).Length }
+    $Manifest.receipt = $code
+    $Manifest.receiptNote = 'Receipt = first 80 bits of the SHA-256 of assessment.vsat.zip (Crockford base32). Verify with: vsat.ps1 -Replay assessment.vsat.zip -Receipt <code>. This file and collection.log were updated after the zip was written; the copies inside the zip do not contain the receipt.'
+    Write-VsatFile -Path (Join-Path $OutputDir 'manifest.json') -Content (ConvertTo-VsatJson $Manifest)
+    return $code
+}
+
+function Write-VsatCollectOnly {
+    # -CollectOnly: evidence package, log and manifest only. No findings, no report, so the
+    # easy "run, read, fix, rerun" loop is gone; the auditor replays the package later.
+    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][string]$OutputDir)
+    if (-not (Test-Path -LiteralPath $OutputDir)) { [void](New-Item -ItemType Directory -Path $OutputDir -Force) }
+    [void](Protect-VsatDirectory -Path $OutputDir)
+    Write-VsatLog -Source 'collect-only' -Message 'Collect-only run: writing the evidence package without findings or report'
+    $Evidence.collection.log = @($script:VsatLog)
+    $Evidence.run.collectOnly = $true
+    Write-VsatFile -Path (Join-Path $OutputDir 'evidence.json') -Content (ConvertTo-VsatJson $Evidence)
+    Write-VsatFile -Path (Join-Path $OutputDir 'collection.log') -Content (Get-VsatLogText)
+    $manifest = New-VsatManifest -Evidence $Evidence -OutputDir $OutputDir -Names @('evidence.json', 'collection.log')
+    Write-VsatFile -Path (Join-Path $OutputDir 'manifest.json') -Content (ConvertTo-VsatJson $manifest)
+    New-VsatPackage -Path (Join-Path $OutputDir 'assessment.vsat.zip') -SourceDir $OutputDir -Names @('evidence.json', 'collection.log', 'manifest.json')
+    # evidence.json lives only inside the package; the folder holds exactly three files.
+    Remove-Item -LiteralPath (Join-Path $OutputDir 'evidence.json') -Force
+    $manifest.packageFiles = @('evidence.json', 'collection.log', 'manifest.json')
+    $code = Complete-VsatReceipt -OutputDir $OutputDir -Manifest $manifest -Names @('collection.log')
+    return [ordered]@{ receipt = $code; files = @('assessment.vsat.zip', 'collection.log', 'manifest.json') }
+}
+
 function New-VsatManifest {
-    param($Results, [string]$OutputDir, [string[]]$Names)
+    # With -Results: a full assessment. With -Evidence only: a collect-only package.
+    param($Results, [string]$OutputDir, [string[]]$Names, $Evidence)
     $pcli = $null
     try { $m = Get-Module VMware.VimAutomation.Core -ErrorAction SilentlyContinue | Select-Object -First 1; if ($m) { $pcli = [string]$m.Version } } catch { }
+    $run = if ($Results) { $Results.run } else { $Evidence.run }
     return [ordered]@{
         schemaVersion = $script:VsatSchemaVersion
         tool = [ordered]@{ name = 'VSAT'; version = $script:VsatVersion; buildCommit = $script:VsatBuildCommit }
-        rulePack = $Results.rulePack.version; advisorySnapshot = $Results.advisory.snapshotDate
-        runId = $Results.run.id; startedUtc = $Results.run.startedUtc; endedUtc = $Results.run.endedUtc; mode = $Results.run.mode
-        status = $Results.status.overall; statusLabel = $Results.status.label; exitCode = $Results.status.exitCode
-        coverage = @($Results.coverage.domains | ForEach-Object { [ordered]@{ domain = $_.id; state = $_.state } })
+        rulePack = $(if ($Results) { $Results.rulePack.version } else { (Get-VsatRulePack).version }); advisorySnapshot = $(if ($Results) { $Results.advisory.snapshotDate } else { (Get-VsatAdvisoryData).snapshotDate })
+        runId = $run.id; startedUtc = $run.startedUtc; endedUtc = $run.endedUtc; mode = $run.mode
+        engagementStartUtc = (Get-VsatProp $run 'engagementStartUtc')
+        status = $(if ($Results) { $Results.status.overall } else { 'collected' }); statusLabel = $(if ($Results) { $Results.status.label } else { 'COLLECTED: EVIDENCE ONLY (replay to evaluate)' }); exitCode = $(if ($Results) { $Results.status.exitCode } else { $null })
+        coverage = @(if ($Results) { $Results.coverage.domains | ForEach-Object { [ordered]@{ domain = $_.id; state = $_.state } } })
         dependencies = [ordered]@{ powershell = [string]$PSVersionTable.PSVersion; edition = [string]$PSVersionTable.PSEdition; os = [string][Environment]::OSVersion.VersionString; powercli = $pcli }
         files = @($Names | ForEach-Object { $p = Join-Path $OutputDir $_; [ordered]@{ name = $_; sha256 = (Get-VsatSha256 -Path $p); bytes = (Get-Item -LiteralPath $p).Length } })
         note = 'SHA-256 hashes provide integrity checking of this package, not proof that source systems reported truthfully. Contains sensitive infrastructure data.'
@@ -372,6 +425,14 @@ function Get-VsatRedactedCopy {
         if ($nm -match '[\\@]') { & $add $nm 'principal' }
         elseif ($nm.Length -ge 1 -and -not $bare.Contains($nm)) { $counters['principal'] = [int]$counters['principal'] + 1; $bare[$nm] = '{0}-{1:d4}' -f 'principal', $counters['principal'] }
     }
+    # Change timeline users: domain-qualified names join the global map; bare local names
+    # (root, admin, vsat) are replaced only in the timeline's user fields below.
+    $changeUsers = [ordered]@{}
+    $ch = Get-VsatProp $Results 'analysis.changes' $null
+    foreach ($u in @(@(Get-VsatProp $ch 'entries' @()) + @(Get-VsatProp $ch 'accountSessions' @()) | Where-Object { $_ } | ForEach-Object { [string]$_.user } | Where-Object { $_ })) {
+        if ($u -match '[\\@]') { & $add $u 'principal' }
+        elseif (-not $changeUsers.Contains($u)) { $counters['user'] = [int]$counters['user'] + 1; $changeUsers[$u] = '{0}-{1:d4}' -f 'user', $counters['user'] }
+    }
     $keys = @($map.Keys | Sort-Object { - $_.Length })
     $ipMap = @{}
     # One compiled alternation keeps redaction linear in the size of each string.
@@ -383,6 +444,8 @@ function Get-VsatRedactedCopy {
     $ev = Invoke-VsatRedactValue -Value $Evidence -Ctx $ctx
     $res = Invoke-VsatRedactValue -Value $Results -Ctx $ctx
     if ($bare.Count) { Protect-VsatRedactBlastPrincipals -Blast (Get-VsatProp $res 'analysis.blastRadius' $null) -Bare $bare }
+    $rch = Get-VsatProp $res 'analysis.changes' $null
+    if ($rch -and $changeUsers.Count) { foreach ($x in @(@($rch.entries) + @($rch.accountSessions))) { if ($x -and $x.user -and $changeUsers.Contains([string]$x.user)) { $x.user = $changeUsers[[string]$x.user] } } }
     $res.redacted = [ordered]@{ pseudonyms = $map.Count; ipAddresses = $ctx.ipMap.Count; note = 'Names, addresses, UUIDs and principals replaced with consistent pseudonyms. Review before sharing.' }
     return [ordered]@{ evidence = $ev; results = $res }
 }

@@ -1,0 +1,16 @@
+==VSAT:SECTION change-window==
+since=1789171200
+since_day=2026-09-12
+tz=+0000
+account=vsat
+
+==VSAT:SECTION file-mtimes==
+1790400000 /etc/ssh/sshd_config
+denied /etc/sudoers.d
+denied /etc/libvirt/qemu
+
+==VSAT:SECTION package-log==
+denied=/var/log/dnf.rpm.log
+
+==VSAT:SECTION logins==
+last: cannot open /var/log/wtmp: Permission denied

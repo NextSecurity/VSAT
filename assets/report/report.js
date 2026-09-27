@@ -102,7 +102,7 @@
   const RESULTS = ['FAIL', 'UNKNOWN', 'ERROR', 'MANUAL', 'PASS', 'NOT_APPLICABLE'];
   const RESULT_RANK = { FAIL: 5, ERROR: 4, UNKNOWN: 3, MANUAL: 2, PASS: 1, NOT_APPLICABLE: 0 };
   const RESULT_LABEL = { PASS: 'Pass', FAIL: 'Fail', MANUAL: 'Manual', UNKNOWN: 'Unknown', ERROR: 'Error', NOT_APPLICABLE: 'N/A' };
-  const DOMAIN_LABEL = { vcenter: 'vCenter', esxi: 'ESXi', cluster: 'Cluster', vm: 'VM', network: 'Network', nsx: 'NSX', storage: 'Storage' };
+  const DOMAIN_LABEL = { vcenter: 'vCenter', esxi: 'ESXi', cluster: 'Cluster', vm: 'VM', network: 'Network', nsx: 'NSX', storage: 'Storage', 'change-history': 'Change history' };
   const TYPE_LABEL = {
     site: 'Site', vcenter: 'vCenter', datacenter: 'Datacenter', cluster: 'Cluster', host: 'Host', vm: 'VM', vss: 'Std switch', vds: 'Dist. switch',
     portgroup: 'Port group', dvportgroup: 'DV port group', pnic: 'Physical NIC', vmknic: 'VMkernel NIC', datastore: 'Datastore',
@@ -164,6 +164,25 @@
   function worstOf(list) { let w = null; list.forEach(function (f) { const s = sevOk(f.severity); if (f.result === 'FAIL' && s && (w === null || SEV_RANK[s] > SEV_RANK[w])) w = s; }); return w; }
   function assetWorst(a) { const s = sevOk(a && a.worstSeverity); return s || worstOf(findingsByAsset.get(str(a && a.id)) || []); }
   function assetFails(a) { const c = obj(a && a.findingCounts); if (c.FAIL !== undefined) return num(c.FAIL); return (findingsByAsset.get(str(a && a.id)) || []).filter(function (f) { return f.result === 'FAIL'; }).length; }
+
+  // ---------- engagement change timeline (results.analysis.changes; absent before VSAT 2.4) ----------
+  const hasChanges = !!(analysis.changes && typeof analysis.changes === 'object');
+  const changes = obj(analysis.changes);
+  const changeEntries = arr(changes.entries).filter(function (e) { return e && typeof e === 'object' && e.id !== undefined && e.id !== null; });
+  const changeById = new Map();
+  changeEntries.forEach(function (e) { changeById.set(str(e.id), e); });
+  const findingsByChange = new Map();
+  findings.forEach(function (f) {
+    arr(f.changedInWindow).forEach(function (id) { const k = str(id); if (!findingsByChange.has(k)) findingsByChange.set(k, []); findingsByChange.get(k).push(f); });
+  });
+  const endpointById = new Map();
+  arr(obj(D.scope).endpoints).forEach(function (e) { if (e && e.id !== undefined) endpointById.set(str(e.id), e); });
+  const CAT_LABEL = { access: 'Access', service: 'Service', firewall: 'Firewall', settings: 'Settings', vm: 'VM', patch: 'Patch', login: 'Sign-in' };
+  const SRC_LABEL = { 'vcenter-event': 'vCenter event', 'nsx-object': 'NSX object timestamp', 'windows-event': 'Windows event log', 'file-mtime': 'File modification time', 'package-log': 'Package history', 'wtmp': 'Login record (wtmp)' };
+  function isChanged(f) { return arr(f && f.changedInWindow).length > 0; }
+  function changedBadge(f) { return isChanged(f) ? h('span', { class: 'badge no-dot chg-badge', title: 'The setting this check reads was changed during the engagement. The result shows the current state.' }, 'Changed during engagement') : null; }
+  function endpointLabel(id) { const e = endpointById.get(str(id)); return e ? str(e.address) || str(id) : str(id); }
+  function day(s) { return str(s).slice(0, 10) || '-'; }
 
   // ---------- badges ----------
   function sevBadge(s) { const v = sevOk(s); return h('span', { class: 'badge sev-' + (v || 'none') }, v ? v : 'none'); }
@@ -271,7 +290,8 @@
       h('div', { class: 'badges' }, resBadge(f.result), sevBadge(f.severity),
         h('span', { class: 'badge no-dot sev-info' }, 'Priority ' + num(pr.score)),
         h('span', { class: 'badge no-dot sev-info' }, 'Confidence: ' + (str(f.confidence) || 'n/a')),
-        ex ? h('span', { class: 'badge no-dot ' + (ex.active ? 'sev-low' : 'sev-high') }, ex.active ? 'Exception active' : 'Exception expired') : null),
+        ex ? h('span', { class: 'badge no-dot ' + (ex.active ? 'sev-low' : 'sev-high') }, ex.active ? 'Exception active' : 'Exception expired') : null,
+        changedBadge(f)),
       h('h3', null, str(fx(f, 'title')) || str(f.ruleId)),
       isCompact(f) ? h('p', { class: 'small muted' }, 'Compact result: description, frameworks and mitigation shown from the rule catalogue.') : null,
       h('p', { class: 'muted small mono break' }, str(f.ruleId) + (f.ruleVersion ? ' v' + str(f.ruleVersion) : '') + ' · ' + str(f.id) + ' · ' + (DOMAIN_LABEL[f.domain] || str(f.domain))),
@@ -279,6 +299,14 @@
       h('div', { class: 'actions' },
         btn('Show on topology', function () { showOnTopology(f.assetId); }, 'btn-primary btn-sm'),
         m.workPackage ? btn('Open work package', function () { gotoWorkPackage(m.workPackage); }, 'btn-sm') : null),
+      isChanged(f) ? section('Changed during engagement', h('div', null,
+        h('p', { class: 'small muted' }, 'The result above reflects the setting as collected. It was changed during the engagement window:'),
+        h('ul', { class: 'mini-list' }, arr(f.changedInWindow).map(function (id) {
+          const e = changeById.get(str(id));
+          if (!e) return h('li', null, h('span', { class: 'mono small' }, str(id)));
+          return h('li', null, h('span', { class: 'grow' }, h('strong', null, fmtTime(e.utc)), ' · ', str(e.user) || 'user not recorded', h('span', { class: 'sub small break' }, str(e.action))));
+        })),
+        linkBtn('Open the engagement timeline', function () { closePanel(); go('changes'); }))) : null,
       section('Why it matters', rationale ? h('p', { class: 'break' }, str(rationale)) : null),
       section('Observed vs expected', h('div', { class: 'obs-exp' },
         h('div', null, h('div', { class: 'lbl' }, 'Observed'), h('div', { class: 'val' }, str(f.observed) || '-')),
@@ -523,6 +551,11 @@
     const exitMap = { 0: 'clean', 1: 'findings present', 2: 'incomplete', 3: 'fatal', 4: 'canceled' };
     const rp = obj(D.rulePack), adv = obj(D.advisory);
     el.appendChild(pageHead('h-overview', 'Overview', 'Security findings, assessment coverage and evidence confidence are separate dimensions — read all three.'));
+    const rv = obj(D.receiptVerification);
+    if (rv.verified === true) {
+      el.appendChild(h('div', { class: 'notice notice-ok', role: 'status' }, h('strong', null, 'Receipt verified'),
+        'This evidence package matches receipt ', h('span', { class: 'mono' }, str(rv.code)), ', the code read out when it was collected (', h('span', { class: 'mono' }, str(rv.package)), ').'));
+    }
     el.appendChild(h('div', { class: 'status-banner ' + cls, role: 'status' },
       h('div', { class: 'st-icon', 'aria-hidden': 'true' }, icon),
       h('div', null,
@@ -580,6 +613,20 @@
         crownN ? h('p', null, h('span', { class: 'big-num' + (reachN ? ' bad-num' : ' ok-num') }, fmtN(reachN)), ' of ' + fmtN(crownN) + ' crown jewels are reachable from ' + fmtN(arr(br.entries).length) + ' starting points, through ' + fmtN(pathN) + ' attack paths.')
           : h('p', null, 'No crown jewels in this assessment. Mark critical assets in the scope file to trace paths to them.'),
         h('p', { class: 'small muted' }, 'Based on collected configuration; not proof of exploitability.' + (bb.truncated ? ' Results are partial (search bounds hit).' : '')))));
+    }
+
+    // engagement timeline summary
+    if (hasChanges) {
+      const cs = obj(changes.summary);
+      const sess = arr(changes.accountSessions).filter(function (x) { return x && num(x.count) > 0; });
+      const gaps = arr(changes.gaps);
+      const passing = num(cs.changedPassing);
+      el.appendChild(h('div', { class: 'section' }, h('div', { class: 'card' },
+        h('div', { class: 'card-head' }, h('h2', null, 'Engagement timeline'), btn('Open timeline →', function () { go('changes'); }, 'btn-sm')),
+        h('p', null, h('span', { class: 'big-num' + (passing ? ' warn-num' : '') }, fmtN(passing)), ' checks pass now but changed during the engagement.'),
+        h('p', { class: 'small muted' }, fmtN(changeEntries.length) + ' platform change' + (changeEntries.length === 1 ? '' : 's') + ' recorded since ' + day(changes.windowStartUtc) + '.'),
+        sess.length ? h('p', { class: 'small' }, h('span', { class: 'state state-warn' }, 'Earlier runs'), ' ', sess.map(function (x, i) { return (i ? '; ' : '') + str(x.user) + ' signed in ' + fmtN(x.count) + ' time' + (num(x.count) === 1 ? '' : 's') + ' before this run on ' + endpointLabel(x.endpointId); }).join('') + '.') : null,
+        gaps.length ? h('p', { class: 'small' }, h('span', { class: 'state state-warn' }, 'History gap'), ' ', gaps.map(function (g) { return endpointLabel(g.endpointId) + ': ' + str(g.text); }).join('; ') + '.') : null)));
     }
 
     // coverage domain cards
@@ -641,7 +688,7 @@
     doms.sort(function (a, b) { return (b.mandatory ? 1 : 0) - (a.mandatory ? 1 : 0); });
     return doms;
   }
-  const PLATFORM_LABEL = { vmware: 'VMware vSphere / NSX', hyperv: 'Microsoft Hyper-V', kvm: 'KVM', 'cross-platform': 'Cross-platform lenses' };
+  const PLATFORM_LABEL = { vmware: 'VMware vSphere / NSX', hyperv: 'Microsoft Hyper-V', kvm: 'KVM', 'cross-platform': 'Cross-platform lenses', audit: 'Audit integrity' };
   function coverageGroups(domains) {
     const hasPlatform = domains.some(function (d) { return d.platform; });
     if (!hasPlatform) return h('div', { class: 'grid grid-auto' }, domains.map(coverageCard));
@@ -738,7 +785,7 @@
           { key: 'priority', label: 'Priority', num: true, defaultDir: 'desc', sort: function (f) { return num(obj(f.priority).score); }, render: function (f) { return h('span', { class: 'score' }, String(num(obj(f.priority).score))); } },
           { key: 'result', label: 'Result', defaultDir: 'desc', sort: function (f) { return RESULT_RANK[f.result] || 0; }, render: function (f) { return resBadge(f.result); } },
           { key: 'severity', label: 'Severity', defaultDir: 'desc', sort: function (f) { return SEV_RANK[f.severity] || 0; }, render: function (f) { return sevBadge(f.severity); } },
-          { key: 'title', label: 'Finding', cls: 'title-cell', sort: function (f) { return str(f.title); }, render: function (f) { return [linkBtn(str(f.title) || str(f.ruleId), function () { openFinding(f); }), h('span', { class: 'sub mono' }, str(f.ruleId) + ' · ' + str(f.id))]; } },
+          { key: 'title', label: 'Finding', cls: 'title-cell', sort: function (f) { return str(f.title); }, render: function (f) { return [linkBtn(str(f.title) || str(f.ruleId), function () { openFinding(f); }), changedBadge(f) ? ' ' : null, changedBadge(f), h('span', { class: 'sub mono' }, str(f.ruleId) + ' · ' + str(f.id))]; } },
           { key: 'asset', label: 'Asset', sort: function (f) { return str(f.assetName); }, render: function (f) { return h('span', { class: 'break' }, str(f.assetName)); } },
           { key: 'type', label: 'Type', sort: function (f) { return str(f.assetType); }, render: function (f) { return typeLabel(f.assetType); } },
           { key: 'domain', label: 'Domain', sort: function (f) { return str(f.domain); }, render: function (f) { return DOMAIN_LABEL[f.domain] || str(f.domain); } },
@@ -1677,10 +1724,87 @@
   // Changes page
   // =====================================================================
   renderers.changes = function (el) {
+    el.appendChild(pageHead('h-changes', 'Changes', 'What changed on the platforms during the engagement, and how this run compares with a previous VSAT run.'));
+    renderTimeline(el);
+    const dw = h('section', { class: 'section', 'aria-labelledby': 'h-drift' }, h('h2', { id: 'h-drift' }, 'Comparison with a previous run'));
+    el.appendChild(dw);
+    renderDrift(dw);
+  };
+  function renderTimeline(el) {
+    const sec = h('section', { class: 'section timeline', 'aria-labelledby': 'h-timeline' });
+    el.appendChild(sec);
+    const src = str(changes.windowSource);
+    sec.appendChild(h('div', { class: 'card-head' }, h('h2', { id: 'h-timeline' }, 'Engagement timeline'),
+      hasChanges ? h('span', { class: 'muted small' }, 'Since ' + day(changes.windowStartUtc) + (src === 'operator' ? ' (engagement start)' : ' (default: 30 days before the run)') + ' until ' + day(changes.windowEndUtc)) : null));
+    if (!hasChanges) {
+      sec.appendChild(h('div', { class: 'card' }, h('h3', null, 'This report has no engagement timeline'),
+        h('p', null, 'It was produced by a VSAT version before 2.4. Replaying its evidence package with the current version adds the timeline where the package holds change history; missing history is reported as UNKNOWN, never as "no changes".')));
+      return;
+    }
+    const dom = arr(obj(D.coverage).domains).find(function (d) { return d && d.id === 'change-history'; });
+    const sess = arr(changes.accountSessions).filter(function (x) { return x && num(x.count) > 0; });
+    const gaps = arr(changes.gaps);
+    if (sess.length) {
+      sec.appendChild(h('div', { class: 'notice notice-warn', role: 'note' }, h('strong', null, 'Earlier sessions by the VSAT account'),
+        h('ul', { class: 'plain' }, sess.map(function (x) {
+          return h('li', null, h('span', { class: 'mono' }, str(x.user)), ' signed in ' + fmtN(x.count) + ' time' + (num(x.count) === 1 ? '' : 's') + ' on ' + endpointLabel(x.endpointId) + ' before this run (first ' + fmtTime(x.firstUtc) + ', last ' + fmtTime(x.lastUtc) + ').');
+        })),
+        h('p', { class: 'small' }, 'Private dry runs show up here. Ask whether they were planned.')));
+    }
+    if (gaps.length) {
+      sec.appendChild(h('div', { class: 'notice notice-warn', role: 'note' }, h('strong', null, 'History does not cover the whole engagement'),
+        h('ul', { class: 'plain' }, gaps.map(function (g) { return h('li', null, endpointLabel(g.endpointId) + ': ' + str(g.text) + '.'); })),
+        h('p', { class: 'small' }, 'Changes before the history start are not visible (short retention, rotated or cleared logs).')));
+    }
+    if (dom && str(dom.state) === 'UNKNOWN') {
+      sec.appendChild(h('div', { class: 'notice notice-bad', role: 'note' }, h('strong', null, str(dom.label) || 'Change history not readable'), str(dom.detail), listOf(dom.missing)));
+    } else if (dom && str(dom.state) === 'PARTIAL' && arr(dom.missing).length > gaps.length) {
+      sec.appendChild(h('div', { class: 'notice notice-warn', role: 'note' }, h('strong', null, 'Some change sources were incomplete'), listOf(dom.missing)));
+    }
+    const cs = obj(changes.summary);
+    const signins = sess.reduce(function (a, x) { return a + num(x.count); }, 0);
+    const tiles = [[changeEntries.length, 'Changes', 'Recorded by the platforms in the window'], [cs.changedPassing, 'Pass now, changed', 'Checks passing now whose setting changed'],
+      [cs.changedChecks, 'Checks changed', 'All checks whose setting changed'], [signins, 'Earlier VSAT sign-ins', 'Before this run, same account'], [gaps.length, 'History gaps', 'Endpoints whose history starts late']];
+    sec.appendChild(h('div', { class: 'metric-row' }, tiles.map(function (t) {
+      return h('div', { class: 'metric' }, h('div', { class: 'm-val' }, fmtN(t[0])), h('div', { class: 'm-lbl' }, t[1]), h('div', { class: 'small muted' }, t[2]));
+    })));
+    const assetIds = Array.from(new Set(changeEntries.map(function (e) { return str(e.assetId); }))).sort(function (a, b) { return assetName(a).localeCompare(assetName(b), 'en', { numeric: true }); });
+    const cats = Array.from(new Set(changeEntries.map(function (e) { return str(e.category); }))).sort();
+    const assetSel = h('select', { id: 'tl-asset' }, h('option', { value: '' }, 'All assets'), assetIds.map(function (id) { return h('option', { value: id }, trunc(assetName(id), 60)); }));
+    const catSel = h('select', { id: 'tl-cat' }, h('option', { value: '' }, 'All categories'), cats.map(function (c) { return h('option', { value: c }, CAT_LABEL[c] || c); }));
+    const t = new DataTable({
+      caption: 'Engagement timeline', sortKey: 'time', sortDir: 'desc', empty: 'No changes recorded in the engagement window.',
+      columns: [
+        { key: 'time', label: 'Time (UTC)', defaultDir: 'desc', cls: 'nowrap', sort: function (e) { return str(e.utc); }, render: function (e) { const t = fmtTime(e.utc).replace(' UTC', ''); return h('span', null, t.slice(0, 10), h('span', { class: 'sub small muted' }, t.slice(11))); } },
+        { key: 'cat', label: 'Category', sort: function (e) { return str(e.category); }, render: function (e) { return h('span', { class: 'state state-' + (e.category === 'login' ? 'warn' : 'neutral') }, CAT_LABEL[e.category] || str(e.category) || '?'); } },
+        { key: 'asset', label: 'Asset', cls: 'tl-asset', sort: function (e) { return str(e.assetName) || assetName(e.assetId); }, render: function (e) {
+          const nm = str(e.assetName) || assetName(e.assetId);
+          return h('span', null, assetById.has(str(e.assetId)) ? linkBtn(nm, function () { openAsset(e.assetId); }) : h('span', { class: 'break' }, nm), h('span', { class: 'sub small muted' }, typeLabel(assetType(e.assetId)) || endpointLabel(e.endpointId)));
+        } },
+        { key: 'action', label: 'Change', cls: 'tl-change', sort: function (e) { return str(e.action); }, render: function (e) { return h('span', null, h('span', { class: 'break' }, str(e.action)), h('span', { class: 'sub small muted' }, SRC_LABEL[e.source] || str(e.source))); } },
+        { key: 'user', label: 'User', cls: 'tl-user', sort: function (e) { return str(e.user); }, render: function (e) { return e.user ? h('span', { class: 'mono small break' }, str(e.user)) : h('span', { class: 'muted small' }, 'not recorded'); } },
+        { key: 'checks', label: 'Checks', sort: function (e) { return (findingsByChange.get(str(e.id)) || []).length; }, defaultDir: 'desc', render: function (e) {
+          const fs = findingsByChange.get(str(e.id)) || [];
+          if (!fs.length) return h('span', { class: 'muted small' }, '—');
+          return h('span', { class: 'chk-list' }, fs.slice(0, 3).map(function (f) { return h('span', { class: 'chk' }, resBadge(f.result), ' ', linkBtn(str(f.ruleId), function () { openFinding(f); }, { title: str(fx(f, 'title')) })); }),
+            fs.length > 3 ? h('span', { class: 'muted small' }, '+' + (fs.length - 3) + ' more') : null);
+        } }
+      ]
+    });
+    function apply() { t.setRows(changeEntries.filter(function (e) { return (!assetSel.value || str(e.assetId) === assetSel.value) && (!catSel.value || str(e.category) === catSel.value); })); }
+    on(assetSel, 'change', apply); on(catSel, 'change', apply);
+    apply();
+    sec.appendChild(h('div', { class: 'card section' },
+      h('div', { class: 'card-head' }, h('span', { class: 'muted small' }, 'Newest first. Only changes the platforms recorded themselves; a check marked "Changed during engagement" keeps its current result.'),
+        h('div', { class: 'tl-filters' }, h('label', { class: 'field', for: 'tl-asset' }, h('span', null, 'Asset'), assetSel), h('label', { class: 'field', for: 'tl-cat' }, h('span', null, 'Category'), catSel))),
+      t.el));
+    const nsx = arr(changes.sources).filter(function (x) { return x && x.note; });
+    if (nsx.length) sec.appendChild(h('p', { class: 'small muted' }, nsx.map(function (x) { return endpointLabel(x.endpointId) + ': ' + str(x.note); }).join(' ')));
+  }
+  function renderDrift(el) {
     const d = analysis.drift;
-    el.appendChild(pageHead('h-changes', 'Changes', 'Comparison against a previous VSAT run (baseline).'));
     if (!d || typeof d !== 'object') {
-      el.appendChild(h('div', { class: 'card' }, h('h2', null, 'No baseline comparison in this report'),
+      el.appendChild(h('div', { class: 'card' }, h('h3', null, 'No baseline comparison in this report'),
         h('p', null, 'To track drift, keep the results.json from a previous run and pass it as the baseline on the next run:'),
         h('pre', { class: 'mono card' }, '.\\vsat.ps1 -Baseline .\\previous\\results.json'),
         h('p', { class: 'muted small' }, 'The comparison shows new, resolved, changed and unassessed findings (keyed by rule and asset), added/removed assets and NSX rule changes.')));
@@ -1717,7 +1841,7 @@
     on(changeSel, 'change', function () { t.setRows(items.filter(function (x) { return !changeSel.value || x.change === changeSel.value; })); });
     t.setRows(items);
     el.appendChild(h('div', { class: 'card section' }, h('div', { class: 'card-head' }, h('h2', null, 'Finding changes'), h('label', { class: 'field', for: 'd-change' }, h('span', null, 'Filter'), changeSel)), t.el));
-  };
+  }
 
   // =====================================================================
   // Remediation page
@@ -1777,6 +1901,12 @@
     return '"' + s.replace(/"/g, '""') + '"';
   }
   function toCsv(header, rows) { return '﻿' + [header].concat(rows).map(function (r) { return r.map(csvCell).join(','); }).join('\r\n') + '\r\n'; }
+  function changesCsv() {
+    const header = ['id', 'utc', 'endpointId', 'assetId', 'assetName', 'user', 'category', 'action', 'source', 'checks'];
+    return toCsv(header, changeEntries.map(function (e) {
+      return [e.id, e.utc, e.endpointId, e.assetId, e.assetName, e.user, e.category, e.action, e.source, (findingsByChange.get(str(e.id)) || []).map(function (f) { return str(f.ruleId) + ' ' + str(f.result); }).join('; ')];
+    }));
+  }
   function findingsCsv(list) {
     const header = ['id', 'key', 'ruleId', 'title', 'domain', 'result', 'severity', 'priorityScore', 'confidence', 'assetId', 'assetName', 'assetType', 'observed', 'expected', 'exceptionOwner', 'exceptionExpires', 'exceptionActive', 'workPackage', 'mitigation', 'frameworks'];
     const rows = list.map(function (f) {
@@ -1811,6 +1941,7 @@
       card('Findings CSV', 'One row per finding. Cells beginning with = + - @ are prefixed with a quote to prevent spreadsheet formula execution.', [
         btn('All findings', function () { download(base + '-findings.csv', new Blob([findingsCsv(findings)], { type: 'text/csv;charset=utf-8' })); }, 'btn-primary'),
         btn('FAIL / UNKNOWN / ERROR', function () { download(base + '-findings-open.csv', new Blob([findingsCsv(findings.filter(function (f) { return f.result === 'FAIL' || f.result === 'UNKNOWN' || f.result === 'ERROR'; }))], { type: 'text/csv;charset=utf-8' })); })]),
+      hasChanges ? card('Engagement timeline CSV', 'One row per platform change in the engagement window, with the checks it touches.', [btn('Download timeline', function () { download(base + '-changes.csv', new Blob([changesCsv()], { type: 'text/csv;charset=utf-8' })); }, 'btn-primary')]) : null,
       card('Worklist CSV', 'Work packages expanded to one row per linked finding, for ticketing and change planning.', [btn('Download worklist', function () { download(base + '-worklist.csv', new Blob([worklistCsv()], { type: 'text/csv;charset=utf-8' })); }, 'btn-primary')]),
       card('Topology image', 'Current topology view with legend and scope label (run ID and time). Expand the graph first to include more detail.', [btn('SVG', exportSvg, 'btn-primary'), btn('PNG', exportPng)]),
       card('Print / PDF', 'Prints all sections with navigation hidden. Use your browser’s "Save as PDF" for a PDF copy.', [btn('Print report', function () { PAGES.forEach(ensureRendered); window.print(); })])));

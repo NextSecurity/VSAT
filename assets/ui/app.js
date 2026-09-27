@@ -138,8 +138,9 @@
     const max = maxStep();
     STEPS.forEach(function (s) {
       const done = s.n < max && s.n !== current;
-      const b = btn([h('span', { class: 'num', 'aria-hidden': 'true' }, done ? '✓' : String(s.n)), h('span', { class: 'lbl-text' }, s.label), s.req ? h('span', { class: 'req' }, 'Required') : null], function () { go(s.n); }, '', {
-        'aria-current': s.n === current ? 'step' : null, disabled: s.n > max, 'aria-label': 'Step ' + s.n + ': ' + s.label + (s.n > max ? ' (not available yet)' : done ? ' (completed)' : '')
+      const label = s.n === 6 && S && S.collectOnly ? 'Receipt' : s.label;
+      const b = btn([h('span', { class: 'num', 'aria-hidden': 'true' }, done ? '✓' : String(s.n)), h('span', { class: 'lbl-text' }, label), s.req ? h('span', { class: 'req' }, 'Required') : null], function () { go(s.n); }, '', {
+        'aria-current': s.n === current ? 'step' : null, disabled: s.n > max, 'aria-label': 'Step ' + s.n + ': ' + label + (s.n > max ? ' (not available yet)' : done ? ' (completed)' : '')
       });
       b.className = done ? 'done' : '';
       ol.appendChild(h('li', null, b));
@@ -372,8 +373,18 @@
   };
 
   // 6 Results
+  // The receipt code ties the evidence package to this session: the customer reads it to the auditor.
+  function receiptCard(code) {
+    return h('div', { class: 'card receipt-card', role: 'status' },
+      h('p', { class: 'receipt-lead' }, 'Read this code to your auditor'),
+      h('p', { class: 'receipt-code', 'aria-label': 'Receipt code ' + str(code).split('').join(' ') }, str(code)),
+      h('p', { class: 'small muted' }, 'It is derived from the evidence package (assessment.vsat.zip). The auditor checks it with -Replay assessment.vsat.zip -Receipt <code>; any change to the package gives a different code.'));
+  }
   BUILDERS[6] = function (root) {
-    root.appendChild(head('Results', 'The assessment has finished. The report contains sensitive infrastructure data — store it securely.'));
+    const collectOnly = !!(S && S.collectOnly);
+    root.appendChild(collectOnly
+      ? head('Receipt', 'Evidence was collected. No findings are shown in collect-only mode; your auditor evaluates the package.')
+      : head('Results', 'The assessment has finished. The report contains sensitive infrastructure data — store it securely.'));
     const body = h('div');
     root.appendChild(body);
     // Blast radius: the same view as the report (assets/report/blast-view.js), mounted once per result.
@@ -413,6 +424,15 @@
       if (!r) {
         body.appendChild(h('div', { class: 'status-banner st-bad' }, h('p', { class: 'label' }, phase() === 'canceled' ? 'CANCELED' : phase() === 'failed' ? 'FAILED' : 'NO RESULT'),
           h('p', null, phase() === 'canceled' ? 'The run was canceled before results were produced.' : 'The run did not produce results. See the log in the terminal window for details.')));
+        return;
+      }
+      if (r.receipt) body.appendChild(receiptCard(r.receipt));
+      if (r.collectOnly) {
+        // Collect-only: receipt and files only, never findings, blast radius or the report.
+        body.appendChild(h('div', { class: 'card' }, h('h2', null, 'Output'),
+          h('p', null, 'Send only assessment.vsat.zip to your auditor. It contains sensitive infrastructure data.'),
+          h('dl', { class: 'kv' }, h('dt', null, 'Folder'), h('dd', { class: 'mono' }, str(r.outputDir) || '-'),
+            h('dt', null, 'Files'), h('dd', null, arr(r.files).length ? arr(r.files).map(function (f) { return h('div', { class: 'mono' }, str(f)); }) : '-'))));
         return;
       }
       const st = obj(r.status), overall = str(st.overall).toLowerCase();

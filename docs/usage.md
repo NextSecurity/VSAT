@@ -79,6 +79,37 @@ Terminal mode has the same mandatory domains, statuses and findings, and does no
 
 Replay needs no credentials or connectivity. It re-evaluates rules only where the required facts exist in the package. A rule that needs evidence the package does not contain returns `UNKNOWN`, never `PASS`.
 
+### When the customer runs VSAT
+
+Often the customer runs VSAT with their own rights and the auditor sees the output later. VSAT does not try to stop the customer from fixing gaps first, running it privately or editing files. It makes those things visible:
+
+1. **Kickoff.** Agree the engagement start date. Write it in the engagement notes.
+2. **Collect on a call.** While the auditor is on the call, the customer runs:
+
+   ```powershell
+   .\vsat.ps1 -CollectOnly -EngagementStart 2026-09-01
+   ```
+
+   Collect-only writes exactly three files: `assessment.vsat.zip`, `collection.log` and `manifest.json`. It shows no findings and no report, so there is nothing to read, fix and re-run.
+3. **Read the receipt aloud.** The last line (and, in the browser, the final step in large type) is a code like `VSAT-7Q2M-XK4D-9HNB-3TRE`. The customer reads it to the auditor.
+4. **Write it down.** The auditor records the receipt in the engagement notes.
+5. **Transfer the package.** The customer sends only `assessment.vsat.zip`.
+6. **Verify and evaluate.** The auditor runs:
+
+   ```powershell
+   .\vsat.ps1 -Replay .\assessment.vsat.zip -Receipt VSAT-7Q2M-XK4D-9HNB-3TRE
+   ```
+
+   A match produces the full report with a **Receipt verified** banner. A mismatch stops with exit code `3` and no report: this is not the package from that session, or it was changed.
+
+The report's Changes page then shows the **Engagement timeline**: what the platforms themselves recorded as changed since the engagement start, who changed it and when.
+
+- A check that passes now but whose setting changed in the window is marked **Changed during engagement**. The result stays as collected (a `PASS` stays a `PASS`); the badge tells you to ask about it. The overview shows "N checks pass now but changed during the engagement".
+- **Earlier sessions by the VSAT account** (vCenter sign-in events, KVM login records) show private dry runs.
+- If a platform's history starts after the engagement start (short retention, rotated or cleared logs), the `change-history` coverage domain is `PARTIAL` and names both dates. Denied reads make it `UNKNOWN`. It is never silently empty, and it is not mandatory, so it never changes the exit code.
+
+Sources, all read-only: vCenter and ESXi events (`Get-VIEvent`, window start, at most 50,000 records), NSX objects' own `_last_modified_time` / `_last_modified_user` (no extra API call), the Hyper-V host's System, Security, Windows Firewall and Hyper-V VMMS event logs (`Get-WinEvent`; the Security log needs the Event Log Readers group), and on KVM the modification time of key configuration files, the package history log and `last` login records. The offline collectors take the start date too: `vsat-hyperv-collect.ps1 -Since 2026-09-01` and `sh vsat-kvm-collect.sh 2026-09-01`.
+
 ## Parameters
 
 | Parameter | Description |
@@ -101,6 +132,12 @@ Replay needs no credentials or connectivity. It re-evaluates rules only where th
 | `-Port <int>` | Local UI port. If the port is busy, VSAT reports it and picks a free loopback port. |
 | `-NoBrowser` | Do not open a browser automatically |
 | `-Version` | Print tool, rule pack, advisory snapshot and schema versions |
+| `-EngagementStart <yyyy-MM-dd>` | Start of the change window for the engagement timeline. Default: 30 days before the run. At most 180 days back. Stored in the evidence, so a replay shows the same window. |
+| `-CollectOnly` | Write only `assessment.vsat.zip`, `collection.log` and `manifest.json`, then show the receipt code. No findings, no report. Exit `0` on success, `3` when nothing could be collected. |
+| `-Receipt <code>` | With `-Replay`: verify the package against the receipt code read out when it was collected. Match: report banner "Receipt verified". Mismatch: message and exit `3`. |
+| `-HyperVServer`, `-HyperVCredential`, `-HyperVEvidence` | Hyper-V hosts over PowerShell remoting, or import of offline collector output |
+| `-KvmServer`, `-KvmUser`, `-KvmEvidence` | KVM/libvirt hosts over SSH, or import of offline collector output |
+| `-ExportCollector hyperv\|kvm` | Write the read-only offline collector script and exit |
 
 ## Scope file
 
@@ -153,13 +190,16 @@ An incomplete or fatal status takes precedence over a clean finding count. A "co
 | `evidence.json` | Normalized evidence with per-fact collection status |
 | `findings.csv` | One row per finding, with formula neutralization |
 | `worklist.csv` | Remediation worklist grouped by work package |
+| `changes.csv` | Engagement timeline: one row per platform change in the window (time, asset, user, category, change, source, checks it touches), with formula neutralization |
 | `attack-layer.json` | MITRE ATT&CK Navigator layer (format 4.5, enterprise-attack): each technique scored by open Blast Radius paths that use it plus failing controls that mitigate it. Open it in the ATT&CK Navigator (Open Existing Layer, Upload from local) |
 | `collection.log` | Collection log, secrets redacted |
-| `manifest.json` | Versions, timestamps and SHA-256 of every output |
+| `manifest.json` | Versions, timestamps and SHA-256 of every output, plus the package hash and receipt code |
 | `assessment.vsat.zip` | Evidence package for `-Replay` and `-Baseline` |
 | `assessment.redacted.vsat.zip`, `report.redacted.html` | With `-Redact`: sharing copies with consistent pseudonyms |
 
 **These outputs describe your infrastructure in detail. Handle them as sensitive.** Share the redacted copies, not the originals.
+
+**Receipt code.** Every run ends with `VSAT-XXXX-XXXX-XXXX-XXXX`: the first 80 bits of the SHA-256 of `assessment.vsat.zip`, in Crockford base32 (no I, L, O or U; `O` read as `0` and `I`/`L` as `1` are accepted). It is computed after the zip is written, so it is recorded in the `manifest.json` and `collection.log` next to the zip, not inside it. Check it with `-Replay assessment.vsat.zip -Receipt <code>`.
 
 ## Blast radius
 

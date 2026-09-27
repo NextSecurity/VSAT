@@ -2,14 +2,15 @@
   "schemaVersion": "2.3",
   "tool": {
     "name": "VSAT",
-    "version": "2.3.0"
+    "version": "2.4.0"
   },
   "run": {
     "id": "00000000-0000-4000-8000-000000000d30",
     "startedUtc": "2026-09-23T08:00:00Z",
     "endedUtc": "2026-09-23T08:03:41Z",
     "mode": "demo",
-    "status": "complete"
+    "status": "complete",
+    "engagementStartUtc": "2026-09-09T00:00:00Z"
   },
   "scope": {
     "endpoints": [
@@ -244,6 +245,135 @@
               ]
             }
           ]
+        },
+        "events": {
+          "status": "ok",
+          "value": {
+            "windowStartUtc": "2026-09-09T00:00:00Z",
+            "oldestUtc": "2026-09-09T00:04:12Z",
+            "coversWindowStart": true,
+            "truncated": false,
+            "maxSamples": 50000,
+            "recordsCapped": false,
+            "account": "EXAMPLE\\svc-vsat",
+            "currentSessionKey": "52d0c0de-0000-4000-8000-00000000c0de",
+            "records": [
+              {
+                "utc": "2026-09-23T08:00:04Z",
+                "type": "UserLoginSessionEvent",
+                "descriptionId": null,
+                "eventTypeId": null,
+                "user": "EXAMPLE\\svc-vsat",
+                "message": "User EXAMPLE\\svc-vsat@10.0.0.5 logged in as PowerCLI",
+                "entity": null,
+                "sessionId": "52d0c0de-0000-4000-8000-00000000c0de"
+              },
+              {
+                "utc": "2026-09-21T16:20:00Z",
+                "type": "VmReconfiguredEvent",
+                "descriptionId": null,
+                "eventTypeId": null,
+                "user": "EXAMPLE\\ops1",
+                "message": "Reconfigured web01 on esx01.example.local in DC1",
+                "entity": {
+                  "type": "VirtualMachine",
+                  "moref": "vm-201",
+                  "name": "web01"
+                },
+                "sessionId": null
+              },
+              {
+                "utc": "2026-09-20T14:03:11Z",
+                "type": "TaskEvent",
+                "descriptionId": "host.ServiceSystem.updatePolicy",
+                "eventTypeId": null,
+                "user": "EXAMPLE\\j.doe",
+                "message": "Task: Update service activation policy (SSH: start and stop manually)",
+                "entity": {
+                  "type": "HostSystem",
+                  "moref": "host-10",
+                  "name": "esx01.example.local"
+                },
+                "sessionId": null
+              },
+              {
+                "utc": "2026-09-20T14:02:50Z",
+                "type": "TaskEvent",
+                "descriptionId": "host.ServiceSystem.stop",
+                "eventTypeId": null,
+                "user": "EXAMPLE\\j.doe",
+                "message": "Task: Stop service (SSH)",
+                "entity": {
+                  "type": "HostSystem",
+                  "moref": "host-10",
+                  "name": "esx01.example.local"
+                },
+                "sessionId": null
+              },
+              {
+                "utc": "2026-09-19T21:05:00Z",
+                "type": "UserLoginSessionEvent",
+                "descriptionId": null,
+                "eventTypeId": null,
+                "user": "EXAMPLE\\svc-vsat",
+                "message": "User EXAMPLE\\svc-vsat@10.0.0.77 logged in as PowerCLI",
+                "entity": null,
+                "sessionId": "52d0c0de-0000-4000-8000-000000000002"
+              },
+              {
+                "utc": "2026-09-18T09:15:00Z",
+                "type": "PermissionAddedEvent",
+                "descriptionId": null,
+                "eventTypeId": null,
+                "user": "VSPHERE.LOCAL\\Administrator",
+                "message": "Permission created for EXAMPLE\\j.doe on cl-prod, role is Admin, propagation is Enabled",
+                "entity": {
+                  "type": "ClusterComputeResource",
+                  "moref": "domain-c8",
+                  "name": "cl-prod"
+                },
+                "sessionId": null
+              },
+              {
+                "utc": "2026-09-16T11:00:00Z",
+                "type": "TaskEvent",
+                "descriptionId": "option.OptionManager.updateValues",
+                "eventTypeId": null,
+                "user": "EXAMPLE\\ops1",
+                "message": "Task: Update option values (Security.AccountLockFailures)",
+                "entity": {
+                  "type": "HostSystem",
+                  "moref": "host-50",
+                  "name": "esx05.example.local"
+                },
+                "sessionId": null
+              },
+              {
+                "utc": "2026-09-15T19:40:00Z",
+                "type": "UserLoginSessionEvent",
+                "descriptionId": null,
+                "eventTypeId": null,
+                "user": "EXAMPLE\\svc-vsat",
+                "message": "User EXAMPLE\\svc-vsat@10.0.0.77 logged in as PowerCLI",
+                "entity": null,
+                "sessionId": "52d0c0de-0000-4000-8000-000000000001"
+              },
+              {
+                "utc": "2026-09-12T08:00:00Z",
+                "type": "EventEx",
+                "descriptionId": null,
+                "eventTypeId": "esx.audit.lockdownmode.disabled",
+                "user": "",
+                "message": "Administrator access to the host has been enabled.",
+                "entity": {
+                  "type": "HostSystem",
+                  "moref": "host-50",
+                  "name": "esx05.example.local"
+                },
+                "sessionId": null
+              }
+            ]
+          }
         }
       }
     },
@@ -5027,7 +5157,9 @@
       "props": {
         "path": "/infra/tier-0s/t0-core",
         "haMode": "ACTIVE_STANDBY",
-        "failoverMode": "NON_PREEMPTIVE"
+        "failoverMode": "NON_PREEMPTIVE",
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "localeServices": {
@@ -5070,7 +5202,9 @@
         "routeAdvertisement": [
           "TIER1_CONNECTED",
           "TIER1_NAT"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "natRules": {
@@ -5107,7 +5241,9 @@
         "routeAdvertisement": [
           "TIER1_CONNECTED",
           "TIER1_NAT"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "natRules": {
@@ -5158,7 +5294,9 @@
           "10.10.1.1/24"
         ],
         "adminState": "UP",
-        "type": "overlay"
+        "type": "overlay",
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -5185,7 +5323,9 @@
           "10.10.2.1/24"
         ],
         "adminState": "UP",
-        "type": "overlay"
+        "type": "overlay",
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -5212,7 +5352,9 @@
           "10.10.3.1/24"
         ],
         "adminState": "UP",
-        "type": "overlay"
+        "type": "overlay",
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -5239,7 +5381,9 @@
           "203.0.113.1/24"
         ],
         "adminState": "UP",
-        "type": "overlay"
+        "type": "overlay",
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -5261,7 +5405,9 @@
         "expressionCount": 1,
         "tags": [
           "zone=app"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -5323,7 +5469,9 @@
         "expressionCount": 1,
         "tags": [
           "zone=db"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -5370,7 +5518,9 @@
         "expressionCount": 1,
         "tags": [
           "zone=dmz"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -5407,7 +5557,9 @@
         "expressionCount": 1,
         "tags": [
           "zone=empty-decom"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -5437,7 +5589,9 @@
         "expressionCount": 1,
         "tags": [
           "zone=legacy-excluded"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -5474,7 +5628,9 @@
         "expressionCount": 1,
         "tags": [
           "zone=mgmt"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -5526,7 +5682,9 @@
         "expressionCount": 1,
         "tags": [
           "zone=web"
-        ]
+        ],
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {
         "members": {
@@ -5587,7 +5745,9 @@
           "ANY"
         ],
         "stateful": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -5637,7 +5797,9 @@
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -5686,7 +5848,9 @@
         ],
         "disabled": false,
         "logged": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -5712,7 +5876,9 @@
           "ANY"
         ],
         "stateful": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -5761,7 +5927,9 @@
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -5787,7 +5955,9 @@
           "ANY"
         ],
         "stateful": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -5836,7 +6006,9 @@
         ],
         "disabled": false,
         "logged": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -5888,7 +6060,9 @@
         ],
         "disabled": false,
         "logged": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -5940,7 +6114,9 @@
         ],
         "disabled": false,
         "logged": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -5989,7 +6165,9 @@
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-09-17T13:25:00Z",
+        "lastModifiedUser": "EXAMPLE\\netops"
       },
       "facts": {}
     },
@@ -6038,7 +6216,9 @@
         ],
         "disabled": true,
         "logged": false,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -6064,7 +6244,9 @@
           "ANY"
         ],
         "stateful": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -6113,7 +6295,9 @@
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -6162,7 +6346,9 @@
         ],
         "disabled": false,
         "logged": true,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -6211,7 +6397,9 @@
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": false
+        "isDefault": false,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -6237,7 +6425,9 @@
           "ANY"
         ],
         "stateful": true,
-        "isDefault": true
+        "isDefault": true,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -6286,7 +6476,9 @@
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": true
+        "isDefault": true,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -6312,7 +6504,9 @@
           "/infra/tier-0s/t0-core"
         ],
         "stateful": true,
-        "isDefault": true
+        "isDefault": true,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     },
@@ -6363,7 +6557,9 @@
         ],
         "disabled": false,
         "logged": false,
-        "isDefault": true
+        "isDefault": true,
+        "lastModifiedUtc": "2026-06-02T10:00:00Z",
+        "lastModifiedUser": "admin"
       },
       "facts": {}
     }
@@ -7919,6 +8115,16 @@
         "startedUtc": "2026-09-23T08:00:05Z",
         "endedUtc": "2026-09-23T08:03:30Z",
         "objectCount": 1,
+        "error": null,
+        "affects": []
+      },
+      {
+        "name": "vsphere.events",
+        "endpoint": "ep-vc01",
+        "status": "ok",
+        "startedUtc": "2026-09-23T08:00:05Z",
+        "endedUtc": "2026-09-23T08:03:30Z",
+        "objectCount": 9,
         "error": null,
         "affects": []
       },

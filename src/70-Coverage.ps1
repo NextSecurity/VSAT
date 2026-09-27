@@ -19,6 +19,9 @@ $script:VsatDomains = @(
     [ordered]@{ id = 'kvm-network'; name = 'KVM virtual networks'; mandatory = $true; platform = 'kvm'; collectors = @('kvm.network'); assetTypes = @('kvm-network') }
     # Lens over the domains above, driven by scope zones[].purdueLevel; never mandatory.
     [ordered]@{ id = 'ot-segmentation'; name = 'OT segmentation (virtualization layer)'; mandatory = $false; platform = 'cross-platform'; collectors = @(); assetTypes = @() }
+    # Audit integrity: does each endpoint's own change history cover the engagement window
+    # (src/78-Changes.ps1)? Never mandatory; gaps and denied reads are shown, never hidden.
+    [ordered]@{ id = 'change-history'; name = 'Change history (engagement window)'; mandatory = $false; platform = 'audit'; collectors = @(); assetTypes = @() }
 )
 
 function Update-VsatNsxDiscovery {
@@ -108,7 +111,7 @@ function Get-VsatNsxCoverage {
 }
 
 function Get-VsatCoverage {
-    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings)
+    param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings, $Changes)
     $domains = [System.Collections.Generic.List[object]]::new()
     $vsEps = @($Evidence.scope.endpoints | Where-Object { $_.type -in @('vcenter', 'esxi') })
     $hasVc = @($vsEps | Where-Object { $_.type -eq 'vcenter' }).Count -gt 0
@@ -124,6 +127,12 @@ function Get-VsatCoverage {
                 $d.state = 'PARTIAL'; $d.label = 'PARTIAL: NSX PARTLY ASSESSED'
                 $d.missing = @($d.missing) + "$($checks.UNKNOWN + $checks.ERROR) NSX check(s) lack evidence"
             }
+            $domains.Add($d); continue
+        }
+        if ($def.id -eq 'change-history') {
+            $c = Get-VsatChangeCoverage -Evidence $Evidence -Changes $Changes
+            foreach ($k in 'state', 'label', 'detail', 'evidence', 'missing') { $d[$k] = $c[$k] }
+            $d.mandatory = $false
             $domains.Add($d); continue
         }
         if ($def.id -eq 'ot-segmentation') {

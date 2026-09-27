@@ -7,6 +7,8 @@
 $script:VsatHyperVCollector = @'
 # VSAT Hyper-V collector (read-only). Compatible with Windows PowerShell 5.1 and PowerShell 7.
 # Output: JSON document on stdout. It never changes configuration.
+# Optional: -Since yyyy-MM-dd (engagement start) for the event history; default 30 days back.
+param([string]$Since)
 $ErrorActionPreference = 'Stop'
 function F([scriptblock]$s) {
     try { $v = & $s; if ($null -eq $v) { return @{ status = 'absent'; value = $null } }; return @{ status = 'ok'; value = $v } }
@@ -19,6 +21,45 @@ function F([scriptblock]$s) {
     }
 }
 $now = [DateTime]::UtcNow
+$since = $now.Date.AddDays(-30)
+if ($Since) { $since = [DateTime]::ParseExact($Since, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal) }
+function W([string]$log, [int[]]$ids, [int]$max) {
+    # One event log since the window start. A denied read is reported, never an empty list.
+    $src = @{ log = $log; status = 'ok'; oldestUtc = $null; oldestId = $null; full = $false; count = 0; truncated = $false }
+    $list = @()
+    try {
+        $info = Get-WinEvent -ListLog $log -ErrorAction Stop
+        if ($info.MaximumSizeInBytes -gt 0) { $src.full = ([double]$info.FileSize -ge 0.9 * [double]$info.MaximumSizeInBytes) }
+        try { $o = Get-WinEvent -LogName $log -MaxEvents 1 -Oldest -ErrorAction Stop; if ($o) { $src.oldestUtc = $o.TimeCreated.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); $src.oldestId = $o.Id } }
+        catch { if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*' -and $_.Exception.Message -notmatch 'No events were found') { throw } }
+        $fh = @{ LogName = $log; StartTime = $since }
+        if ($ids) { $fh.Id = $ids }
+        try { $list = @(Get-WinEvent -FilterHashtable $fh -MaxEvents $max -ErrorAction Stop) }
+        catch { if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*' -and $_.Exception.Message -notmatch 'No events were found') { throw } }
+    }
+    catch {
+        $m = $_.Exception.Message
+        $src.error = $m
+        if ($m -match 'unauthorized|denied|not have permission|privilege') { $src.status = 'denied' }
+        elseif ($m -match 'There is not an event log|not found|does not exist') { $src.status = 'unsupported' }
+        else { $src.status = 'error' }
+    }
+    $entries = @(foreach ($e in $list) {
+            $user = $null; $target = ''
+            $p = @($e.Properties)
+            if ($log -eq 'Security' -and $p.Count -ge 8) { $user = "$($p[7].Value)\$($p[6].Value)"; $target = "$($p[3].Value)\$($p[2].Value)" }
+            elseif ($e.UserId) { try { $user = $e.UserId.Translate([Security.Principal.NTAccount]).Value } catch { $user = [string]$e.UserId } }
+            if ($log -eq 'System' -and $p.Count) { $target = [string]$p[0].Value }
+            elseif ($log -like '*Firewall*' -and $p.Count -ge 2) { $target = [string]$p[1].Value }
+            $msg = [string]$e.Message
+            $first = if ($msg) { ($msg -split "`r?`n")[0] } else { "Event $($e.Id)" }
+            if ($first.Length -gt 300) { $first = $first.Substring(0, 300) }
+            @{ utc = $e.TimeCreated.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); log = $log; id = $e.Id; user = $user; message = $first; target = $target }
+        })
+    $src.count = $entries.Count
+    $src.truncated = ($entries.Count -ge $max)
+    return @{ source = $src; entries = $entries }
+}
 $out = @{ collectorVersion = '1'; collectedUtc = $now.ToString('yyyy-MM-ddTHH:mm:ssZ'); host = @{}; vms = @(); switches = @() }
 $os = Get-CimInstance -ClassName Win32_OperatingSystem
 $cs = Get-CimInstance -ClassName Win32_ComputerSystem
@@ -40,6 +81,21 @@ $f.replica = F { $r = Get-VMReplicationServer; @{ enabled = [bool]$r.Replication
 $f.admins = F { @(Get-LocalGroupMember -Group Administrators | ForEach-Object { @{ name = [string]$_.Name; class = [string]$_.ObjectClass } }) }
 $f.hvAdmins = F { @(Get-LocalGroupMember -SID 'S-1-5-32-578' | ForEach-Object { @{ name = [string]$_.Name; class = [string]$_.ObjectClass } }) }
 $f.cluster = F { if (-not (Get-Command Get-Cluster -ErrorAction SilentlyContinue)) { return $null }; $c = Get-Cluster; @{ name = [string]$c.Name; nodes = @(Get-ClusterNode | ForEach-Object { [string]$_.Name }) } }
+# Change history: service start types, security group membership, firewall rules, Hyper-V VMMS.
+# The Security log needs Event Log Readers membership (or local admin).
+$evs = @{ windowStartUtc = $since.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); account = [Security.Principal.WindowsIdentity]::GetCurrent().Name; sources = @(); entries = @() }
+foreach ($spec in @(
+        @{ log = 'System'; ids = @(7040) }
+        @{ log = 'Security'; ids = @(4728, 4729, 4732, 4733, 4756, 4757) }
+        @{ log = 'Microsoft-Windows-Windows Firewall With Advanced Security/Firewall'; ids = @(2004, 2005, 2006, 2052, 2097, 2099) }
+        @{ log = 'Microsoft-Windows-Hyper-V-VMMS-Admin'; ids = $null })) {
+    $r = W $spec.log $spec.ids 2000
+    $evs.sources += $r.source
+    $evs.entries += $r.entries
+}
+$denied = @($evs.sources | Where-Object { $_.status -eq 'denied' })
+$f.events = @{ status = $(if ($denied.Count) { 'denied' } else { 'ok' }); value = $evs }
+if ($denied.Count) { $f.events.error = (@($denied | ForEach-Object { "$($_.log): $($_.error)" }) -join '; ') }
 $out.host.facts = $f
 foreach ($sw in @(Get-VMSwitch)) {
     $out.switches += @{ id = [string]$sw.Id; name = $sw.Name; type = [string]$sw.SwitchType; allowManagementOS = [bool]$sw.AllowManagementOS; embeddedTeaming = [bool]$sw.EmbeddedTeamingEnabled; iov = [bool]$sw.IovEnabled
@@ -63,7 +119,7 @@ function Export-VsatCollector {
     if (-not (Test-Path -LiteralPath $OutputDir)) { [void](New-Item -ItemType Directory -Path $OutputDir -Force) }
     if ($Platform -eq 'hyperv') {
         $p = Join-Path $OutputDir 'vsat-hyperv-collect.ps1'
-        Write-VsatFile -Path $p -Content ("# Run on the Hyper-V host (elevated): powershell -NoProfile -File vsat-hyperv-collect.ps1 > hyperv-<host>.json`n# Then import with: vsat.ps1 -HyperVEvidence hyperv-<host>.json`n" + $script:VsatHyperVCollector)
+        Write-VsatFile -Path $p -Content ("# Run on the Hyper-V host (elevated): powershell -NoProfile -File vsat-hyperv-collect.ps1 -Since <engagement start yyyy-MM-dd> > hyperv-<host>.json`n# Then import with: vsat.ps1 -HyperVEvidence hyperv-<host>.json`n" + $script:VsatHyperVCollector)
     }
     else {
         $p = Join-Path $OutputDir 'vsat-kvm-collect.sh'
@@ -75,12 +131,12 @@ function Export-VsatCollector {
 function Invoke-VsatHyperVRemote {
     # Runs the read-only collector on the host. "localhost" runs in-process; "https://host"
     # uses WinRM over HTTPS; otherwise WinRM with Kerberos/Negotiate (message encryption).
-    param([Parameter(Mandatory)][string]$Address, [pscredential]$Credential)
+    param([Parameter(Mandatory)][string]$Address, [pscredential]$Credential, [string]$Since)
     $sb = [scriptblock]::Create($script:VsatHyperVCollector)
-    if ($Address -in @('localhost', '.', '127.0.0.1')) { return [string](& $sb) }
+    if ($Address -in @('localhost', '.', '127.0.0.1')) { return [string](& $sb $Since) }
     $useSsl = $Address -like 'https://*'
     $target = $Address -replace '^https?://', ''
-    $params = @{ ComputerName = $target; ScriptBlock = $sb; ErrorAction = 'Stop' }
+    $params = @{ ComputerName = $target; ScriptBlock = $sb; ArgumentList = @($Since); ErrorAction = 'Stop' }
     if ($Credential) { $params.Credential = $Credential }
     if ($useSsl) { $params.UseSSL = $true }
     return [string](Invoke-Command @params)
@@ -123,8 +179,9 @@ function Invoke-VsatHyperVCollection {
     param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)]$Endpoint, [pscredential]$Credential, [string]$ImportedJson)
     $vsatHvEndpoint = $Endpoint
     $json = $ImportedJson
+    $vsatHvSince = (Get-VsatChangeWindow -Evidence $Evidence).startUtc.Substring(0, 10)
     Invoke-VsatCollector -Evidence $Evidence -Name 'hyperv.host' -Endpoint $Endpoint.id -Affects @('HV-*') -Script {
-        if (-not $json) { $json = Invoke-VsatHyperVRemote -Address $vsatHvEndpoint.address -Credential $Credential }
+        if (-not $json) { $json = Invoke-VsatHyperVRemote -Address $vsatHvEndpoint.address -Credential $Credential -Since $vsatHvSince }
         $script:VsatHvData = ConvertFrom-VsatJson $json
         Add-VsatHyperVEvidence -Evidence $Evidence -Endpoint $vsatHvEndpoint -Data $script:VsatHvData
         1

@@ -5,7 +5,7 @@ BeforeAll {
 
 Describe 'Default audit makes only approved session/read operations' {
     It 'uses only allowlisted VMware PowerCLI cmdlets' {
-        $allowed = @('Get-View', 'Get-VIPermission', 'Get-VIRole', 'Get-EsxCli', 'Get-VMHost', 'Get-Cluster', 'Get-VsanClusterConfiguration', 'Connect-VIServer', 'Disconnect-VIServer', 'Get-PowerCLIConfiguration', 'Set-PowerCLIConfiguration', 'Get-AdvancedSetting')
+        $allowed = @('Get-View', 'Get-VIPermission', 'Get-VIRole', 'Get-VIEvent', 'Get-EsxCli', 'Get-VMHost', 'Get-Cluster', 'Get-VsanClusterConfiguration', 'Connect-VIServer', 'Disconnect-VIServer', 'Get-PowerCLIConfiguration', 'Set-PowerCLIConfiguration', 'Get-AdvancedSetting')
         $vmwareVerbs = '^(Set|New|Remove|Start|Stop|Restart|Move|Update|Invoke|Add|Install|Mount|Dismount|Enable|Disable|Suspend|Resume|Export|Import|Copy)-(VM|VMHost|Cluster|Datastore|VirtualSwitch|VirtualPortGroup|VDSwitch|VDPortgroup|Snapshot|AdvancedSetting|VIPermission|VIRole|Esx|HardDisk|NetworkAdapter|Folder|Datacenter|Template|Vsan|Tag|ResourcePool|Nsx|Cis)'
         $cmds = $script:Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() } | Where-Object { $_ }
         $mutating = @($cmds | Where-Object { $_ -match $vmwareVerbs -and $allowed -notcontains $_ })
@@ -23,6 +23,14 @@ Describe 'Default audit makes only approved session/read operations' {
         $allowedNames = @('Add', 'AddRange', 'AddAccessRule', 'AppendChar', 'Append', 'AppendLine', 'SetAccessRuleProtection', 'SetVariable', 'AddScript', 'Remove', 'RemoveAt', 'SetEnvironmentVariable', 'CreateHandler', 'AddDays', 'CreateEntry', 'CreateRunspace', 'AddHours', 'AddMinutes')
         $hits = @($members | Where-Object { $_ -cmatch $deny -and $allowedNames -notcontains $_ } | Select-Object -Unique)
         $hits | Should -BeNullOrEmpty
+    }
+    It 'reads change history only through Get-VIEvent, bounded by -Start and -MaxSamples (2.4)' {
+        $vi = @($script:Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -match '-VIEvent$|-VIEventCollector|EventHistoryCollector' }, $true))
+        $vi.Count | Should -BeGreaterThan 0
+        foreach ($c in $vi) { $c.GetCommandName() | Should -Be 'Get-VIEvent'; $c.Extent.Text | Should -Match '-Start'; $c.Extent.Text | Should -Match '-MaxSamples' }
+        # No event collector objects are created or rewound (CreateCollectorForEvents, RewindCollector, ...).
+        $members = $script:Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true) | ForEach-Object { $_.Member.Extent.Text }
+        @($members | Where-Object { $_ -match 'Collector|PostEvent|LogUserEvent' }) | Should -BeNullOrEmpty
     }
     It 'allowlists only read-only esxcli namespaces' {
         foreach ($ns in $script:VsatEsxcliAllowed) { $ns | Should -Match '\.(get|list)$' }
@@ -57,5 +65,28 @@ Describe 'REST read-only guard' {
     It 'requires a well-formed SHA-256 pin' {
         { Register-VsatPins @('nsx01.example.local=abc') } | Should -Throw
         { Register-VsatPins @(('nsx01.example.local=' + ('ab' * 32))) } | Should -Not -Throw
+    }
+}
+
+Describe 'Change-history reads stay read-only (2.4)' {
+    It 'Hyper-V collector reads event logs only with Get-WinEvent (no clearing, no limits changed)' {
+        $s = $script:VsatHyperVCollector
+        $s | Should -Match 'Get-WinEvent'
+        $s | Should -Not -Match '(?i)Clear-EventLog|Remove-EventLog|Limit-EventLog|Write-EventLog|New-EventLog|wevtutil|Set-WinEvent'
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($s, [ref]$null, [ref]$null)
+        $cmds = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() } | Where-Object { $_ } | Select-Object -Unique)
+        @($cmds | Where-Object { $_ -like '*WinEvent*' -or $_ -like '*EventLog*' }) | Should -Be @('Get-WinEvent')
+    }
+    It 'KVM collector only stats files, reads package logs and runs last (no writes)' {
+        $code = ($script:VsatKvmCollector -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+        $code | Should -Match "stat -c '%Y %n'"
+        $code | Should -Match 'last -F -w'
+        $code | Should -Not -Match '(^|[^2&])>\s*[/\w]'
+        $code | Should -Not -Match '\b(touch|truncate|logrotate|lastb -|utmpdump -r|journalctl --(vacuum|rotate))\b'
+        # Package logs are read with head/awk/tail only.
+        @($code -split "`n" | Where-Object { $_ -match 'dnf\.rpm\.log|apt/history\.log' }) | ForEach-Object { $_ | Should -Not -Match '\b(sed -i|rm|mv|cp|tee)\b' }
+    }
+    It 'NSX change entries need no new API call (GET-only allowlist unchanged; audit-log POST refused)' {
+        { Assert-VsatRestAllowed -Method POST -Path '/api/v1/administration/audit-logs' } | Should -Throw '*read-only guard*'
     }
 }

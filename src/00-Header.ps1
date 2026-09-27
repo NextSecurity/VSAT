@@ -63,6 +63,15 @@
     Import output of vsat-kvm-collect.sh produced offline on a KVM host.
 .PARAMETER ExportCollector
     Write the read-only offline collector script for a platform to -OutputPath and exit.
+.PARAMETER EngagementStart
+    Start of the engagement change window (yyyy-MM-dd). Default: 30 days before the run;
+    at most 180 days back. Changes the platforms recorded since then form the timeline.
+.PARAMETER CollectOnly
+    Collect and write only assessment.vsat.zip, collection.log and manifest.json, then show
+    the receipt code. No findings and no report; the auditor replays the package.
+.PARAMETER Receipt
+    With -Replay: verify the package against the receipt code read out when it was
+    collected (VSAT-XXXX-XXXX-XXXX-XXXX). A mismatch stops with exit code 3.
 
 .EXAMPLE
     .\vsat.ps1
@@ -70,6 +79,10 @@
     .\vsat.ps1 -Server vc01.example.local -NsxServer nsx01.example.local -Cli
 .EXAMPLE
     .\vsat.ps1 -Replay .\assessment.vsat.zip
+.EXAMPLE
+    .\vsat.ps1 -CollectOnly -EngagementStart 2026-09-01
+.EXAMPLE
+    .\vsat.ps1 -Replay .\assessment.vsat.zip -Receipt VSAT-7Q2M-XK4D-9HNB-3TRE
 
 .NOTES
     Exit codes: 0 complete/no failing automated controls, 1 complete/findings present,
@@ -107,6 +120,9 @@ param(
     [string[]]$KvmEvidence,
     [ValidateSet('hyperv', 'kvm')]
     [string]$ExportCollector,
+    [string]$EngagementStart,
+    [switch]$CollectOnly,
+    [string]$Receipt,
     [Parameter(DontShow)]
     [switch]$LibraryMode
 )

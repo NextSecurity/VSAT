@@ -6,12 +6,15 @@
 
 $script:VsatKvmCollector = @'
 #!/bin/sh
-# VSAT KVM/libvirt collector (read-only). Usage: sh vsat-kvm-collect.sh > kvm-<host>.txt
+# VSAT KVM/libvirt collector (read-only). Usage: sh vsat-kvm-collect.sh [engagement-start yyyy-mm-dd] > kvm-<host>.txt
 # Import with: vsat.ps1 -KvmEvidence kvm-<host>.txt
 # It only reads configuration and state; it writes nothing and changes nothing.
 LC_ALL=C; export LC_ALL
 V="virsh --readonly -c qemu:///system"
 sec() { printf '\n==VSAT:SECTION %s==\n' "$1"; }
+SINCE_DAY="${1:-${VSAT_SINCE_DAY:-}}"
+[ -n "$SINCE_DAY" ] || SINCE_DAY=$(date -u -d '30 days ago' +%Y-%m-%d 2>/dev/null)
+SINCE=$(date -u -d "$SINCE_DAY" +%s 2>/dev/null || echo 0)
 sec meta; printf 'collector=1\ncollected_utc=%s\nhostname=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(hostname -f 2>/dev/null || hostname)"
 sec os-release; cat /etc/os-release 2>/dev/null
 sec kernel; uname -r
@@ -28,6 +31,20 @@ sec groups; getent group libvirt kvm libvirt-qemu wheel sudo 2>/dev/null
 sec packages; (rpm -q qemu-kvm qemu-kvm-core libvirt-daemon libvirt 2>/dev/null; dpkg-query -W -f='${Package} ${Version}\n' qemu-system-x86 libvirt-daemon libvirt-daemon-system 2>/dev/null) | grep -v 'not installed'
 sec last-update; (rpm -qa --last 2>/dev/null | head -1; [ -f /var/log/dpkg.log ] && tail -n 1 /var/log/dpkg.log; stat -c 'aptlists=%Y' /var/lib/apt/lists 2>/dev/null; stat -c 'dpkgstatus=%Y' /var/lib/dpkg/status 2>/dev/null; stat -c 'rpmdb=%Y' /var/lib/rpm 2>/dev/null) 2>/dev/null
 sec now; date -u +%s
+sec change-window; printf 'since=%s\nsince_day=%s\ntz=%s\naccount=%s\n' "$SINCE" "$SINCE_DAY" "$(date +%z)" "$(id -un 2>/dev/null)"
+sec file-mtimes
+for d in /etc/ssh/sshd_config.d /etc/libvirt /etc/libvirt/qemu /etc/libvirt/qemu/networks /etc/sudoers.d /etc/firewalld /etc/firewalld/zones; do if [ -d "$d" ] && [ ! -r "$d" ]; then printf 'denied %s\n' "$d"; fi; done
+for f in /etc/ssh/sshd_config /etc/ssh/sshd_config.d/* /etc/group /etc/sudoers /etc/sudoers.d/* /etc/libvirt/*.conf /etc/libvirt/qemu/*.xml /etc/libvirt/qemu/networks/*.xml /etc/firewalld/firewalld.conf /etc/firewalld/zones/*.xml /etc/nftables.conf /etc/sysconfig/nftables.conf; do [ -e "$f" ] && stat -c '%Y %n' "$f" 2>&1; done
+sec package-log
+for f in /var/log/dnf.rpm.log /var/log/apt/history.log; do
+  if [ -e "$f" ]; then
+    if [ -r "$f" ]; then printf 'source=%s\nfirst=%s\n' "$f" "$(awk 'NF{print; exit}' "$f")"; awk -v d="$SINCE_DAY" '/^Start-Date: /{p=($2>=d)} /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/{p=(substr($0,1,10)>=d)} p' "$f" | tail -n 3000
+    else printf 'denied=%s\n' "$f"; fi
+  fi
+done
+sec logins
+L=$(command -v last 2>/dev/null)
+if [ -n "$L" ]; then last -F -w 2>&1 | awk 'NR<=5000 || /^wtmp begins/'; else echo 'unsupported=last'; fi
 sec domains; $V list --all --name 2>&1
 for d in $($V list --all --name 2>/dev/null); do
   sec "domain:$d"; $V dumpxml "$d" 2>&1
@@ -46,7 +63,7 @@ $script:VsatSshReadOnlyPreamble = 'sh -s'
 function Invoke-VsatKvmRemote {
     # Runs the collector over SSH using key-based auth only (BatchMode). The host key must
     # already be trusted (known_hosts) or pinned with -TrustedThumbprint "host=SHA256:...".
-    param([Parameter(Mandatory)][string]$Address, [string]$User)
+    param([Parameter(Mandatory)][string]$Address, [string]$User, [string]$SinceDay)
     $ssh = Get-Command ssh -ErrorAction SilentlyContinue
     if (-not $ssh) { throw 'ssh client not found; use -ExportCollector kvm and -KvmEvidence for offline collection.' }
     $hp = Split-VsatAddress $Address -DefaultPort 22
@@ -75,7 +92,10 @@ function Invoke-VsatKvmRemote {
         $sshArgs += @('-o', "UserKnownHostsFile=$kh", '-o', 'GlobalKnownHostsFile=/dev/null')
     }
     try {
-        $out = $script:VsatKvmCollector | & ssh @sshArgs $target $script:VsatSshReadOnlyPreamble 2>&1
+        # The engagement start is passed as a validated date variable ahead of the script text.
+        $body = $script:VsatKvmCollector
+        if ($SinceDay -match '^\d{4}-\d{2}-\d{2}$') { $body = "VSAT_SINCE_DAY=$SinceDay`n" + $body }
+        $out = $body | & ssh @sshArgs $target $script:VsatSshReadOnlyPreamble 2>&1
         if ($LASTEXITCODE -ne 0 -and -not ($out -join "`n").Contains('==VSAT:SECTION end==')) { throw "ssh to $Address failed (exit $LASTEXITCODE): $((@($out) | Select-Object -Last 3) -join ' ')" }
         return ($out -join "`n")
     }
@@ -162,6 +182,9 @@ function Add-VsatKvmEvidence {
     foreach ($m in [regex]::Matches([string]$s['last-update'], '(?:aptlists|dpkgstatus|rpmdb)=(\d+)')) { $stamps += [long]$m.Groups[1].Value }
     if ($now -gt 0 -and $stamps.Count) { $age = [int](($now - ($stamps | Measure-Object -Maximum).Maximum) / 86400); Set-VsatFact $ha 'updates' -Value ([ordered]@{ ageDays = $age; source = 'package database timestamp' }) }
     else { Set-VsatFact $ha 'updates' -Status 'unsupported' -Value $null -ErrorMessage 'Package update timestamp not available' }
+    # Change history (2.4): absent from older collector output, which then shows as "no change history".
+    $chg = ConvertFrom-VsatKvmChanges -Sections $s
+    if ($chg) { Set-VsatFact $ha 'changes' -Status $chg.status -Value $chg.value -ErrorMessage $chg.error }
     Set-VsatFact $ha 'libvirt' -Status $(if ([string]$s['virsh-version'] -match 'library|Using') { 'ok' } else { 'error' }) -Value ([string]$s['virsh-version']) -ErrorMessage $(if ([string]$s['virsh-version'] -notmatch 'library|Using') { [string]$s['virsh-version'] } else { $null })
 
     foreach ($key in @($s.Keys | Where-Object { $_ -like 'network:*' })) {
@@ -214,8 +237,9 @@ function Invoke-VsatKvmCollection {
     param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)]$Endpoint, [string]$User, [string]$ImportedText)
     $vsatKvmEndpoint = $Endpoint
     $txt = $ImportedText
+    $vsatKvmSince = (Get-VsatChangeWindow -Evidence $Evidence).startUtc.Substring(0, 10)
     Invoke-VsatCollector -Evidence $Evidence -Name 'kvm.host' -Endpoint $Endpoint.id -Affects @('KVM-*') -Script {
-        if (-not $txt) { $txt = Invoke-VsatKvmRemote -Address $vsatKvmEndpoint.address -User $User }
+        if (-not $txt) { $txt = Invoke-VsatKvmRemote -Address $vsatKvmEndpoint.address -User $User -SinceDay $vsatKvmSince }
         Add-VsatKvmEvidence -Evidence $Evidence -Endpoint $vsatKvmEndpoint -Text $txt
         1
     }

@@ -120,6 +120,22 @@ function Invoke-VsatVSphereCollection {
         1
     }
 
+    # Change history for the engagement window (src/78-Changes.ps1): the platform's own events,
+    # read with Get-VIEvent only. A denied read is recorded as a denied fact, never as "no events".
+    Invoke-VsatCollector -Evidence $Evidence -Name 'vsphere.events' -Endpoint $ep -Script {
+        $win = Get-VsatChangeWindow -Evidence $Evidence
+        $start = ConvertTo-VsatChangeDate $win.startUtc
+        Invoke-VsatFact $root 'events' {
+            $vsatEvents = @(Get-VIEvent -Server $srv -Start $start -MaxSamples 50000 -ErrorAction Stop)
+            # One event from the day before the window proves history reaches back past its start.
+            $vsatProbe = @(Get-VIEvent -Server $srv -Start $start.AddDays(-1) -Finish $start -MaxSamples 1 -ErrorAction Stop)
+            $vsatKey = $null
+            try { $vsatKey = [string](Get-View -Server $srv -Id $srv.ExtensionData.Content.SessionManager -Property CurrentSession -ErrorAction Stop).CurrentSession.Key } catch { }
+            ConvertTo-VsatVIEventFact -Events $vsatEvents -WindowStartUtc $win.startUtc -Account ([string]$srv.User) -SessionKey $vsatKey -CoversWindowStart ($vsatProbe.Count -gt 0) -MaxSamples 50000
+        }
+        @($root.facts.events.value.records).Count
+    }
+
     Invoke-VsatCollector -Evidence $Evidence -Name 'vsphere.inventory' -Endpoint $ep -Affects @('CL-*') -Script {
         $dcs = Get-View -Server $srv -ViewType Datacenter -Property Name, HostFolder
         foreach ($dc in $dcs) {
