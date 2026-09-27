@@ -1291,7 +1291,9 @@ Describe 'Browser parity (blast-core.js mirrors the engine)' {
     }
     It 'browser paths and fix order equal the engine output (node --test tests/js/)' {
         if (-not $script:Node) { Set-ItResult -Skipped -Because 'node is not installed'; return }
-        $out = & $script:Node.Source --test $script:JsDir 2>&1
+        # Pass the test files explicitly: Node 20 treats a directory argument as a module path.
+        $files = @(Get-ChildItem -Path $script:JsDir -Filter '*.test.mjs' | Sort-Object Name | ForEach-Object FullName)
+        $out = & $script:Node.Source --test @files 2>&1
         $code = $LASTEXITCODE
         $text = $out -join "`n"
         $code | Should -Be 0 -Because $text

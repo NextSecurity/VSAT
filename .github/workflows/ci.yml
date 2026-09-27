@@ -46,7 +46,7 @@ jobs:
           Invoke-Pester -Configuration $c
       - name: Blast radius browser parity (node --test; fixtures written by Pester)
         shell: pwsh
-        run: node --test tests/js/
+        run: node --test @(Get-ChildItem tests/js -Filter '*.test.mjs' | ForEach-Object FullName)
       - name: Demo smoke test (offline, synthetic lab)
         shell: pwsh
         run: |
