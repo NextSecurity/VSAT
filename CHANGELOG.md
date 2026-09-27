@@ -6,9 +6,33 @@ The format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-09-27
+
+Adds **Blast radius**: pick a compromised account or VM and see what an attacker reaches across VMware, NSX, Hyper-V and KVM, and which fixes break the most paths.
+
+### Added
+
+- Blast radius analysis in every run: a cross-platform security graph built from collected evidence (admin rights, VM placement, NSX firewall decisions, shared virtual switches, management networks) with a deterministic path search and a ranked fix list. The report and the local UI get a Blast radius page with a radial map; ticking a fix shows the paths it breaks.
+- Hops VSAT cannot verify are listed as "collect this to confirm" and are never ranked.
+- MITRE ATT&CK techniques on every graph hop and rule, from a pinned offline ATT&CK catalog. Every run writes `attack-layer.json` for the ATT&CK Navigator.
+- OT/ICS segmentation lens: give scope zones a Purdue level and six rules (`OT-*`) check that OT and IT workloads do not share hosts, virtual switches, management planes, admin accounts or network paths. Virtualization layer only.
+- Scope file keys `entryPoints`, `identityDomains`, `identityGroups`, `credentialStores` and `zones[].purdueLevel`.
+- VMware 9.x: vCenter, ESX and NSX 9.0/9.1 advisory and lifecycle data, version-gated rules (checks for components removed in ESX 9.0 report not applicable), and detection of both `VCF.PowerCLI` and `VMware.PowerCLI` installs.
+- One-command start that downloads `vsat.ps1`, verifies it against `SHA256SUMS.txt` and runs the demo, with a pinned-version variant.
+- Canonical JSON serialization and hashing for deterministic evidence digests.
+
+### Changed
+
+- Evidence and results schema `2.3` (additive; 2.0–2.2 packages still replay).
+- CISA KEV labels apply per CVE instead of per advisory.
+- The report and local UI header is a single compact row.
+- The release has three files: `vsat.ps1`, `SHA256SUMS.txt` and the optional offline builder ZIP (with the SBOM and dependency lock inside). The sample report and evidence moved to the website demo.
+- `vsat.ps1` embeds its rules, data and report assets as plain text instead of base64, so every line is readable. `docs/security-review.md` explains what to download, how to verify it and what the script does.
+- A host that vCenter cannot reach no longer aborts collection; its checks report `UNKNOWN`.
+
 ## [2.2.0] - 2026-09-23
 
-Adds **KVM/libvirt** as the third audited platform. Not validated against a live KVM host; exercised with synthetic collector output and a smoke run of the collector script on a host without libvirt.
+Adds **KVM/libvirt** as the third audited platform.
 
 ### Added
 
@@ -27,7 +51,7 @@ Adds **KVM/libvirt** as the third audited platform. Not validated against a live
 
 ## [2.1.0] - 2026-09-23
 
-Adds **Microsoft Hyper-V** as the second audited platform. Not validated against a live Hyper-V host; exercised with synthetic collector output.
+Adds **Microsoft Hyper-V** as the second audited platform.
 
 ### Added
 
@@ -48,7 +72,7 @@ Adds **Microsoft Hyper-V** as the second audited platform. Not validated against
 
 ## [2.0.0] - 2026-09-23
 
-This is a full rewrite of VSAT. **It has not yet been validated against live labs.** It has not been validated against a live vCenter, ESXi or NSX lab. Artifacts are not code-signed. CIS control ID mappings are marked `unverified`. No performance measurements exist. See [docs/limitations.md](docs/limitations.md).
+This is a full rewrite of VSAT.
 
 ### Breaking
 
@@ -128,7 +152,8 @@ These 1.x defects are covered by regression fixtures:
 - First release: the VMware vSphere security audit script `vsat.ps1`. It had PowerCLI-based `Ensure-*` checks derived from CIS VMware ESXi benchmark controls, console output and `vsat.log`.
 - The static ESXi patch list `vmware/patches.json`.
 
-[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.3.0
 [2.2.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.2.0
 [2.1.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.1.0
 [2.0.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.0.0

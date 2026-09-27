@@ -28,6 +28,14 @@ Describe 'Outputs' {
         $html | Should -Not -Match "unsafe-inline|unsafe-eval"
         $html | Should -Not -Match 'https?://(?!www\.w3\.org)'
     }
+    It 'report has the Blast radius view, a list fallback and no external resources' {
+        $html = Get-Content -Raw (Join-Path $script:Out 'report.html')
+        $html | Should -Match 'data-view="blast"'
+        $html | Should -Match 'id="entry"'
+        $html | Should -Match 'Break the most paths'
+        $html | Should -Not -Match '(src|href)="https?://'
+        $html | Should -Not -Match 'innerHTML\s*='
+    }
     It 'CSP hash matches the inline script' {
         $html = Get-Content -Raw (Join-Path $script:Out 'report.html')
         $js = Get-VsatEmbeddedText 'assets/report/report.js'

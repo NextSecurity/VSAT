@@ -1,0 +1,20 @@
+{
+  "notes": "Blast Radius edge kind -> MITRE ATT&CK Enterprise technique an attacker would use for that hop. Ordered; the first mapping whose kind and 'when' match wins. 'when' keys (all optional, all must match): sourcePrefix / sourceType / targetType (string or list; types are graph node types) and port (matches when the edge's 'ports' evidence contains it). technique null = no technique (the hop is a correlation, not an attacker action). Names come from data/attack/attack-catalog.json, never from this file. status is 'proposed' until reviewed; 'verified' requires reviewer, reviewedUtc and sourceRef (enforced by tests/Attack.Tests.ps1).",
+  "mappings": [
+    { "kind": "admin-of", "when": { "sourcePrefix": ["ad:", "upn:"] }, "technique": "T1078.002", "status": "proposed" },
+    { "kind": "admin-of", "when": { "sourcePrefix": "local:" }, "technique": "T1078.003", "status": "proposed" },
+    { "kind": "admin-of", "when": { "sourceType": "object-only" }, "technique": "T1098", "status": "proposed", "basis": "Holder of Authorization.ModifyPermissions grants itself a propagating permission (account manipulation)" },
+    { "kind": "admin-of", "technique": "T1078", "status": "proposed" },
+    { "kind": "member-of", "when": { "sourcePrefix": "local:" }, "technique": "T1078.003", "status": "proposed" },
+    { "kind": "member-of", "technique": "T1078.002", "status": "proposed" },
+    { "kind": "controls", "when": { "sourceType": ["vcenter", "esxi-endpoint", "datacenter", "cluster", "host"] }, "technique": "T1675", "status": "proposed" },
+    { "kind": "controls", "when": { "sourceType": "kvm-host" }, "technique": "T1059.012", "status": "proposed" },
+    { "kind": "controls", "when": { "sourceType": ["hyperv-host", "hyperv-cluster"] }, "technique": "T1059.001", "status": "proposed", "basis": "PowerShell Direct / remoting from the Hyper-V host into guests" },
+    { "kind": "controls", "when": { "sourceType": "nsx-manager" }, "technique": "T1686", "status": "proposed", "basis": "NSX Manager rewrites the distributed firewall of the guest; T1562.004 was revoked by T1686 in ATT&CK v19" },
+    { "kind": "network-allow", "technique": "T1021", "status": "proposed" },
+    { "kind": "mgmt-reach", "when": { "port": 22 }, "technique": "T1021.004", "status": "proposed" },
+    { "kind": "mgmt-reach", "technique": "T1021", "status": "proposed" },
+    { "kind": "credential-exposure", "technique": "T1552", "status": "proposed" },
+    { "kind": "embodies", "technique": null, "status": "proposed", "basis": "A correlation (the VM is the management appliance), not an attacker action" }
+  ]
+}

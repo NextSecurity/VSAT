@@ -39,12 +39,14 @@ ul, ol { margin: 0 0 .6em; padding-left: 1.3em; }
 .mono { font-family: var(--mono); font-size: .92em; overflow-wrap: anywhere; }
 .break { overflow-wrap: anywhere; }
 
-.app-header { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; padding: 10px 24px; background: var(--header-bg); color: var(--header-text); }
+.app-header { display: flex; align-items: center; gap: 20px; flex-wrap: nowrap; min-height: 48px; padding: 6px 24px; background: var(--header-bg); color: var(--header-text); white-space: nowrap; }
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand-mark { color: var(--brand); }
-.wordmark { font-weight: 800; font-size: 1.3rem; letter-spacing: .08em; }
+.wordmark { font-weight: 800; font-size: 1.2rem; letter-spacing: .08em; }
 .brand-sub { color: var(--header-text-2); font-size: .85rem; padding-left: 10px; border-left: 1px solid rgba(255,255,255,.18); }
-.header-meta { margin-left: auto; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: .82rem; color: var(--header-text-2); }
+.header-meta { margin-left: auto; display: flex; gap: 14px; align-items: center; flex-wrap: nowrap; min-width: 0; overflow: hidden; font-size: .82rem; color: var(--header-text-2); }
+.header-meta .local-note { overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 900px) { .brand-sub, .header-meta .local-note { display: none; } }
 .mode-badge { background: #3b2a06; color: #ffd98a; border: 1px solid #7a5a12; border-radius: 999px; padding: 2px 10px; font-weight: 700; font-size: .75rem; letter-spacing: .05em; }
 
 .layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 24px; max-width: 1200px; margin: 0 auto; padding: 24px; }
@@ -128,5 +130,8 @@ summary { cursor: pointer; font-weight: 650; }
   .stepper li { flex: none; }
   .stepper .lbl-text { display: none; }
   .form-grid { grid-template-columns: 1fr; }
-  .header-meta { margin-left: 0; }
 }
+
+/* blast radius: rules in assets/report/blast.css (appended by the build); colors map to UI tokens. */
+.br { --attack: var(--bad); --safe: var(--ok); --attack-soft: var(--bad-bg); }
+.blast-card { margin-top: 16px; }

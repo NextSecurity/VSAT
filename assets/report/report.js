@@ -186,6 +186,7 @@
   setText('meta-run', str(run.id) || '-');
   setText('meta-generated', fmtTime(D.generatedUtc || run.endedUtc));
   setText('meta-profile', (str(obj(D.rulePack).profile) || '-') + ' · rules ' + (str(obj(D.rulePack).version) || '-'));
+  ['meta-version', 'meta-run', 'meta-generated', 'meta-profile'].forEach(function (id) { const e = document.getElementById(id); if (e) e.title = e.textContent; });
 
   const THEME_KEY = 'vsat-theme';
   function storedTheme() { try { const v = window.localStorage.getItem(THEME_KEY); return v === 'light' || v === 'dark' ? v : 'system'; } catch (e) { return 'system'; } }
@@ -476,7 +477,7 @@
   // =====================================================================
   // Router
   // =====================================================================
-  const PAGES = ['overview', 'findings', 'topology', 'nsx', 'changes', 'remediation', 'exports'];
+  const PAGES = ['overview', 'blast', 'findings', 'topology', 'nsx', 'changes', 'remediation', 'exports'];
   const rendered = {};
   const renderers = {};
   function ensureRendered(p) {
@@ -569,6 +570,18 @@
       h('p', { class: 'small', }, 'Collectors: ', Object.keys(collCounts).length ? Object.keys(collCounts).sort().map(function (k, i) { return h('span', null, i ? ', ' : '', h('strong', null, String(collCounts[k])), ' ' + k); }) : 'not reported'));
     el.appendChild(h('div', { class: 'grid grid-3' }, secCard, covCard, confCard));
 
+    // blast radius summary (numbers from the engine's bounds, not the listed-paths subset)
+    const br = obj(analysis.blastRadius), bb = obj(br.bounds);
+    if (analysis.blastRadius) {
+      const crownN = arr(br.nodes).filter(function (n) { return n && n.crown === true; }).length;
+      const reachN = num(bb.crownsReachable), pathN = num(bb.pathsFound);
+      el.appendChild(h('div', { class: 'section' }, h('div', { class: 'card' },
+        h('div', { class: 'card-head' }, h('h2', null, 'Blast radius'), btn('Open blast radius →', function () { go('blast'); }, 'btn-sm')),
+        crownN ? h('p', null, h('span', { class: 'big-num' + (reachN ? ' bad-num' : ' ok-num') }, fmtN(reachN)), ' of ' + fmtN(crownN) + ' crown jewels are reachable from ' + fmtN(arr(br.entries).length) + ' starting points, through ' + fmtN(pathN) + ' attack paths.')
+          : h('p', null, 'No crown jewels in this assessment. Mark critical assets in the scope file to trace paths to them.'),
+        h('p', { class: 'small muted' }, 'Based on collected configuration; not proof of exploitability.' + (bb.truncated ? ' Results are partial (search bounds hit).' : '')))));
+    }
+
     // coverage domain cards
     el.appendChild(h('div', { class: 'section' }, h('div', { class: 'card-head' }, h('h2', null, 'Coverage by domain'), h('span', { class: 'muted small' }, 'Mandatory domains must be ASSESSED (or evidence-backed NOT APPLICABLE) for a complete status.')),
       coverageGroups(domains)));
@@ -628,7 +641,7 @@
     doms.sort(function (a, b) { return (b.mandatory ? 1 : 0) - (a.mandatory ? 1 : 0); });
     return doms;
   }
-  const PLATFORM_LABEL = { vmware: 'VMware vSphere / NSX', hyperv: 'Microsoft Hyper-V', kvm: 'KVM' };
+  const PLATFORM_LABEL = { vmware: 'VMware vSphere / NSX', hyperv: 'Microsoft Hyper-V', kvm: 'KVM', 'cross-platform': 'Cross-platform lenses' };
   function coverageGroups(domains) {
     const hasPlatform = domains.some(function (d) { return d.platform; });
     if (!hasPlatform) return h('div', { class: 'grid grid-auto' }, domains.map(coverageCard));
@@ -1801,6 +1814,18 @@
       card('Worklist CSV', 'Work packages expanded to one row per linked finding, for ticketing and change planning.', [btn('Download worklist', function () { download(base + '-worklist.csv', new Blob([worklistCsv()], { type: 'text/csv;charset=utf-8' })); }, 'btn-primary')]),
       card('Topology image', 'Current topology view with legend and scope label (run ID and time). Expand the graph first to include more detail.', [btn('SVG', exportSvg, 'btn-primary'), btn('PNG', exportPng)]),
       card('Print / PDF', 'Prints all sections with navigation hidden. Use your browser’s "Save as PDF" for a PDF copy.', [btn('Print report', function () { PAGES.forEach(ensureRendered); window.print(); })])));
+  };
+
+  // =====================================================================
+  // Blast radius (view code: assets/report/blast-view.js, concatenated before this file)
+  // =====================================================================
+  renderers.blast = function (el) {
+    const root = el.querySelector('[data-br="root"]');
+    if (!root) return;
+    VsatBlastView.mount(root, D, {
+      zoneOf: function (id) { const a = assetById.get(str(id)); return a ? str(a.zone) : ''; },
+      nameOf: assetName
+    });
   };
 
   // =====================================================================

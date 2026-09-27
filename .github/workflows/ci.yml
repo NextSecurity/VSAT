@@ -44,6 +44,9 @@ jobs:
           $c.TestResult.OutputPath = 'testResults.xml'
           $c.Run.Exit = $true
           Invoke-Pester -Configuration $c
+      - name: Blast radius browser parity (node --test; fixtures written by Pester)
+        shell: pwsh
+        run: node --test tests/js/
       - name: Demo smoke test (offline, synthetic lab)
         shell: pwsh
         run: |
@@ -62,8 +65,14 @@ jobs:
           retention-days: 7
 
   integration:
-    name: Integration (vcsim + mock NSX over pinned TLS)
+    name: Integration (vcsim API ${{ matrix.api || 'default' }} + mock NSX over pinned TLS)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # vcsim -api-version sets the vSphere API version the simulated vCenter reports and
+        # negotiates with PowerCLI; the simulated product version and build stay the same.
+        api: ['', '8.0.3.0', '9.0.0.0']
     steps:
       - uses: actions/checkout@v4
       - name: Fetch pinned vcsim (govmomi v0.56.0)
@@ -79,4 +88,4 @@ jobs:
           foreach ($m in $lock.powercli.modules) { Save-Module -Name $m.name -RequiredVersion $m.version -Repository PSGallery -Path ./pcli -AcceptLicense }
       - name: Run integration test
         shell: pwsh
-        run: ./tests/integration/Invoke-IntegrationTest.ps1 -VcsimPath ./vcsim -ModulesPath ./pcli
+        run: ./tests/integration/Invoke-IntegrationTest.ps1 -VcsimPath ./vcsim -ModulesPath ./pcli -ApiVersion '${{ matrix.api }}'

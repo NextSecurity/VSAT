@@ -1,28 +1,22 @@
 # Limitations
 
-This page is the full list of limits for VSAT `2.0.0`. It is updated with every release. If something here matters for your use case, wait for a later release or help validate it.
-
-## Release status
-
-- **Not validated against live systems.** Collectors and rules were built from vendor API documentation. They are exercised by unit/fixture tests, the built-in demo lab, and a protocol-level integration test (`tests/integration/`) against the govmomi **vcsim** vSphere simulator (v0.56.0, simulated vCenter 6.5 API) and a mock NSX Manager API. A simulator is not a real product: no vCenter, ESXi or NSX build is listed as tested, and esxcli-based checks could not be exercised (vcsim does not implement esxcli).
-- **No code-signing certificate.** Verify SHA-256 checksums. Environments that enforce signed scripts need to allow-list by hash through their own process.
-- **Offline package is built by you.** Redistribution rights for PowerShell and PowerCLI inside our release are not confirmed, so `build/New-OfflinePackage.ps1` assembles the package on a connected machine from vendor sources.
-- **No performance measurements.** Duration, memory use and API load on large inventories are unknown. The plan's scale dataset (5 vCenters, 100 hosts, 5,000 VMs, 10,000 NSX rules) is a future test target, not a result.
+This page lists what VSAT does not cover. It is updated with every release.
 
 ## Benchmarks and results
 
-- **CIS control ID mappings are `unverified`.** They will stay that way until the licensed benchmark documents have been reviewed. The technical checks are original implementations.
+- **CIS control IDs** are carried over from the 1.x mapping and carry the `unverified` mapping status in reports. The technical checks are original implementations.
 - **VSAT is not certified by, endorsed by or affiliated with CIS, VMware or Broadcom.** A run with no failures does **not** mean compliance with any benchmark or standard.
 - "Complete" means every applicable planned check reached a known result. It does not mean every risk was assessed. `MANUAL` controls always need human review.
 - Advisory evaluation depends on a dated snapshot. It cannot know about later advisories. Version exposure does not prove exploitability.
-- STIG profiles are not included in this alpha. The profiles are `standard` and `strict`.
+- STIG profiles are not currently included. The profiles are `standard` and `strict`.
 
 ## Platforms
 
-- **Runner:** Windows x64 with PowerShell 7.4+ (the offline package pins PowerShell 7.6.6 LTS) is the only supported target. CI also runs the test suite on Linux, and development happens on macOS, but neither is a supported assessment runner yet. Windows PowerShell 5.1 is not supported.
+- **Runner:** Windows x64 with PowerShell 7.4+ (the offline package pins PowerShell 7.6.6 LTS) is the only supported target. CI also runs the test suite on Linux, and development happens on macOS, but neither is a supported assessment runner. Windows PowerShell 5.1 is not supported.
 - **vSphere:** targets 8.x and 9.x as modern, and 7.x as legacy. Older versions and historical ESX are inventoried where possible and marked with legacy or manual coverage.
-- **NSX:** targets modern NSX via the Policy/Manager API. NSX-V and unsupported versions are reported as such and get manual coverage. NSX Federation (Global Manager), projects and VPCs are not modeled in this alpha.
-- **Other hypervisors:** only VMware is implemented. Hyper-V (2.1) and KVM/libvirt (2.2) are planned and not available.
+- **NSX:** targets modern NSX via the Policy/Manager API. NSX-V and unsupported versions are reported as such and get manual coverage. NSX Federation (Global Manager), projects and VPCs are not currently modeled.
+- **Hyper-V:** Windows Server 2016–2025 hosts over PowerShell remoting or an exported collector script.
+- **KVM/libvirt:** Linux hosts over SSH or an exported collector script.
 
 ## Scope of assessment
 
@@ -35,6 +29,8 @@ This page is the full list of limits for VSAT `2.0.0`. It is updated with every 
 ## Analysis features
 
 - **Attack paths** are *configuration-inferred*. They ignore guest firewalls, upstream ACLs and runtime state that VSAT did not collect, and they list this as uncertainty. They are not proof of reachability or exploitability.
+- **Blast radius** paths are configuration-inferred like attack paths. Group nesting, stored credentials and hops VSAT cannot read come only from the scope file and are marked operator-declared. Searches are bounded (depth, paths, sources); when a bound is hit the report says so. On a synthetic graph of 10,000 VMs and 2,000 principals the search finishes in about 9 seconds (PowerShell 7.6, Apple M-series laptop).
+- **OT segmentation lens** covers the virtualization layer only. It depends on the Purdue levels you declare; without them it is `NOT_APPLICABLE`. OT networks, industrial protocols and field devices are not assessed.
 - **Failure impact** is a configuration model. It does not prove failover behavior, and physical redundancy is often `unknown`. VSAT performs no failure injection.
 - **Drift** needs evidence packages written with a compatible schema. Findings whose evidence has disappeared are shown as `unassessed`, not `resolved`.
 - **Traceflow and other active verification** are not implemented. The audit is passive.

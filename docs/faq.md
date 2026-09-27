@@ -1,8 +1,8 @@
 # FAQ
 
-### Is VSAT production-ready?
+### How should I review results?
 
-No. `2.0.0` has not yet been validated against live labs that has not been validated against a live vCenter, ESXi or NSX lab. Use it to evaluate the workflow, try the demo and help validate it. Review every result. See [limitations.md](limitations.md).
+Every finding shows the observed and expected values and the evidence it came from. Check findings against that evidence before acting on them. `.\vsat.ps1 -Demo` shows the full workflow on the built-in lab. See [limitations.md](limitations.md) for scope.
 
 ### Does VSAT change anything in my environment?
 
@@ -10,7 +10,7 @@ No. It reads only. vSphere access uses read cmdlets. NSX calls go through an enf
 
 ### Will a clean VSAT run make me CIS compliant?
 
-No. VSAT is not certified by or affiliated with CIS, VMware or Broadcom. CIS mappings are `unverified` in this alpha, some controls are `MANUAL`, and a clean run is not evidence of compliance.
+No. VSAT is not certified by or affiliated with CIS, VMware or Broadcom. Some controls are `MANUAL`, and a clean run is not evidence of compliance.
 
 ### Why is NSX mandatory? We don't use NSX.
 
@@ -30,19 +30,19 @@ Yes, that's the main design goal. Build the offline package on a connected machi
 
 ### Why isn't the offline ZIP just attached to the release?
 
-We haven't confirmed that we may redistribute PowerShell and PowerCLI inside our package. The connected-side builder downloads them from official sources and produces the same ZIP.
+The connected-side builder downloads PowerShell and PowerCLI from their official vendor sources, verifies the pinned hashes and produces the complete ZIP. Releases ship `vsat.ps1` and the builder.
 
-### Is it signed?
+### How do I verify a download?
 
-Not yet. There is no code-signing certificate. Verify the SHA-256 checksums. We will not claim signing until a trusted identity exists.
+Check it against `SHA256SUMS.txt` from the release page. The one-line installer does this automatically and refuses to run a file whose hash does not match.
 
 ### Does it work on Linux or macOS?
 
-It is not supported or validated there. The first target is Windows x64 with PowerShell 7.4+.
+The assessment runner is Windows x64 with PowerShell 7.4+. The test suite also runs on Linux.
 
 ### Which vSphere and NSX versions are supported?
 
-Targets: vSphere 8.x and 9.x (modern) and 7.x (legacy), and modern NSX. **Tested against real products: none yet** (protocol-level integration tests run against the vcsim simulator and a mock NSX API). The compatibility table will list exact builds once live validation happens.
+vSphere 8.x and 9.x (modern) and 7.x (legacy), and modern NSX. See the [supported versions table](../README.md#supported-versions).
 
 ### Can I share a report with a vendor or consultant?
 

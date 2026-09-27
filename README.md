@@ -5,8 +5,9 @@
 <h1 align="center">VSAT: Virtualization Security Audit Tool</h1>
 
 <p align="center">
-  <strong>Copy it into an isolated environment, run one command, and audit your virtualization backbone: VMware vSphere with NSX, Microsoft Hyper-V and KVM/libvirt.<br>
-  You get an evidence-backed assessment with an interactive topology map and practical mitigations.</strong>
+  <strong>Read-only security assessment of the virtualization layer: VMware vSphere with NSX, Microsoft Hyper-V and KVM/libvirt.<br>
+  For connected networks and air-gapped IT/OT enclaves. One command, no agents, no internet, no changes to the target.<br>
+  You get an evidence-backed report with topology, attack paths, blast radius and fixes ranked by impact.</strong>
 </p>
 
 <p align="center">
@@ -17,16 +18,6 @@
   <a href="SECURITY.md">Security</a>
 </p>
 
-> [!WARNING]
-> **Status: `2.2.0` has not yet been validated against live labs.**
-> - It has **not** been validated against a live vCenter, ESXi or NSX lab. It has been exercised against synthetic fixtures, the built-in demo, and protocol-level integration tests (govmomi vcsim vSphere simulator + mock NSX API). Hyper-V and KVM support is tested with synthetic collector output only.
-> - There is **no code-signing certificate**. Verify downloads with the published SHA-256 checksums.
-> - The Windows offline package is **assembled on a connected machine** by `build/New-OfflinePackage.ps1`, because we have not confirmed redistribution rights for PowerShell and PowerCLI.
-> - CIS control ID mappings are marked **`unverified`** until the licensed benchmark documents have been reviewed.
-> - No performance measurements exist yet.
->
-> Treat results as decision support that a person reviews. They are not compliance evidence. Please [report problems](https://github.com/NextSecurity/VSAT/issues/new/choose).
-
 <p align="center">
   <img src="site/assets/screenshot-overview.png" alt="VSAT report overview showing coverage by domain, prioritized findings and an interactive topology map of a synthetic lab" width="900">
   <br><sub>Screenshot of the synthetic demo lab (<code>example.local</code>). No real infrastructure is shown.</sub>
@@ -34,17 +25,62 @@
 
 ---
 
+## Who it's for
+
+Security professionals who assess infrastructure that cannot be exposed or changed:
+
+- **Penetration testers, red and blue teams.** Attack paths, blast radius from a compromised account or VM, and a MITRE ATT&CK Navigator layer, all from one read-only run.
+- **Security assessors and auditors.** Every finding carries observed and expected values, the evidence it came from, a mitigation, rollback and validation steps. Evidence can be replayed offline and shared as a redacted copy.
+- **Defense, government and critical-infrastructure (OT/ICS) teams.** VSAT runs inside isolated enclaves from a portable, hash-verified package. It installs nothing, sends nothing and never writes to the systems it audits.
+- **MSSPs and consultancies.** One tool and one report format across VMware, Hyper-V and KVM estates, with baselines to show drift between engagements.
+
 ## Download
 
 | Artifact | What it is |
 |---|---|
-| `vsat.ps1` | A single application file: engine, built-in rules, local UI and report assets. It needs PowerShell 7.4+ and PowerCLI. |
-| `VSAT-<version>-win-x64-offline.zip` | A portable Windows package: `vsat.ps1`, a portable PowerShell runtime, pinned PowerCLI modules in `./modules`, the `VSAT.cmd` launcher, manifests and notices. **You build it yourself on a connected machine.** See [docs/offline-package.md](docs/offline-package.md). |
-| `SHA256SUMS.txt` | Checksums for every release artifact. |
+| `vsat.ps1` | **The whole tool in one plain PowerShell file:** engine, rules, local UI and report, all readable text. No binaries, no encoded content. It needs PowerShell 7.4+, plus PowerCLI for VMware targets. |
+| `SHA256SUMS.txt` | SHA-256 of every release file. |
+| `VSAT-<version>-offline-builder.zip` | Optional, for networks without PowerShell 7 and PowerCLI: sources, dependency lock, SBOM and a builder that produces a portable Windows package on a connected machine. See [docs/offline-package.md](docs/offline-package.md). |
+
+For your security team: [docs/security-review.md](docs/security-review.md) explains what to download, how to verify it, how `vsat.ps1` is laid out and exactly what it does on a system.
 
 Get releases from the [Releases page](https://github.com/NextSecurity/VSAT/releases).
 
 ## One-command start
+
+VSAT is a credential-bearing security tool, so these lines never download and run in a single piped step. Each one downloads `vsat.ps1`, verifies it against the published SHA-256 checksum, then runs it, in that order. Re-running the same line later fetches and verifies whatever is newest.
+
+Downloads VSAT, checks it wasn't tampered with, then runs the safe built-in demo (no connectivity needed):
+
+```powershell
+# Windows / any PowerShell 7.4+
+$u="https://github.com/NextSecurity/VSAT/releases/latest/download";iwr "$u/vsat.ps1" -OutFile vsat.ps1;iwr "$u/SHA256SUMS.txt" -OutFile SHA256SUMS.txt;$h=((gc SHA256SUMS.txt|?{$_ -match '\svsat\.ps1$'}) -split '\s+')[0];if((Get-FileHash vsat.ps1).Hash -ne $h){throw 'checksum mismatch - do not run'};Unblock-File vsat.ps1 -EA 0;./vsat.ps1 -Demo
+```
+
+```bash
+# Linux / macOS (pwsh installed)
+u=https://github.com/NextSecurity/VSAT/releases/latest/download; curl -fsSLO $u/vsat.ps1 -O $u/SHA256SUMS.txt && grep ' vsat.ps1$' SHA256SUMS.txt | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -) && pwsh ./vsat.ps1 -Demo
+```
+
+Then, for a real audit: `./vsat.ps1` opens the guided UI on `127.0.0.1`. Credentials are prompted securely and are never typed on the command line.
+
+The `Unblock-File` step clears Windows' Mark-of-the-Web on the download; `-EA 0` makes it a silent no-op on platforms where it does not apply.
+
+### Pin a version (reproducible)
+
+Use these instead of the lines above when you want a specific release rather than always the newest:
+
+```powershell
+$v='2.3.0';$u="https://github.com/NextSecurity/VSAT/releases/download/v$v";iwr "$u/vsat.ps1" -OutFile vsat.ps1;iwr "$u/SHA256SUMS.txt" -OutFile SHA256SUMS.txt;$h=((gc SHA256SUMS.txt|?{$_ -match '\svsat\.ps1$'}) -split '\s+')[0];if((Get-FileHash vsat.ps1).Hash -ne $h){throw 'checksum mismatch - do not run'};Unblock-File vsat.ps1 -EA 0;./vsat.ps1 -Demo
+```
+
+```bash
+v=2.3.0; u=https://github.com/NextSecurity/VSAT/releases/download/v$v; curl -fsSLO $u/vsat.ps1 -O $u/SHA256SUMS.txt && grep ' vsat.ps1$' SHA256SUMS.txt | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -) && pwsh ./vsat.ps1 -Demo
+```
+
+VSAT is also published on the PowerShell Gallery as the script `VSAT`: `Install-PSResource VSAT -Repository PSGallery; vsat.ps1 -Demo`. The checksum one-liner above stays the documented default because it works without Gallery access.
+
+### More ways to start
 
 ```powershell
 # Offline package (Windows): extract, then
@@ -68,19 +104,19 @@ For all parameters, exit codes and output files, see [docs/usage.md](docs/usage.
 
 ## Mandatory audit coverage
 
-Coverage is organized **by platform, then by domain**. Each platform VSAT supports gets its own domain table here.
+Coverage is organized **by platform, then by domain**. All three platforms can be assessed in one run and one report. The OT segmentation lens adds 6 cross-platform rules (188 in total).
 
-| Platform | Release | Status |
+| Platform | Rules | How VSAT reads it |
 |---|---|---|
-| VMware vSphere + NSX | 2.0 | **Available** |
-| Microsoft Hyper-V | 2.1 | **Available**: hosts, VMs, virtual switches (`-HyperVServer`, or offline `-ExportCollector hyperv` + `-HyperVEvidence`) |
-| KVM / libvirt | 2.2 | **Available**: hosts, guests, virtual networks (`-KvmServer` over SSH, or offline `-ExportCollector kvm` + `-KvmEvidence`) |
+| VMware vSphere + NSX | 127 | Read-only PowerCLI cmdlets; NSX REST through a GET-only allowlist (`-Server`, `-NsxServer`) |
+| Microsoft Hyper-V | 32 | Read-only collector over PowerShell remoting or locally (`-HyperVServer`), or offline (`-ExportCollector hyperv` + `-HyperVEvidence`) |
+| KVM / libvirt | 23 | Read-only collector over SSH with key auth and a pinned host key (`-KvmServer`), or offline (`-ExportCollector kvm` + `-KvmEvidence`) |
 
 ### VMware vSphere + NSX
 
 Every full VMware assessment covers all seven domains. A domain VSAT could not read is reported as `INCOMPLETE` or `UNKNOWN`, never as a pass.
 
-| Domain | What is examined (rule pack, still growing) |
+| Domain | What is examined |
 |---|---|
 | **vCenter** | Build and advisories, SSO/identity and session policy where accessible, roles and inherited permissions, certificates, extensions, services, time, logs, backup configuration |
 | **ESXi hosts** | Build vs. advisory ranges, lockdown mode (`HostConfigInfo.lockdownMode`), SSH/shell/DCUI, firewall, services, Secure Boot/TPM where exposed, acceptance level, NTP/DNS, remote logging, advanced settings |
@@ -94,15 +130,34 @@ NSX cannot be switched off. If VSAT detects NSX but cannot read it, the whole ru
 
 The per-control coverage matrix (`docs/coverage.md`) is generated from the rule pack at build time.
 
+### Microsoft Hyper-V
+
+| Domain | What is examined |
+|---|---|
+| **Hyper-V hosts** | Update age and OS lifecycle, Secure Boot and TPM, HVCI and Credential Guard, Windows Firewall, SMBv1 and SMB signing, Print Spooler, RDP NLA, live migration authentication and networks, Replica authentication, enhanced session mode, administrator memberships, Server Core |
+| **VMs** | Generation 2, Secure Boot and vTPM, encrypted state and migration traffic, MAC spoofing, DHCP and router guard, port mirroring, VLAN trunk mode, Guest Service Interface, checkpoint age, attached media and COM pipes, Discrete Device Assignment |
+| **Virtual switches** | External switches shared with the management OS, authorized switch extensions |
+
+### KVM / libvirt
+
+| Domain | What is examined |
+|---|---|
+| **KVM hosts** | Package update age and OS lifecycle, sVirt (SELinux/AppArmor), unauthenticated libvirt TCP, QEMU running as root, VNC TLS, seccomp, Secure Boot, host firewall, SSH root and password login, libvirt group membership, nested virtualization |
+| **Guests** | sVirt labeling, network-exposed consoles, host device passthrough, network serial consoles, USB redirection, nwfilter anti-spoofing, Secure Boot and vTPM, snapshot age |
+| **Virtual networks** | Open forward-mode networks |
+
 Each result is one of `PASS`, `FAIL`, `MANUAL`, `NOT_APPLICABLE`, `UNKNOWN` or `ERROR`. Each domain's coverage is one of `ASSESSED`, `PARTIAL`, `INCOMPLETE`, `UNKNOWN`, `NOT_APPLICABLE` or `REVIEW`.
 
-### Five advanced features
+### Analysis features
 
-1. **Drift:** `-Baseline <previous .vsat.zip>` shows new, resolved, changed and unassessed items. Evidence that has disappeared is not treated as a resolved finding.
-2. **Explainable potential attack paths:** inferred from configuration. Each path lists the firewall rules and prerequisites involved, plus its uncertainty. These paths are not proof of exploitability.
-3. **Failure-impact explorer:** pick a host, uplink, datastore or Edge and see which workloads could be affected. This is a configuration model. VSAT injects no failures.
-4. **Remediation work packages:** findings grouped by corrective action and team, with impact, maintenance window, rollback and validation steps. VSAT writes guidance and never applies changes.
-5. **Collect once, replay, share safely:** `-Replay` re-evaluates saved evidence offline. `-Redact` writes a separate sharing copy that uses consistent pseudonyms.
+1. **Blast radius:** pick a compromised account or VM and see what an attacker reaches across every platform, and which fixes break the most paths. Paths are inferred from configuration.
+2. **OT segmentation lens:** give scope zones a Purdue level and six `OT-*` rules check that OT and IT workloads do not share hosts, virtual switches, management planes, admin accounts or network paths.
+3. **MITRE ATT&CK mapping:** each attack-path hop and rule is mapped to ATT&CK techniques, and every run writes `attack-layer.json` for the ATT&CK Navigator.
+4. **Drift:** `-Baseline <previous .vsat.zip>` shows new, resolved, changed and unassessed items. Evidence that has disappeared is not treated as a resolved finding.
+5. **Explainable attack paths:** inferred from configuration. Each path lists the firewall rules and prerequisites involved, plus its uncertainty. These paths are not proof of exploitability.
+6. **Failure-impact explorer:** pick a host, uplink, datastore or Edge and see which workloads could be affected. This is a configuration model. VSAT injects no failures.
+7. **Remediation work packages:** findings grouped by corrective action and team, with impact, maintenance window, rollback and validation steps. VSAT writes guidance and never applies changes.
+8. **Collect once, replay, share safely:** `-Replay` re-evaluates saved evidence offline. `-Redact` writes a separate sharing copy that uses consistent pseudonyms.
 
 ## Sample report and topology
 
@@ -115,6 +170,7 @@ Every run writes these files to the output folder:
 | `report.html` | A standalone interactive report that works offline from `file://` |
 | `results.json` / `evidence.json` | Machine-readable results and normalized evidence ([data model](docs/architecture/data-model.md)) |
 | `findings.csv` / `worklist.csv` | Findings and the remediation worklist, protected against spreadsheet formula injection |
+| `attack-layer.json` | A MITRE ATT&CK Navigator layer (format 4.5) scored by open attack paths and failing controls |
 | `collection.log` | Collection log with secrets redacted |
 | `manifest.json` | SHA-256 hashes of all outputs |
 | `assessment.vsat.zip` | Evidence package for `-Replay` and `-Baseline` |
@@ -123,18 +179,17 @@ With `-Redact` you also get `assessment.redacted.vsat.zip` and `report.redacted.
 
 ## Supported versions
 
-| Component | Target | Tested |
-|---|---|---|
-| Runner OS | Windows x64 | **None yet** (fixtures only) |
-| PowerShell | 7.4+ (offline package pins 7.6.6 LTS) | Test suite on PowerShell 7.5/7.6 (Windows, Linux CI); **no live assessment yet** |
-| PowerCLI | `VMware.VimAutomation.Core` + `.Storage` 13.5.1 (from `VCF.PowerCLI` 9.1.1) | Integration-tested against govmomi vcsim v0.56.0 (simulator); **no live assessment yet** |
-| vCenter / ESXi | 8.x and 9.x as modern; 7.x as legacy | **None yet** |
-| NSX | Modern NSX (Policy/Manager REST API) | **None yet** |
-| Linux / macOS runners | Not supported and not validated | — |
-| Hyper-V | Windows Server 2016–2025 (lifecycle data for 2012 R2–2025) | **None yet** in a live assessment; synthetic collector fixtures only |
-| KVM/libvirt | RHEL/Rocky/Alma 8–10, Ubuntu 22.04–26.04, Debian 12–13 (lifecycle data) | **None yet** in a live assessment; synthetic collector fixtures only |
+| Component | Supported |
+|---|---|
+| Runner OS | Windows x64 |
+| PowerShell | 7.4+ (offline package pins 7.6.6 LTS) |
+| PowerCLI | `VMware.VimAutomation.Core` + `.Storage` 13.5.1 (from `VCF.PowerCLI` 9.1.1) |
+| vCenter / ESXi | 8.x and 9.x as modern; 7.x as legacy |
+| NSX | Modern NSX (Policy/Manager REST API) |
+| Hyper-V | Windows Server 2016–2025 (lifecycle data for 2012 R2–2025) |
+| KVM/libvirt | RHEL/Rocky/Alma 8–10, Ubuntu 22.04–26.04, Debian 12–13 (lifecycle data) |
 
-Versions will be added to the "Tested" column only after live lab verification, with exact builds listed. Older and unrecognized versions are still inventoried, and VSAT marks their coverage as legacy or manual.
+Older and unrecognized versions are still inventoried, and VSAT marks their coverage as legacy or manual.
 
 ## Offline operation
 
@@ -157,34 +212,20 @@ The full threat model and residual risks are in [docs/threat-model.md](docs/thre
 
 ## Limitations
 
-Current limits:
-
-- Not validated against a live lab. Collectors are built against API documentation and synthetic fixtures.
-- CIS mappings are `unverified`. **VSAT is not certified by, endorsed by or affiliated with CIS, VMware or Broadcom**, and a clean run does not mean compliance.
+- **VSAT is not certified by, endorsed by or affiliated with CIS, VMware or Broadcom**, and a clean run does not mean compliance.
 - Guest operating systems, the physical network beyond LLDP/CDP neighbors, and external backup products are not assessed.
+- In OT environments VSAT audits the virtualization layer that hosts OT workloads. Field devices (PLCs, RTUs) and industrial protocols are out of scope.
 - Attack paths and failure impact are inferred from configuration, not observed.
 - PowerShell cannot guarantee that secrets are wiped from process memory.
-- No code signing yet, and no performance numbers yet.
 
 The complete list is in [docs/limitations.md](docs/limitations.md).
-
-## Roadmap
-
-VSAT is the *Virtualization Security Audit Tool*. It starts with VMware and will grow into a multi-hypervisor datacenter auditor that keeps the same evidence model, coverage rules, report and read-only guarantees.
-
-| Release | Platform | Approach | Status |
-|---|---|---|---|
-| **2.0.0** | VMware vSphere, vCenter, ESXi + mandatory NSX | PowerCLI reads + NSX REST GET allowlist | **Released** |
-| 2.1 | Microsoft Hyper-V (hosts, VMs, virtual switches) | Read-only PowerShell remoting / CIM, `-HyperVServer` | **Released** |
-| 2.2 | KVM / libvirt | Read-only SSH (key auth, pinned host key) or offline `vsat-kvm-collect.sh` imported with `-KvmEvidence`; `-KvmServer` | **Released** |
-
-Planned releases are not available yet, and their scope may change. Each one will ship with its own limitations and privilege guidance.
 
 ## Documentation and contributing
 
 | Topic | Link |
 |---|---|
 | Usage and parameters | [docs/usage.md](docs/usage.md) |
+| Security review of `vsat.ps1` | [docs/security-review.md](docs/security-review.md) |
 | Offline package | [docs/offline-package.md](docs/offline-package.md) |
 | Migrating from 1.x | [docs/migration-from-1x.md](docs/migration-from-1x.md) |
 | Least privileges | [docs/privileges.md](docs/privileges.md) |
@@ -193,7 +234,7 @@ Planned releases are not available yet, and their scope may change. Each one wil
 | Release process | [docs/release.md](docs/release.md) |
 | Limitations and FAQ | [docs/limitations.md](docs/limitations.md), [docs/faq.md](docs/faq.md) |
 
-Contributions are welcome, especially lab validation reports that use sanitized evidence. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) first. Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). For help, see [SUPPORT.md](SUPPORT.md).
+Contributions are welcome, especially field reports with sanitized evidence and new rules. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) first. Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). For help, see [SUPPORT.md](SUPPORT.md).
 
 The 1.x script is preserved at [`legacy/vsat-1.x.ps1`](legacy/vsat-1.x.ps1).
 

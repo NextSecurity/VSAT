@@ -1,11 +1,10 @@
 <#
 .SYNOPSIS
-    Assembles release assets: vsat.ps1, offline package builder kit, sample sanitized
-    report/evidence, SPDX SBOM, dependency lock and SHA256SUMS.
+    Assembles the three release assets: vsat.ps1 (the whole tool, one readable file),
+    SHA256SUMS.txt and the offline builder kit (sources, build script, dependency lock, SBOM).
 .DESCRIPTION
     The fully populated offline ZIP is produced by the operator with
-    build/New-OfflinePackage.ps1 on a connected machine, because redistribution rights for
-    the PowerShell runtime and PowerCLI inside VSAT's own release have not been confirmed.
+    build/New-OfflinePackage.ps1 on a connected machine.
 #>
 [CmdletBinding()]
 param([string]$OutDir)
@@ -27,17 +26,7 @@ foreach ($d in 'src', 'rules', 'data', 'assets') { Copy-Item -Recurse (Join-Path
 New-Item -ItemType Directory -Force (Join-Path $kitRoot 'tests/fixtures') | Out-Null
 Copy-Item (Join-Path $root 'tests/fixtures/demo-evidence.json') (Join-Path $kitRoot 'tests/fixtures')
 Copy-Item (Join-Path $root 'docs/*.md') (Join-Path $kitRoot 'docs')
-Compress-Archive -Path $kitRoot -DestinationPath (Join-Path $OutDir "VSAT-$version-offline-builder.zip")
-Remove-Item -Recurse -Force $kit
-
-# Sample sanitized report and evidence package (synthetic lab only)
-$tmp = Join-Path ([IO.Path]::GetTempPath()) ('vsat-sample-' + [guid]::NewGuid().ToString('N'))
-& pwsh -NoProfile -File (Join-Path $root 'vsat.ps1') -Demo -Cli -OutputPath $tmp | Out-Null
-Copy-Item (Join-Path $tmp 'report.html') (Join-Path $OutDir "VSAT-$version-sample-report.html")
-Copy-Item (Join-Path $tmp 'assessment.vsat.zip') (Join-Path $OutDir "VSAT-$version-sample-evidence.vsat.zip")
-Remove-Item -Recurse -Force $tmp
-
-Copy-Item (Join-Path $root 'build/runtime.lock.json') (Join-Path $OutDir 'dependency-lock.json')
+Copy-Item (Join-Path $root 'build/runtime.lock.json') (Join-Path $kitRoot 'dependency-lock.json')
 
 # SPDX 2.3 SBOM (VSAT has no bundled third-party code; runtime dependencies are declared)
 $lock = Get-Content -Raw (Join-Path $root 'build/runtime.lock.json') | ConvertFrom-Json
@@ -57,12 +46,19 @@ $sbom = [ordered]@{
         [ordered]@{ spdxElementId = 'SPDXRef-vsat'; relationshipType = 'DEPENDS_ON'; relatedSpdxElement = 'SPDXRef-powercli' }
     )
 }
-$sbom | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $OutDir "VSAT-$version.spdx.json") -Encoding utf8
+$sbom | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $kitRoot "VSAT-$version.spdx.json") -Encoding utf8
 
-# Checksums (integrity only; artifacts are unsigned unless a signature file is attached)
+Compress-Archive -Path $kitRoot -DestinationPath (Join-Path $OutDir "VSAT-$version-offline-builder.zip")
+Remove-Item -Recurse -Force $kit
+
+# Checksums for every release file
 $sums = Get-ChildItem -File $OutDir | Sort-Object Name | ForEach-Object { "$((Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant())  $($_.Name)" }
 Set-Content -Path (Join-Path $OutDir 'SHA256SUMS.txt') -Value $sums -Encoding ascii
+
+# The quickstart one-liners verify vsat.ps1 against this file; a release without it listed would be unverifiable.
+$sumsCheck = Get-Content -Raw (Join-Path $OutDir 'SHA256SUMS.txt')
+if ($sumsCheck -notmatch '(?m)^\S+\s+vsat\.ps1$') { throw "SHA256SUMS.txt does not list vsat.ps1; the verified one-liners would be unable to check it." }
+
 Get-ChildItem $OutDir | ForEach-Object { Write-Host $_.Name }
 
-# The sample demo run exits 1 (findings present) by design; asset assembly succeeded.
 exit 0

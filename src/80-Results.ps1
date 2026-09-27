@@ -24,11 +24,17 @@ function Invoke-VsatAnalysisPipeline {
     $paths = Get-VsatAttackPaths -Context $eval.context
     $pathTargets = @{}
     foreach ($p in @($paths.attackPaths | Where-Object { $_.decision -eq 'allow' })) { $pathTargets[$p.target] = $true }
+    # Always rebuild the graph here, after rule evaluation, so edge and fix-plan findingKeys are filled (P17).
+    Update-VsatProgress -Message 'Building cross-platform security graph'
+    $graph = New-VsatSecurityGraph -Context $eval.context -Findings $findings
+    $blast = Get-VsatBlastRadius -Graph $graph -Context $eval.context
+    $blast.fixPlan = @(Get-VsatFixPlan -Paths $blast.paths -Graph $graph -Bounds $blast.bounds)
+    foreach ($p in @($blast.paths)) { $pathTargets[[string]$p.crown] = $true }
     Set-VsatPriority -Findings $findings -Context $eval.context -PathTargets $pathTargets
     $impact = Get-VsatImpact -Context $eval.context
     $wps = Get-VsatWorkPackages -Findings $findings
     $results = New-VsatResultsObject -Evidence $Evidence -Eval $eval -Coverage $coverage -Status $status -ProfileName $ProfileName
-    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null }
+    $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; workPackageCatalog = @(Get-VsatWorkPackageCatalog) }
     if ($BaselineEvidence) {
         Update-VsatProgress -Message 'Comparing with baseline'
         $saveIdx = $script:VsatAssetIndex
@@ -37,6 +43,12 @@ function Invoke-VsatAnalysisPipeline {
         $results.analysis.drift = Get-VsatDrift -Current $results -Baseline $b
     }
     return $results
+}
+
+function Get-VsatWorkPackageCatalog {
+    # Every work package the rule pack defines (id, title, team), so the report can title fixes
+    # whose work package has no finding in this run (analysis.workPackages lists only those with findings).
+    return @(foreach ($w in @((Get-VsatRulePackMeta).workPackages)) { if ($w) { [ordered]@{ id = [string]$w.id; title = [string]$w.title; team = [string](Get-VsatProp $w 'team' '') } } })
 }
 
 function Invoke-VsatBaselineResults {
@@ -92,7 +104,7 @@ function New-VsatResultsObject {
         assets = @($assets)
         relationships = @($Evidence.relationships)
         analysis = $null
-        rules = @($Eval.rules | ForEach-Object { [ordered]@{ id = $_.id; title = $_.title; domain = $_.domain; severity = $_.severity; assetType = $_.assetType; rationale = $_.rationale; mitigation = $_.mitigation; frameworks = $_.frameworks; limitations = (Get-VsatProp $_ 'limitations' ''); automated = ($_.check.type -ne 'manual'); profiles = @(Get-VsatProp $_ 'profilesEnabled' @('standard', 'strict')) } })
+        rules = @($Eval.rules | ForEach-Object { [ordered]@{ id = $_.id; title = $_.title; domain = $_.domain; severity = $_.severity; assetType = $_.assetType; rationale = $_.rationale; mitigation = $_.mitigation; frameworks = $_.frameworks; attack = (Get-VsatProp $_ 'attack' $null); limitations = (Get-VsatProp $_ 'limitations' ''); automated = ($_.check.type -ne 'manual'); profiles = @(Get-VsatProp $_ 'profilesEnabled' @('standard', 'strict')) } })
         scope = $Evidence.scope
         collection = [ordered]@{ collectors = @($Evidence.collection.collectors); log = @($Evidence.collection.log | Select-Object -Last 500) }
         nsx = $Evidence.nsx
@@ -176,6 +188,8 @@ function Write-VsatOutputs {
     $files['evidence.json'] = ConvertTo-VsatJson $Evidence
     $files['results.json'] = ConvertTo-VsatJson $Results
     $files['report.html'] = New-VsatReportHtml -Results $Results
+    # ATT&CK Navigator layer (format 4.5): open it in the Navigator, offline, with no VSAT knowledge.
+    $files['attack-layer.json'] = ConvertTo-VsatJson (New-VsatAttackLayer -Results $Results)
     foreach ($name in $files.Keys) { Write-VsatFile -Path (Join-Path $OutputDir $name) -Content $files[$name] }
     $rows = @(Get-VsatFindingRows $Results.findings)
     Export-VsatCsv -Rows $rows -Columns @('id', 'result', 'severity', 'priority', 'ruleId', 'title', 'domain', 'assetType', 'assetName', 'assetId', 'observed', 'expected', 'confidence', 'mitigation', 'workPackage', 'frameworks', 'exception') -Path (Join-Path $OutputDir 'findings.csv')
@@ -188,11 +202,11 @@ function Write-VsatOutputs {
     Export-VsatCsv -Rows @($wl) -Columns @('workPackage', 'title', 'team', 'maintenanceWindow', 'findingId', 'severity', 'ruleId', 'asset', 'action', 'validation', 'rollback') -Path (Join-Path $OutputDir 'worklist.csv')
     $logText = ($script:VsatLog | ForEach-Object { "{0} [{1}] {2}: {3}" -f $_.t, $_.level, $_.source, $_.message }) -join [Environment]::NewLine
     Write-VsatFile -Path (Join-Path $OutputDir 'collection.log') -Content $logText
-    $manifest = New-VsatManifest -Results $Results -OutputDir $OutputDir -Names @('evidence.json', 'results.json', 'report.html', 'findings.csv', 'worklist.csv', 'collection.log')
+    $manifest = New-VsatManifest -Results $Results -OutputDir $OutputDir -Names @('evidence.json', 'results.json', 'report.html', 'attack-layer.json', 'findings.csv', 'worklist.csv', 'collection.log')
     Write-VsatFile -Path (Join-Path $OutputDir 'manifest.json') -Content (ConvertTo-VsatJson $manifest)
     $zip = Join-Path $OutputDir 'assessment.vsat.zip'
-    New-VsatPackage -Path $zip -SourceDir $OutputDir -Names @('evidence.json', 'results.json', 'report.html', 'findings.csv', 'worklist.csv', 'collection.log', 'manifest.json')
-    $out = @('report.html', 'results.json', 'evidence.json', 'findings.csv', 'worklist.csv', 'collection.log', 'manifest.json', 'assessment.vsat.zip')
+    New-VsatPackage -Path $zip -SourceDir $OutputDir -Names @('evidence.json', 'results.json', 'report.html', 'attack-layer.json', 'findings.csv', 'worklist.csv', 'collection.log', 'manifest.json')
+    $out = @('report.html', 'results.json', 'evidence.json', 'attack-layer.json', 'findings.csv', 'worklist.csv', 'collection.log', 'manifest.json', 'assessment.vsat.zip')
     if ($Redact) {
         $red = Get-VsatRedactedCopy -Evidence $Evidence -Results $Results
         $rdir = Join-Path $OutputDir 'redacted'
@@ -347,6 +361,17 @@ function Get-VsatRedactedCopy {
         if ($a.facts.Contains('permissions') -and $a.facts.permissions.value) { foreach ($p in @($a.facts.permissions.value)) { & $add ([string]$p.principal) 'principal' } }
     }
     foreach ($m in @($Evidence.nsx.discovery.managersDiscovered)) { & $add $m 'nsx' }
+    # Blast-radius principals. Normalized keys (ad:example\j.doe, local:ep-kvm01:root) are specific,
+    # so they join the global map; so do domain-qualified names (EXAMPLE\x, user@domain). Bare local
+    # names (root, admin, ops) are replaced only in principal-bearing blast-radius fields below.
+    $bare = [ordered]@{}
+    foreach ($n in @(Get-VsatProp $Results 'analysis.blastRadius.nodes' @())) {
+        if (-not $n -or [string]$n.kind -ne 'principal') { continue }
+        & $add ([string]$n.id) 'principal'
+        $nm = [string]$n.name
+        if ($nm -match '[\\@]') { & $add $nm 'principal' }
+        elseif ($nm.Length -ge 1 -and -not $bare.Contains($nm)) { $counters['principal'] = [int]$counters['principal'] + 1; $bare[$nm] = '{0}-{1:d4}' -f 'principal', $counters['principal'] }
+    }
     $keys = @($map.Keys | Sort-Object { - $_.Length })
     $ipMap = @{}
     # One compiled alternation keeps redaction linear in the size of each string.
@@ -357,8 +382,24 @@ function Get-VsatRedactedCopy {
     $ctx = @{ map = $map; ipMap = $ipMap; nameRx = $nameRx; ipRx = $ipRx; macRx = $macRx; uuidRx = $uuidRx }
     $ev = Invoke-VsatRedactValue -Value $Evidence -Ctx $ctx
     $res = Invoke-VsatRedactValue -Value $Results -Ctx $ctx
+    if ($bare.Count) { Protect-VsatRedactBlastPrincipals -Blast (Get-VsatProp $res 'analysis.blastRadius' $null) -Bare $bare }
     $res.redacted = [ordered]@{ pseudonyms = $map.Count; ipAddresses = $ctx.ipMap.Count; note = 'Names, addresses, UUIDs and principals replaced with consistent pseudonyms. Review before sharing.' }
     return [ordered]@{ evidence = $ev; results = $res }
+}
+
+function Protect-VsatRedactBlastPrincipals {
+    # Bare principal names: rewrite only the fields that name a principal (principal node names, the
+    # narratives, explanations of edges leaving a principal, and revoke fix titles), never other text.
+    param($Blast, [System.Collections.IDictionary]$Bare)
+    if (-not $Blast) { return }
+    $keys = @($Bare.Keys | Sort-Object { - ([string]$_).Length })
+    $rx = [regex]::new('(?<![A-Za-z0-9_.\\@-])(?:' + (($keys | ForEach-Object { [regex]::Escape([string]$_) }) -join '|') + ')(?![A-Za-z0-9_@-])')
+    $sub = { param([string]$t) if (-not $t) { return $t }; $rx.Replace($t, [System.Text.RegularExpressions.MatchEvaluator] { param($m) $Bare[$m.Value] }) }
+    $principals = @{}
+    foreach ($n in @($Blast.nodes)) { if ($n -and [string]$n.kind -eq 'principal') { $principals[[string]$n.id] = $true; if ($Bare.Contains([string]$n.name)) { $n.name = $Bare[[string]$n.name] } } }
+    foreach ($e in @($Blast.edges)) { if ($e -and $principals.ContainsKey([string]$e.source)) { $e.explanation = & $sub ([string]$e.explanation) } }
+    foreach ($p in @(@($Blast.paths) + @($Blast.needsEvidence))) { if ($p) { $p.narrative = & $sub ([string]$p.narrative) } }
+    foreach ($f in @($Blast.fixPlan)) { if ($f -and ([string]$f.fixId).StartsWith('revoke')) { $f.title = & $sub ([string]$f.title) } }
 }
 
 function Invoke-VsatRedactValue {

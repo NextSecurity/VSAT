@@ -35,8 +35,73 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $tag = $env:GITHUB_REF_NAME
-          $pre = if ($tag -match '-') { '--prerelease' } else { '' }
-          $notes = ./build/Get-ReleaseNotes.ps1 -Version $tag.TrimStart('v')
+          $version = $tag.TrimStart('v')
+          $notes = ./build/Get-ReleaseNotes.ps1 -Version $version
           Set-Content -Path notes.md -Value $notes
-          gh release create $tag ./release/* --title "VSAT $($tag.TrimStart('v'))" --notes-file notes.md $pre --verify-tag
+          $files = @(Get-ChildItem -File ./release | ForEach-Object { $_.FullName })
+
+          # Idempotent: a re-run of this workflow for the same tag (e.g. after a fix) uploads
+          # over the existing release instead of failing on "release already exists".
+          & gh release view $tag *> $null
+          $exists = ($LASTEXITCODE -eq 0)
+
+          # VSAT ships as plain, final SemVer releases only; no alpha/beta/rc prerelease tags.
+          if ($exists) {
+              & gh release upload $tag @files --clobber
+              if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
+              $editArgs = @($tag, '--title', "VSAT $version", '--notes-file', 'notes.md', '--latest')
+              & gh release edit @editArgs
+              if ($LASTEXITCODE -ne 0) { throw "gh release edit failed with exit code $LASTEXITCODE" }
+          }
+          else {
+              $createArgs = @($tag) + $files + @('--title', "VSAT $version", '--notes-file', 'notes.md', '--verify-tag', '--latest')
+              & gh release create @createArgs
+              if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
+          }
+      - name: Publish to PowerShell Gallery
+        env:
+          PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
+        shell: pwsh
+        run: |
+          # Additive distribution channel (Task 0b decision). Never fails the release: a missing
+          # secret or a Gallery-side error is reported as a notice, not a workflow failure.
+          if ([string]::IsNullOrEmpty($env:PSGALLERY_API_KEY)) {
+              Write-Host 'PSGALLERY_API_KEY is not set; skipping PowerShell Gallery publish.'
+          }
+          else {
+              try {
+                  Set-PSRepository PSGallery -InstallationPolicy Trusted
+                  Install-Module Microsoft.PowerShell.PSResourceGet -Scope CurrentUser -Force -ErrorAction Stop
+                  $version = (Get-Content -Raw build/version.json | ConvertFrom-Json).version
+                  Publish-PSResource -Path ./release/vsat.ps1 -ApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -ErrorAction Stop
+                  Write-Host "Published VSAT $version to the PowerShell Gallery."
+              }
+              catch {
+                  Write-Host "::warning::PowerShell Gallery publish failed (release continues): $($_.Exception.Message)"
+              }
+          }
+
+  smoke:
+    name: One-liner smoke test (published release)
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download, verify and run the just-published release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          u="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
+          curl -fsSLO "$u/vsat.ps1" -O "$u/SHA256SUMS.txt"
+          grep ' vsat.ps1$' SHA256SUMS.txt | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -)
+          set +e
+          pwsh ./vsat.ps1 -Demo -Cli -NoBrowser
+          code=$?
+          set -e
+          if [ "$code" -ne 1 ]; then
+            echo "Unexpected exit code $code (synthetic demo lab has findings => expected 1)"
+            exit 1
+          fi
+          echo "One-liner smoke test passed (exit $code, as expected)."

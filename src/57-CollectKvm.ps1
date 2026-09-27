@@ -24,7 +24,7 @@ sec mac; (getenforce 2>/dev/null && echo "selinux") ; (cat /sys/module/apparmor/
 sec secureboot; (mokutil --sb-state 2>/dev/null || (od -An -t u1 /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | awk '{print "efivar="$NF}'))
 sec nested; cat /sys/module/kvm_intel/parameters/nested /sys/module/kvm_amd/parameters/nested 2>/dev/null
 sec sshd; grep -Ei '^[[:space:]]*(PermitRootLogin|PasswordAuthentication|PermitEmptyPasswords|X11Forwarding)[[:space:]]' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null
-sec groups; getent group libvirt kvm libvirt-qemu 2>/dev/null
+sec groups; getent group libvirt kvm libvirt-qemu wheel sudo 2>/dev/null
 sec packages; (rpm -q qemu-kvm qemu-kvm-core libvirt-daemon libvirt 2>/dev/null; dpkg-query -W -f='${Package} ${Version}\n' qemu-system-x86 libvirt-daemon libvirt-daemon-system 2>/dev/null) | grep -v 'not installed'
 sec last-update; (rpm -qa --last 2>/dev/null | head -1; [ -f /var/log/dpkg.log ] && tail -n 1 /var/log/dpkg.log; stat -c 'aptlists=%Y' /var/lib/apt/lists 2>/dev/null; stat -c 'dpkgstatus=%Y' /var/lib/dpkg/status 2>/dev/null; stat -c 'rpmdb=%Y' /var/lib/rpm 2>/dev/null) 2>/dev/null
 sec now; date -u +%s

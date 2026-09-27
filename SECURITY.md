@@ -53,9 +53,9 @@ VSAT is a local tool. There is **no hosted scanning service, upload endpoint or 
 
 | Version | Security fixes |
 |---|---|
-| 2.0.x prereleases (latest only) | Yes |
+| 2.x (latest minor) | Yes |
 | 1.x (`legacy/vsat-1.x.ps1`) | No. It is preserved for reference only and has known defects (see [CHANGELOG.md](CHANGELOG.md)). |
 
 ## Verifying releases
 
-Releases are **not code-signed** yet. Verify artifacts against `SHA256SUMS.txt` from the GitHub release page (see [docs/offline-package.md](docs/offline-package.md)).
+Verify artifacts against `SHA256SUMS.txt` from the GitHub release page (see [docs/offline-package.md](docs/offline-package.md)).

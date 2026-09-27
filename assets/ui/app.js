@@ -376,6 +376,27 @@
     root.appendChild(head('Results', 'The assessment has finished. The report contains sensitive infrastructure data — store it securely.'));
     const body = h('div');
     root.appendChild(body);
+    // Blast radius: the same view as the report (assets/report/blast-view.js), mounted once per result.
+    const blastHost = h('div', { class: 'card blast-card', hidden: true });
+    root.appendChild(blastHost);
+    let blastFor = null;
+    function renderBlast(r) {
+      const br = r && r.blastRadius;
+      if (!br || typeof br !== 'object') { blastHost.hidden = true; return; }
+      // Keyed on the run, not on the polled object, so state refreshes keep the fixes a viewer ticked.
+      const key = str(r.outputDir) + '|' + str(r.runId);
+      if (blastFor === key) return;
+      blastFor = key;
+      clear(blastHost);
+      const tpl = document.getElementById('blast-template');
+      if (!tpl || !tpl.content) { blastHost.hidden = true; return; }
+      blastHost.appendChild(h('h2', null, 'Blast radius'));
+      blastHost.appendChild(document.importNode(tpl.content, true));
+      blastHost.hidden = false;
+      const brRoot = blastHost.querySelector('[data-br="root"]');
+      try { VsatBlastView.mount(brRoot, { analysis: { blastRadius: br, workPackageCatalog: arr(r.workPackageCatalog), workPackages: arr(r.workPackages) } }, {}); }
+      catch (e) { clear(blastHost); blastHost.appendChild(h('p', { class: 'muted' }, 'The blast radius view could not be displayed. Open the report for the full analysis.')); }
+    }
     const finish = btn('Finish and stop VSAT', async function () {
       finish.disabled = true;
       try { await api('shutdown', {}); } catch (e) { /* the service may close the connection while stopping */ }
@@ -388,6 +409,7 @@
     return function () {
       clear(body);
       const r = S.result ? obj(S.result) : null;
+      if (!r || !S.result) { blastHost.hidden = true; blastFor = null; }
       if (!r) {
         body.appendChild(h('div', { class: 'status-banner st-bad' }, h('p', { class: 'label' }, phase() === 'canceled' ? 'CANCELED' : phase() === 'failed' ? 'FAILED' : 'NO RESULT'),
           h('p', null, phase() === 'canceled' ? 'The run was canceled before results were produced.' : 'The run did not produce results. See the log in the terminal window for details.')));
@@ -416,6 +438,7 @@
         h('dl', { class: 'kv' }, h('dt', null, 'Folder'), h('dd', { class: 'mono' }, str(r.outputDir) || '-'),
           h('dt', null, 'Files'), h('dd', null, arr(r.files).length ? arr(r.files).map(function (f) { return h('div', { class: 'mono' }, str(f)); }) : '-')),
         h('div', { class: 'actions' }, link, h('span', { class: 'small muted' }, 'Opens in a new tab.'))));
+      renderBlast(S.result);
     };
   };
 

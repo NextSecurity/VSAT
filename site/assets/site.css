@@ -164,13 +164,32 @@ ul, ol { list-style: none; }
 .btn-quiet { color: var(--ink); border: 1px solid var(--cable-2); }
 .btn-quiet:hover { border-color: var(--ink-3); background: var(--chassis); color: var(--ink); }
 
+.oneliner-lede { margin-top: var(--s3); font-size: 14.5px; line-height: 1.55; color: var(--ink-2); max-width: 62ch; }
+
+.os-switch {
+  display: inline-flex; gap: 4px; margin-top: var(--s2);
+  padding: 4px; border: 1px solid var(--cable); border-radius: var(--r-sm); background: var(--rack-deep);
+}
+.os-tab {
+  font: 600 13px/1 var(--f-body); color: var(--ink-2);
+  background: none; border: 0; border-radius: 4px;
+  min-height: 36px; min-width: 44px; padding: 0 14px; cursor: pointer;
+  transition: color .15s var(--ease), background-color .15s var(--ease);
+}
+.os-tab:hover { color: var(--ink); }
+.os-tab[aria-pressed="true"] { color: var(--amber-ink); background: var(--amber); }
+
 .oneliner {
-  display: inline-flex; align-items: center; gap: 12px; margin-top: var(--s3);
+  display: flex; align-items: center; gap: 12px; margin-top: var(--s2);
   padding: 6px 6px 6px 16px; border: 1px solid var(--cable); border-radius: var(--r-sm);
   background: var(--rack-deep); max-width: 100%;
 }
-.oneliner .ps { font-family: var(--f-mono); font-size: 14px; color: var(--ink-3); }
-.oneliner code { background: none; border: 0; padding: 0; font-size: 15px; color: var(--ink); }
+.oneliner[hidden] { display: none; }
+.oneliner .ps { font-family: var(--f-mono); font-size: 14px; color: var(--ink-3); flex: none; }
+.oneliner code {
+  background: none; border: 0; padding: 0; font-size: 14px; color: var(--ink);
+  flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap;
+}
 .copy {
   font: 600 13px/1 var(--f-body); color: var(--ink-2);
   background: var(--chassis); border: 1px solid var(--cable); border-radius: 4px;
@@ -182,6 +201,19 @@ ul, ol { list-style: none; }
 .hero-note { margin-top: var(--s3); font-size: 14px; color: var(--ink-3); max-width: 72ch; }
 .hero-note a { color: var(--ink-2); }
 .hero-note a:hover { color: var(--ink); }
+
+.pin-details { margin-top: var(--s2); }
+.pin-details[hidden] { display: none; }
+.pin-details summary {
+  cursor: pointer; font: 600 13px/1 var(--f-body); color: var(--ink-2);
+  list-style: none; display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 0; transition: color .15s var(--ease);
+}
+.pin-details summary::-webkit-details-marker { display: none; }
+.pin-details summary::before { content: "\25B8"; font-size: 10px; transition: transform .15s var(--ease); }
+.pin-details[open] summary::before { transform: rotate(90deg); }
+.pin-details summary:hover { color: var(--ink); }
+.pin-details .oneliner { margin-top: var(--s1); }
 
 /* Readout: the hero's platform panel, styled like a rack status plate */
 .readout {

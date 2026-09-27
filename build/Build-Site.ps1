@@ -10,6 +10,14 @@ $root = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $root '_site' }
 if (Test-Path $OutDir) { Remove-Item -Recurse -Force $OutDir }
 Copy-Item -Recurse (Join-Path $root 'site') $OutDir
+$version = (Get-Content -Raw (Join-Path $root 'build/version.json') | ConvertFrom-Json).version
+# Substitute __VSAT_VERSION__ so the published site never drifts from build/version.json.
+Get-ChildItem -Recurse -File -Path $OutDir -Include '*.html', '*.js', '*.css' | ForEach-Object {
+    $t = [System.IO.File]::ReadAllText($_.FullName)
+    if ($t.Contains('__VSAT_VERSION__')) {
+        [System.IO.File]::WriteAllText($_.FullName, $t.Replace('__VSAT_VERSION__', $version))
+    }
+}
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ('vsat-site-' + [guid]::NewGuid().ToString('N'))
 & pwsh -NoProfile -File (Join-Path $root 'vsat.ps1') -Demo -Cli -OutputPath $tmp | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $OutDir 'demo') | Out-Null

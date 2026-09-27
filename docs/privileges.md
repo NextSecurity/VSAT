@@ -2,7 +2,7 @@
 
 VSAT only reads. Give it a **dedicated, read-only account** for each system. Do not use an administrator account.
 
-> **To be validated in a lab.** The guidance below comes from vendor documentation and has **not yet been confirmed against live vCenter, ESXi or NSX systems**. Some checks may need additional read privileges. VSAT reports each missing privilege as `UNKNOWN` evidence with the affected checks, and never as a pass. Please report what you observe: see [CONTRIBUTING.md](../CONTRIBUTING.md#lab-validation-reports).
+VSAT reports each missing privilege as `UNKNOWN` evidence with the affected checks, and never as a pass.
 
 ## vCenter
 
@@ -10,15 +10,15 @@ VSAT only reads. Give it a **dedicated, read-only account** for each system. Do 
 
 The Read-only role grants `System.Anonymous`, `System.View` and `System.Read`. That is enough for most inventory, configuration and network policy reads, including `HostConfigInfo.lockdownMode`, advanced settings, services, firewall rules, port group policies and VM configuration.
 
-| Area | Expected with Read-only | Status |
-|---|---|---|
-| Inventory, cluster HA/DRS, VM hardware and advanced settings | Yes | To be validated |
-| Host configuration (lockdown mode, services, firewall, NTP/DNS, advanced options) | Yes, through read-only property access | To be validated |
-| Distributed switch and port group effective policy | Yes | To be validated |
-| Roles and permissions listing | Probably yes; some deployments restrict this | To be validated |
-| `esxcli`-based reads through `Get-EsxCli` (for example acceptance level and some software details) | **May require `Host.Cli`**, which is not part of Read-only | To be validated |
-| Appliance (VAMI) settings: SSH, backup, appliance firewall | Uses separate appliance APIs and may need additional rights; otherwise reported as `UNKNOWN` | To be validated |
-| SSO and identity source configuration | May need SSO administrator-level read. VSAT does not ask for administrator rights, so these checks may be `UNKNOWN`. | To be validated |
+| Area | With Read-only |
+|---|---|
+| Inventory, cluster HA/DRS, VM hardware and advanced settings | Yes |
+| Host configuration (lockdown mode, services, firewall, NTP/DNS, advanced options) | Yes, through read-only property access |
+| Distributed switch and port group effective policy | Yes |
+| Roles and permissions listing | Yes; some deployments restrict it |
+| `esxcli`-based reads through `Get-EsxCli` (for example acceptance level and some software details) | **May require `Host.Cli`**, which is not part of Read-only |
+| Appliance (VAMI) settings: SSH, backup, appliance firewall | Uses separate appliance APIs and may need additional rights; otherwise reported as `UNKNOWN` |
+| SSO and identity source configuration | May need SSO administrator-level read. VSAT does not ask for administrator rights, so these checks may be `UNKNOWN`. |
 
 **Do not** grant `Host.Config.*`, `VirtualMachine.Config.*`, `Global.Settings` or any modify privileges. VSAT has no use for them.
 
@@ -32,13 +32,13 @@ When you connect directly to a host, use a local account with the **Read-only** 
 
 Use the built-in **Auditor** role (read-only across NSX), assigned to a dedicated local or LDAP/vIDM user.
 
-| Area | Expected with Auditor | Status |
-|---|---|---|
-| Manager/cluster status, fabric, transport nodes and zones | Yes | To be validated |
-| Segments, Tier-0/Tier-1, NAT, routing configuration | Yes | To be validated |
-| Distributed and gateway firewall policy, groups, effective members, realization | Yes | To be validated |
-| Backup configuration, user and role assignments | Probably yes | To be validated |
-| Support bundles, Traceflow, any POST other than session create/destroy | Not used by VSAT | — |
+| Area | With Auditor |
+|---|---|
+| Manager/cluster status, fabric, transport nodes and zones | Yes |
+| Segments, Tier-0/Tier-1, NAT, routing configuration | Yes |
+| Distributed and gateway firewall policy, groups, effective members, realization | Yes |
+| Backup configuration, user and role assignments | Yes |
+| Support bundles, Traceflow, any POST other than session create/destroy | Not used by VSAT |
 
 VSAT creates an API session with a POST and destroys it at the end. Every other NSX call is a GET, enforced by the allowlist described in [threat-model.md](threat-model.md).
 

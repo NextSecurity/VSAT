@@ -1,4 +1,4 @@
-# VSAT 2.0 data model (schema 2.0)
+# VSAT data model (schema 2.3, additive over 2.0)
 
 VSAT separates **evidence** (what was collected) from **results** (what the rule
 engine concluded). Both are JSON, UTF-8, camelCase. All identifiers are stable
@@ -158,11 +158,40 @@ does not expose it). Only `ok` and `absent` can yield `PASS`/`FAIL`.
         "assetIds": ["…"], "outcome": "…", "prerequisites": ["…"], "impact": "…",
         "maintenanceWindow": true, "rollback": "…", "validation": "…", "steps": ["…"], "maxSeverity": "high" }
     ],
+    "workPackageCatalog": [ { "id": "WP-MGMT-ISOLATION", "title": "…", "team": "…" } ],  // every work package in the rule pack (2.3)
+    "blastRadius": {   // 2.3: cross-platform security graph search, part of every run
+      "bounds":   { "maxDepth": 8, "maxPaths": 500, "maxSources": 60, "maxNodes": 250000, "budgetMs": 20000, "truncated": false, "elapsedMs": 812,
+                    "pathsFound": 70, "crownsReachable": 9 },           // counted across all completed searches, before the maxPaths selection
+      "entries":  [ "<nodeId>" ],                                         // principals first, then representative VMs
+      "nodes":    [ { "id": "ep-hv01:vm/5f..", "kind": "asset|principal|scope", "type": "hyperv-vm", "name": "vcsa01",
+                      "platform": "vmware|nsx|hyperv|kvm|identity", "crown": true, "crownReason": "management plane (vcenter)" } ],
+      "edges":    [ { "id": "E-3f9a1c2b…", "source": "…", "target": "…",
+                      "kind": "admin-of|controls|embodies|network-allow|mgmt-reach|credential-exposure|member-of",
+                      "confidence": "observed|configuration-inferred|correlated|operator-declared",
+                      "cost": 1, "fixId": "revoke:ad:example\\vi-admins@ep-vc01:group-d1",
+                      "evidence": [ { "assetId": "…", "fact": "permissions", "status": "ok" } ],
+                      "findingKeys": [ "VC-ADMIN-USERS|ep-vc01:vc" ], "explanation": "EXAMPLE\\vi-admins holds Admin (propagating) on Datacenters",
+                      "ports": [ 22, 16509 ],                             // mgmt-reach only: management listeners the hop relies on ([] = L2 adjacency, no port observed)
+                      "attack": { "technique": "T1078.002", "name": "Valid Accounts: Domain Accounts", "mappingStatus": "proposed|verified" } } ],
+                                                                          // attack is null for embodies; every edge reachable from any entry
+      "paths":    [ { "id": "BR-001", "entry": "<nodeId>", "crown": "<nodeId>", "cost": 4, "hops": 4, "edgeIds": ["E-…"],
+                      "platforms": ["identity","hyperv","vmware"], "confidence": "correlated", "criticality": "high",
+                      "narrative": "EXAMPLE\\Domain Admins → admin of hv01 → controls vcsa01 → is (matched by IP) vc01" } ],
+      "needsEvidence": [ { "id": "NE-001", "entry": "…", "crown": "…|null", "crowns": [], "cost": 1, "edgeIds": [], "gapAt": 2, "platforms": [],
+                      "gap": { "kind", "source", "target", "missingFact", "assetId", "status": "denied|error|unsupported|missing|unknown" },
+                      "narrative": "…", "explanation": "Collect <fact> on <asset> …" } ],   // never ranked; gap status unknown = NSX policy undecidable
+      "fixPlan":  [ { "rank": 1, "fixId": "relocate:ep-hv01:vm/5f..", "title": "Move vCenter appliance vcsa01 off Hyper-V host hv01 …", "kind": "embodies",
+                      "pathsBroken": 37, "cumulativeBroken": 37, "pathsTotal": 52, "weightBroken": 111, "pathIds": ["BR-…"],
+                      "findingKeys": [], "workPackage": "WP-MGMT-ISOLATION", "note": null } ],
+      "notes":    [ "AD group nesting not collected; principals are joined by exact normalized name only" ]
+    },
     "drift": null  // or { "baselineRunId", "baselineUtc", "counts": { "new":0,"resolved":0,"changed":0,"unassessed":0,"unchanged":0 },
                    //       "items": [ { "key", "ruleId", "assetId", "assetName", "change": "new|resolved|changed|unassessed", "before", "after" } ],
                    //       "assets": { "added": [], "removed": [] }, "nsxRules": { "added":0, "removed":0, "modified":0 } }
   },
-  "rules": [ { "id", "title", "domain", "severity", "frameworks", "automated": true } ],
+  "rules": [ { "id", "title", "domain", "severity", "frameworks", "automated": true,
+               "attack": { "mitigates": ["T1021.004"], "mitigation": "M1042", "status": "proposed|verified",
+                           "none": "reason, when mitigates is empty" } } ],   // 2.3: IDs from data/attack/attack-catalog.json (pinned MITRE release)
   "collection": { /* copied from evidence.collection */ },
   "nsx": { /* copied from evidence.nsx */ }
 }

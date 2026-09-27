@@ -24,6 +24,7 @@ function Connect-VsatTarget {
         if ($Target.type -eq 'nsx') { $sess = Connect-VsatNsx -Address $Target.address -Credential $Target.credential; $script:VsatSessions[$key] = @{ connected = $true; kind = 'nsx'; session = $sess; endpointId = $ep.id } }
         else { $conn = Connect-VsatVSphere -Address $Target.address -Credential $Target.credential; $script:VsatSessions[$key] = @{ connected = $true; kind = 'vsphere'; session = $conn; endpointId = $ep.id } }
         Write-VsatLog -Source 'session' -Message "Connected to $($Target.type) $($Target.address)"
+        Resolve-VsatEndpointAddress -Endpoint $ep
     }
     catch {
         $msg = Protect-VsatText $_.Exception.Message
@@ -86,6 +87,7 @@ function Invoke-VsatPlatformCollection {
     foreach ($s in @($A.HyperVServer | Where-Object { $_ })) {
         $ep = Add-VsatEndpoint -Evidence $Evidence -Type hyperv -Address $s.ToLowerInvariant()
         Update-VsatProgress -Phase 'collecting' -Message "Collecting Hyper-V host $s"
+        Resolve-VsatEndpointAddress -Endpoint $ep
         Invoke-VsatHyperVCollection -Evidence $Evidence -Endpoint $ep -Credential $A.HyperVCredential
     }
     foreach ($f in @($A.HyperVEvidence | Where-Object { $_ })) {
@@ -99,6 +101,7 @@ function Invoke-VsatPlatformCollection {
         foreach ($s in @($A.KvmServer | Where-Object { $_ })) {
             $ep = Add-VsatEndpoint -Evidence $Evidence -Type kvm -Address $s.ToLowerInvariant()
             Update-VsatProgress -Phase 'collecting' -Message "Collecting KVM host $s"
+            Resolve-VsatEndpointAddress -Endpoint $ep
             Invoke-VsatKvmCollection -Evidence $Evidence -Endpoint $ep -User $A.KvmUser
         }
         foreach ($f in @($A.KvmEvidence | Where-Object { $_ })) {
@@ -260,7 +263,9 @@ function Invoke-VsatMain {
         Write-VsatLog -Source 'replay' -Message "Replaying evidence from $($A.Replay) (integrity: $($pkg.integrity)); no connectivity or credentials used"
         $ev = ConvertTo-VsatLiveEvidence $pkg.evidence
         $ev.run.replayedUtc = Get-VsatUtcNow
-        if ($scope) { foreach ($k in @('exclusions', 'nativeVlans', 'authorizedNetflowCollectors', 'authorizedSyslogTargets', 'criticalAssets', 'zones', 'exceptions')) { $v = Get-VsatProp $scope $k; if ($null -ne $v) { $ev.scope[$k] = $v } } }
+        # Re-applies the operator's current scope.json overrides onto replayed evidence (see
+        # Merge-VsatScopeOverrides in 20-Model.ps1).
+        Merge-VsatScopeOverrides -Scope $scope -EvidenceScope $ev.scope
         $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact
         Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files
         if (-not $A.Cli -and -not $A.NoBrowser) { Open-VsatBrowser (Join-Path $outDir 'report.html') }
@@ -405,7 +410,7 @@ function Invoke-VsatUi {
                         }
                         $r = Complete-VsatRun -Evidence $ev -ProfileName $cmd.profile -OutputDir $OutputDir -BaselineEvidence $Baseline -Redact:$A.Redact
                         $state.reportHtml = [System.IO.File]::ReadAllText((Join-Path $OutputDir 'report.html'))
-                        $state.result = @{ status = $r.results.status; summary = $r.results.summary; outputDir = $OutputDir; reportUrl = '/report'; files = @($r.files) }
+                        $state.result = @{ status = $r.results.status; summary = $r.results.summary; outputDir = $OutputDir; runId = [string]$r.results.run.id; reportUrl = '/report'; files = @($r.files); blastRadius = $r.results.analysis.blastRadius; workPackageCatalog = @($r.results.analysis.workPackageCatalog); workPackages = @($r.results.analysis.workPackages | ForEach-Object { [ordered]@{ id = $_.id; title = $_.title } }) }
                         $state.phase = $(if ($r.results.status.overall -eq 'canceled') { 'canceled' } else { 'done' })
                         $exit = $r.results.status.exitCode
                         Write-VsatSummary -Results $r.results -OutputDir $OutputDir -Files $r.files

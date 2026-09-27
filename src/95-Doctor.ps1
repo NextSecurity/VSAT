@@ -1,5 +1,37 @@
 #region Doctor
 
+function Get-VsatPowerCliFixCommand {
+    # The install command for the pinned PowerCLI distribution (build/runtime.lock.json).
+    try {
+        $lock = ConvertFrom-VsatJson (Get-VsatEmbeddedText 'runtime.lock.json')
+        $distParts = $lock.powercli.distribution -split '\s+'
+        return "Install-Module $($distParts[0]) -Scope CurrentUser -RequiredVersion $($distParts[1])"
+    }
+    catch { return 'Install-Module VCF.PowerCLI -Scope CurrentUser' }
+}
+
+function Get-VsatPowerCliStatus {
+    # Accepts either install form: VCF.PowerCLI 9.x (current name) or VMware.PowerCLI 13.x
+    # (older meta-module). Both ship VMware.VimAutomation.Core 13.x, the only module VSAT loads.
+    param([object[]]$Modules = @(), [switch]$OfflineOnly)
+    $fix = Get-VsatPowerCliFixCommand
+    $pick = { param($n) @($Modules | Where-Object { $_ -and $_.Name -eq $n } | Sort-Object { [version]$_.Version } -Descending)[0] }
+    $core = & $pick 'VMware.VimAutomation.Core'
+    $vcf = & $pick 'VCF.PowerCLI'
+    $old = & $pick 'VMware.PowerCLI'
+    if (-not $core) {
+        if ($OfflineOnly) { return [ordered]@{ status = 'warn'; detail = 'Not found - only needed for live vCenter/ESXi collection (replay and demo work without it)' } }
+        return [ordered]@{ status = 'fail'; detail = "VMware.VimAutomation.Core not found. Fix: $fix (or use the complete offline package)" }
+    }
+    $dist = if ($vcf) { " (VCF.PowerCLI $($vcf.Version))" } elseif ($old) { " (VMware.PowerCLI $($old.Version))" } else { ' (module only, e.g. the offline package)' }
+    if (([version]$core.Version).Major -lt 13) {
+        return [ordered]@{ status = 'warn'; detail = "VMware.VimAutomation.Core $($core.Version)$dist is older than 13.x. Fix: $fix" }
+    }
+    $detail = "VMware.VimAutomation.Core $($core.Version) found$dist"
+    if ($vcf -and $old) { $detail += ". Both VCF.PowerCLI and VMware.PowerCLI are installed; Broadcom recommends keeping only VCF.PowerCLI (Uninstall-Module VMware.PowerCLI -AllVersions)" }
+    return [ordered]@{ status = 'ok'; detail = $detail }
+}
+
 function Invoke-VsatDoctor {
     # Readiness checks in plain language. Nothing here contacts the internet.
     param([string[]]$Endpoints = @(), [string]$OutputDir, [switch]$OfflineOnly)
@@ -7,9 +39,15 @@ function Invoke-VsatDoctor {
     $add = { param($name, $status, $detail) $checks.Add([ordered]@{ name = $name; status = $status; detail = $detail }) }
 
     $v = $PSVersionTable.PSVersion
+    $isWindowsHost = [bool]$IsWindows
+    $pwshUpgradeCmd = if ($isWindowsHost) { 'winget install --id Microsoft.PowerShell -e' }
+    elseif (Test-Path '/etc/debian_version') { 'sudo apt-get install -y powershell' }
+    elseif (Test-Path '/etc/redhat-release') { 'sudo dnf install -y powershell' }
+    elseif ($IsMacOS) { 'brew install --cask powershell' }
+    else { 'see https://aka.ms/install-powershell for your distro command' }
     if ($v.Major -ge 7 -and ($v.Major -gt 7 -or $v.Minor -ge 4)) { & $add 'PowerShell runtime' 'ok' "PowerShell $v ($($PSVersionTable.PSEdition))" }
-    elseif ($v.Major -ge 7) { & $add 'PowerShell runtime' 'warn' "PowerShell $v; 7.4 or later is recommended (use the runtime in the offline package)" }
-    else { & $add 'PowerShell runtime' 'warn' "Windows PowerShell $v is deprecated for PowerCLI; use the PowerShell 7 runtime shipped in the offline package" }
+    elseif ($v.Major -ge 7) { & $add 'PowerShell runtime' 'warn' "PowerShell $v is below the recommended 7.4. Fix: $pwshUpgradeCmd (or use the runtime in the offline package)" }
+    else { & $add 'PowerShell runtime' 'warn' "Windows PowerShell $v is deprecated for PowerCLI. Fix: $pwshUpgradeCmd (or use the PowerShell 7 runtime shipped in the offline package)" }
 
     $lm = $ExecutionContext.SessionState.LanguageMode
     if ($lm -eq 'FullLanguage') { & $add 'Language mode' 'ok' 'FullLanguage' }
@@ -21,10 +59,9 @@ function Invoke-VsatDoctor {
     if (Test-Path -LiteralPath $modDir) { & $add 'Offline modules folder' 'ok' "Using process-local modules from $modDir" }
     else { & $add 'Offline modules folder' 'warn' 'No ./modules folder next to vsat.ps1; using modules already installed on this machine' }
 
-    $pc = Get-Module -ListAvailable -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1
-    if ($pc) { & $add 'VMware PowerCLI' 'ok' "VMware.VimAutomation.Core $($pc.Version) found" }
-    elseif ($OfflineOnly) { & $add 'VMware PowerCLI' 'warn' 'Not found - only needed for live vCenter/ESXi collection (replay and demo work without it)' }
-    else { & $add 'VMware PowerCLI' 'fail' 'VMware.VimAutomation.Core not found. Use the complete offline package, or install VCF.PowerCLI on a connected machine and copy it into ./modules' }
+    $pcMods = @(Get-Module -ListAvailable -Name 'VMware.VimAutomation.Core', 'VCF.PowerCLI', 'VMware.PowerCLI' -ErrorAction SilentlyContinue)
+    $pcs = Get-VsatPowerCliStatus -Modules $pcMods -OfflineOnly:$OfflineOnly
+    & $add 'VMware PowerCLI' $pcs.status $pcs.detail
 
     if (Initialize-VsatTls) { & $add 'TLS helper' 'ok' 'Certificate probing and per-endpoint pinning available' }
     else { & $add 'TLS helper' 'warn' 'Unavailable; endpoints must present certificates trusted by this machine' }

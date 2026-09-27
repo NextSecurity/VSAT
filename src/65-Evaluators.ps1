@@ -20,6 +20,27 @@ function Get-VsatProductKey {
     }
 }
 
+function Test-VsatAdvisoryEntryKev {
+    # KEV applies to CVEs, not advisories: an entry is known-exploited only when one of its
+    # effective CVEs (entry.cves, else advisory.cves) is in knownExploitedCves (CISA KEV).
+    # Without that list, fall back to the advisory-level boolean.
+    param($Advisory, $Entry)
+    $list = Get-VsatProp $Advisory 'knownExploitedCves'
+    if ($null -eq $list) { return [bool](Get-VsatProp $Advisory 'knownExploited' $false) }
+    $eff = if ($Entry.Contains('cves')) { @($Entry.cves) } else { @($Advisory.cves) }
+    foreach ($c in $eff) { if (@($list) -contains $c) { return $true } }
+    return $false
+}
+
+function Get-VsatAdvisoryEntrySeverity {
+    # An affected entry may carry its own severity when the vendor rates a release line
+    # differently from the advisory as a whole (e.g. VMSA-2025-0013 is Important for ESX 9.0).
+    param($Advisory, $Entry)
+    $s = Get-VsatProp $Entry 'severity'
+    if ($s) { return [string]$s }
+    return [string]$Advisory.severity
+}
+
 function Invoke-VsatCheckAdvisory {
     param($Rule, $Asset, $Check, $Context)
     $data = Get-VsatAdvisoryData
@@ -46,7 +67,7 @@ function Invoke-VsatCheckAdvisory {
             $best = ($cand | ForEach-Object { if ($_.Contains('minVersion')) { $_.minVersion } else { '0' } } | Sort-Object { [version](($_ + '.0.0.0').Split('.')[0..3] -join '.') } | Select-Object -Last 1)
             $sel = @($cand | Where-Object { ($(if ($_.Contains('minVersion')) { $_.minVersion } else { '0' })) -eq $best })
             foreach ($e in $sel) {
-                if ($null -eq $e.fixedVersionNumber -or (Compare-VsatVersion $ver $e.fixedVersionNumber) -lt 0) { $exposed.Add([ordered]@{ id = $adv.id; severity = $adv.severity; kev = [bool]$adv.knownExploited; fix = $e.fixedVersion; cves = @($(if ($e.Contains('cves')) { $e.cves } else { $adv.cves })) }) }
+                if ($null -eq $e.fixedVersionNumber -or (Compare-VsatVersion $ver $e.fixedVersionNumber) -lt 0) { $exposed.Add([ordered]@{ id = $adv.id; severity = (Get-VsatAdvisoryEntrySeverity $adv $e); kev = (Test-VsatAdvisoryEntryKev $adv $e); fix = $e.fixedVersion; cves = @($(if ($e.Contains('cves')) { $e.cves } else { $adv.cves })) }) }
             }
         }
         else {
@@ -55,7 +76,9 @@ function Invoke-VsatCheckAdvisory {
             $hostUpd = $null
             $vp = $ver.Split('.')
             if ($vp.Count -ge 3) { $tmp = 0; if ([int]::TryParse($vp[2], [ref]$tmp)) { $hostUpd = $tmp } }
-            $withUpd = @($entries | ForEach-Object { $u = $null; if ([string]$_.fixedVersion -match 'Update\s+(\d+)') { $u = [int]$Matches[1] } elseif ($_.fixedVersion) { $u = 0 }; @{ e = $_; u = $u } })
+            # 7.0/8.0 name the update ("8.0 Update 3k"); 9.x uses dotted versions ("ESX 9.0.2.0100"),
+            # where the third part is the update level.
+            $withUpd = @($entries | ForEach-Object { $u = $null; $fv = [string]$_.fixedVersion; if ($fv -match 'Update\s+(\d+)') { $u = [int]$Matches[1] } elseif ($fv -match '\b\d+\.\d+\.(\d+)\.\d+') { $u = [int]$Matches[1] } elseif ($fv) { $u = 0 }; @{ e = $_; u = $u } })
             $sel = @()
             if ($null -ne $hostUpd -and @($withUpd | Where-Object { $null -ne $_.u }).Count -eq $withUpd.Count) {
                 $same = @($withUpd | Where-Object { $_.u -eq $hostUpd })
@@ -75,7 +98,7 @@ function Invoke-VsatCheckAdvisory {
             foreach ($e in $sel) {
                 $fb = Get-VsatProp $e 'fixedBuild'
                 if ($null -eq $fb -or $build -lt [long]$fb) {
-                    $exposed.Add([ordered]@{ id = $adv.id; severity = $adv.severity; kev = [bool]$adv.knownExploited; fix = $(if ($e.fixedVersion) { $e.fixedVersion } else { 'no public fix for this line' }); cves = @($(if ($e.Contains('cves')) { $e.cves } else { $adv.cves })) })
+                    $exposed.Add([ordered]@{ id = $adv.id; severity = (Get-VsatAdvisoryEntrySeverity $adv $e); kev = (Test-VsatAdvisoryEntryKev $adv $e); fix = $(if ($e.fixedVersion) { $e.fixedVersion } else { 'no public fix for this line' }); cves = @($(if ($e.Contains('cves')) { $e.cves } else { $adv.cves })) })
                 }
             }
         }
@@ -88,7 +111,16 @@ function Invoke-VsatCheckAdvisory {
         return (New-VsatFinding -Rule $Rule -Asset $Asset -Result PASS -Observed "$obsBase; not below fixed builds of advisories in $snap" -Expected 'Build at or above fixed builds of applicable advisories' -Note 'Advisories published after the snapshot date are not evaluated.')
     }
     $uniq = @{}
-    foreach ($x in $exposed) { $uniq[$x.id] = $x }
+    foreach ($x in $exposed) {
+        # Several lines of one advisory can match (e.g. per-CVE entries): merge them so the
+        # KEV flag, CVE list and severity reflect every exposed entry, not only the last one.
+        if (-not $uniq.ContainsKey($x.id)) { $uniq[$x.id] = $x; continue }
+        $m = $uniq[$x.id]
+        $m.kev = [bool]($m.kev -or $x.kev)
+        $m.cves = @(@($m.cves) + @($x.cves) | Where-Object { $_ } | Select-Object -Unique)
+        $rank = @{ critical = 4; important = 3; high = 3; moderate = 2; medium = 2; low = 1 }
+        if ([int]$rank[[string]$x.severity] -gt [int]$rank[[string]$m.severity]) { $m.severity = $x.severity }
+    }
     $items = @($uniq.Values)
     $sev = 'medium'
     if (@($items | Where-Object { $_.severity -eq 'critical' -or $_.kev }).Count) { $sev = 'critical' }

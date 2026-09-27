@@ -24,4 +24,4 @@ Never post real hostnames, IP addresses, credentials, thumbprints, reports or ev
 ## What we can't help with
 
 - General VMware, vSphere or NSX administration or licensing
-- Interpreting compliance obligations for your organization. VSAT results are decision support, not an audit opinion.
+- Interpreting compliance obligations for your organization.

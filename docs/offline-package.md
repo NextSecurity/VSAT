@@ -2,9 +2,9 @@
 
 VSAT is designed for isolated (air-gapped) environments. The Windows offline package contains everything needed to run an assessment with **no internet access and nothing installed on the runner**.
 
-## Why you build it yourself
+## How the package is built
 
-We have **not confirmed redistribution rights** for the PowerShell runtime and the VMware PowerCLI modules inside a VSAT release. Until we have, releases do **not** include those binaries. Instead, `build/New-OfflinePackage.ps1` runs on a **connected** machine, downloads the dependencies from their official vendor sources, and produces the same fully populated ZIP that a release would contain. You then move the ZIP into the isolated environment.
+Releases ship `vsat.ps1` and the offline builder. `build/New-OfflinePackage.ps1` runs on a **connected** machine, downloads the dependencies from their official vendor sources, and produces a fully populated ZIP. You then move the ZIP into the isolated environment.
 
 A partially populated ZIP that would need downloads inside the isolated environment is treated as a build failure.
 
@@ -57,7 +57,7 @@ VSAT-2.0.0-win-x64-offline/
 
 - `VSAT.cmd` starts `runtime\pwsh\pwsh.exe` with `vsat.ps1`. It does **not** load user or machine profile scripts.
 - VSAT prepends the package's `./modules` folder to `PSModulePath` **for its own process only** and imports modules explicitly. VSAT performs no `Install-Module` and no global or user-scope installation, and it makes no registry or profile changes.
-- **Execution policy and application control are respected.** VSAT does not use `-ExecutionPolicy Bypass` to get around organizational policy. If your policy blocks unsigned scripts, VSAT reports this during the readiness check. Follow your organization's approval process, for example allow-listing by hash. Release artifacts are **not code-signed** in this alpha.
+- **Execution policy and application control are respected.** VSAT does not use `-ExecutionPolicy Bypass` to get around organizational policy. If your policy blocks unsigned scripts, VSAT reports this during the readiness check. Follow your organization's approval process, for example allow-listing by hash.
 - VSAT never changes PowerCLI's persisted configuration, including `InvalidCertificateAction`. Pin untrusted endpoint certificates per endpoint with `-TrustedThumbprint "host=SHA256"`.
 - Outputs are written under the package folder by default, or to `-OutputPath`, with restrictive permissions where supported.
 - VSAT contacts nothing except the endpoints you specify: no telemetry, no update checks and no external web resources.

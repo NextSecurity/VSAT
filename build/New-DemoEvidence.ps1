@@ -21,15 +21,15 @@ function U([string]$seed) {
 }
 
 $scope = [ordered]@{
-    nativeVlans = @(@{ switch = '*'; vlan = 1 })
+    nativeVlans = @([ordered]@{ switch = '*'; vlan = 1 })
     authorizedNetflowCollectors = @('10.0.0.50')
     authorizedSyslogTargets = @('udp://10.0.0.40:514', 'tcp://10.0.0.40:514')
-    criticalAssets = @(@{ match = 'name:vcsa*'; criticality = 'high' }, @{ match = 'name:dc01*'; criticality = 'high' }, @{ match = 'name:db0*'; criticality = 'high' }, @{ match = 'name:web0*'; criticality = 'medium' })
-    zones = @(@{ name = 'DMZ'; match = 'name:jump*' }, @{ name = 'Web'; match = 'name:web0*' }, @{ name = 'App'; match = 'name:app0*' }, @{ name = 'Data'; match = 'name:db0*' }, @{ name = 'Management'; match = 'name:vcsa*' })
-    exclusions = @(@{ pattern = 'vm:lab-*'; reason = 'Disposable lab VMs out of scope' })
+    criticalAssets = @([ordered]@{ match = 'name:vcsa*'; criticality = 'high' }, [ordered]@{ match = 'name:dc01*'; criticality = 'high' }, [ordered]@{ match = 'name:db0*'; criticality = 'high' }, [ordered]@{ match = 'name:web0*'; criticality = 'medium' })
+    zones = @([ordered]@{ name = 'DMZ'; match = 'name:jump*' }, [ordered]@{ name = 'Web'; match = 'name:web0*' }, [ordered]@{ name = 'App'; match = 'name:app0*' }, [ordered]@{ name = 'Data'; match = 'name:db0*' }, [ordered]@{ name = 'Management'; match = 'name:vcsa*' })
+    exclusions = @([ordered]@{ pattern = 'vm:lab-*'; reason = 'Disposable lab VMs out of scope' })
     exceptions = @(
-        @{ ruleId = 'ESXI-SVC-SSH'; asset = 'esx02.example.local'; owner = 'infra-team'; rationale = 'Vendor support session (ticket CHG-1042)'; expires = '2026-12-31' }
-        @{ ruleId = 'VM-PASSTHROUGH'; asset = 'ai-train01'; owner = 'ml-platform'; rationale = 'GPU passthrough for model training'; expires = '2026-06-30' }
+        [ordered]@{ ruleId = 'ESXI-SVC-SSH'; asset = 'esx02.example.local'; owner = 'infra-team'; rationale = 'Vendor support session (ticket CHG-1042)'; expires = '2026-12-31' }
+        [ordered]@{ ruleId = 'VM-PASSTHROUGH'; asset = 'ai-train01'; owner = 'ml-platform'; rationale = 'GPU passthrough for model training'; expires = '2026-06-30' }
     )
 }
 $ev = New-VsatEvidence -Mode demo -Scope $scope
@@ -37,12 +37,14 @@ $ev.run.id = '00000000-0000-4000-8000-000000000d30'
 $ev.run.startedUtc = '2026-09-23T08:00:00Z'; $ev.run.endedUtc = '2026-09-23T08:03:41Z'; $ev.run.status = 'complete'
 
 $vc = Add-VsatEndpoint -Evidence $ev -Type vcenter -Address 'vc01.example.local'
+$vc.resolvedAddresses = @('10.0.0.20')   # recorded at connect time; the vcsa01 VM below carries this IP
 $vc.status = 'collected'; $vc.product = 'VMware vCenter Server 8.0.3 build-24322831'; $vc.version = '8.0.3'; $vc.build = '24322831'; $vc.instanceUuid = (U 'vc01'); $vc.apiVersion = '8.0.3.0'
 $nsxEp = Add-VsatEndpoint -Evidence $ev -Type nsx -Address 'nsx01.example.local'
+$nsxEp.resolvedAddresses = @('10.0.0.21')   # the nsx-mgr01 VM below carries this IP
 $nsxEp.status = 'collected'; $nsxEp.product = 'NSX'; $nsxEp.version = '4.2.1.3'; $nsxEp.build = '4.2.1.3.0.24533884'
 $E = 'ep-vc01'; $NX = 'ep-nsx01'
 
-$root = Add-VsatAsset -Evidence $ev -Id "${E}:root" -Type vcenter -Name 'vc01.example.local' -Endpoint $E -Version '8.0.3' -Build '24322831' -Props ([ordered]@{ product = 'VMware vCenter Server'; instanceUuid = (U 'vc01'); apiType = 'VirtualCenter' })
+$root = Add-VsatAsset -Evidence $ev -Id "${E}:root" -Type vcenter -Name 'vc01.example.local' -Endpoint $E -Version '8.0.3' -Build '24322831' -Props ([ordered]@{ product = 'VMware vCenter Server'; instanceUuid = (U 'vc01'); apiType = 'VirtualCenter'; rootFolder = 'group-d1' })
 Set-VsatFact $root 'extensions' -Value @(
     [ordered]@{ key = 'com.vmware.nsx.management.nsxt'; company = 'VMware'; version = '4.2.1'; urls = @('https://nsx01.example.local:443/') }
     [ordered]@{ key = 'com.vmware.vim.sms'; company = 'VMware'; version = '8.0'; urls = @() })
@@ -52,7 +54,7 @@ Set-VsatFact $root 'permissions' -Value @(
     [ordered]@{ principal = 'EXAMPLE\j.doe'; role = 'Admin'; entity = 'cl-prod'; entityId = 'ClusterComputeResource-domain-c8'; propagate = $true; isGroup = $false }
     [ordered]@{ principal = 'EXAMPLE\helpdesk'; role = 'VirtualMachinePowerUser'; entity = 'cl-dmz'; entityId = 'ClusterComputeResource-domain-c9'; propagate = $true; isGroup = $true }
     [ordered]@{ principal = 'EXAMPLE\auditors'; role = 'ReadOnly'; entity = 'Datacenters'; entityId = 'Folder-group-d1'; propagate = $true; isGroup = $true })
-Set-VsatFact $root 'roles' -Value @([ordered]@{ name = 'Admin'; system = $true; privilegeCount = 600 }, [ordered]@{ name = 'VirtualMachinePowerUser'; system = $false; privilegeCount = 40 })
+Set-VsatFact $root 'roles' -Value @([ordered]@{ name = 'Admin'; system = $true; privilegeCount = 600; adminPrivileges = @('Authorization.ModifyPermissions', 'Host.Config.Settings') }, [ordered]@{ name = 'VirtualMachinePowerUser'; system = $false; privilegeCount = 40; adminPrivileges = @() })
 Set-VsatFact $root 'settings' -Value ([ordered]@{ 'event.maxAge' = '30'; 'task.maxAge' = '30'; 'VirtualCenter.VimPasswordExpirationInDays' = '30' })
 Set-VsatFact $root 'keyProviders' -Value @([ordered]@{ cluster = 'kms-cluster-01'; servers = @('kms01.example.local') })
 
@@ -243,13 +245,13 @@ Set-VsatFact $mgr 'ntp' -Value ([ordered]@{ service_name = 'ntp'; service_proper
 Set-VsatFact $mgr 'certificates' -Value @(
     [ordered]@{ id = 'c1'; name = 'mgmt-cluster-api'; usedBy = @('API'); notAfter = '2028-01-15T00:00:00Z'; selfSigned = $false; subject = 'CN=nsx01.example.local' }
     [ordered]@{ id = 'c2'; name = 'tier0-vpn-cert'; usedBy = @('IPSEC_VPN'); notAfter = '2026-10-10T00:00:00Z'; selfSigned = $true; subject = 'CN=vpn.example.local' })
-Set-VsatFact $mgr 'computeManagers' -Value @([ordered]@{ id = 'cm-1'; display_name = 'vc01'; server = 'vc01.example.local'; origin_type = 'vCenter' })
+Set-VsatFact $mgr 'computeManagers' -Value @([ordered]@{ id = 'cm-1'; display_name = 'vc01'; server = 'vc01.example.local'; origin_type = 'vCenter'; origin_id = (U 'vc01'); username = 'svc-nsx@vsphere.local' })
 Set-VsatFact $mgr 'transportNodeStates' -Value @(1..5 | ForEach-Object { [ordered]@{ transport_node_id = "tn-esx0$_"; state = $(if ($_ -eq 5) { 'failed' } else { 'success' }) } })
 Set-VsatFact $mgr 'dfwSettings' -Value ([ordered]@{ enable_firewall = $true })
 Set-VsatFact $mgr 'excludeList' -Value ([ordered]@{ members = @('/infra/domains/default/groups/grp-legacy-excluded') })
 Set-VsatFact $mgr 'idsClusters' -Value @()
 Set-VsatFact $mgr 'federation' -Status absent -Value $null
-Add-VsatRelationship -Evidence $ev -Source $mgr.id -Target 'vcenter:vc01.example.local' -Type manages -Provenance 'nsx.compute-managers'
+Add-VsatRelationship -Evidence $ev -Source $mgr.id -Target 'vcenter:vc01.example.local' -Type manages -Provenance 'nsx.compute-managers' -Props ([ordered]@{ server = 'vc01.example.local'; name = 'vc01' })
 foreach ($n in 1..5) {
     $tn = Add-VsatAsset -Evidence $ev -Id "${NX}:tn/tn-esx0$n" -Type 'nsx-transport-node' -Name "esx0$n.example.local" -Endpoint $NX -Props ([ordered]@{ resourceType = 'HostNode'; externalId = "host-$($n)0"; fqdn = "esx0$n.example.local" })
     Add-VsatRelationship -Evidence $ev -Source $mgr.id -Target $tn.id -Type manages

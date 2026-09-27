@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'">
-<title>VSAT: Read-only security audit for VMware vSphere and NSX, Hyper-V and KVM</title>
-<meta name="description" content="VSAT is a portable, read-only PowerShell auditor for the virtualization layer: VMware vSphere, vCenter, ESXi and NSX, Microsoft Hyper-V, and KVM/libvirt. It runs offline and produces a standalone report with topology, attack paths and remediation work packages.">
+<title>VSAT: Read-only virtualization security assessment for IT and OT networks</title>
+<meta name="description" content="VSAT is a portable, read-only security assessment tool for the virtualization layer: VMware vSphere, vCenter, ESXi and NSX, Microsoft Hyper-V, and KVM/libvirt. Built for security professionals working in connected networks and air-gapped IT/OT enclaves. Standalone report with topology, attack paths, blast radius and remediation work packages.">
 <link rel="canonical" href="https://nextsecurity.github.io/VSAT/">
 <meta name="robots" content="index, follow">
 <meta name="theme-color" content="#0E1620">
@@ -21,7 +21,7 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="VSAT">
 <meta property="og:title" content="VSAT: Audit the layer everything else runs on">
-<meta property="og:description" content="Portable, read-only PowerShell audit for VMware vSphere and NSX, Microsoft Hyper-V and KVM/libvirt. Runs offline, writes a standalone report with topology, attack paths and remediation work packages.">
+<meta property="og:description" content="Portable, read-only security assessment for VMware vSphere and NSX, Microsoft Hyper-V and KVM/libvirt, in connected networks or air-gapped IT/OT enclaves. Standalone report with topology, attack paths, blast radius and remediation work packages.">
 <meta property="og:url" content="https://nextsecurity.github.io/VSAT/">
 <meta property="og:image" content="https://nextsecurity.github.io/VSAT/assets/social-preview.png">
 <meta property="og:image:width" content="1280">
@@ -29,7 +29,7 @@
 <meta property="og:image:alt" content="VSAT: audit the layer everything else runs on. VMware vSphere and NSX, Hyper-V and KVM, read-only and offline.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="VSAT: Audit the layer everything else runs on">
-<meta name="twitter:description" content="Read-only, offline PowerShell audit for VMware vSphere and NSX, Hyper-V and KVM, with a standalone interactive report.">
+<meta name="twitter:description" content="Read-only security assessment for VMware vSphere and NSX, Hyper-V and KVM, in connected or air-gapped IT/OT networks, with a standalone interactive report.">
 <meta name="twitter:image" content="https://nextsecurity.github.io/VSAT/assets/social-preview.png">
 <meta name="twitter:image:alt" content="VSAT: audit the layer everything else runs on. VMware vSphere and NSX, Hyper-V and KVM, read-only and offline.">
 
@@ -42,7 +42,7 @@
   "description": "Portable, read-only PowerShell security audit for the virtualization layer: VMware vSphere, vCenter, ESXi and NSX, Microsoft Hyper-V, and KVM/libvirt. Runs offline and produces a standalone report with topology, attack paths and remediation guidance.",
   "applicationCategory": "SecurityApplication",
   "operatingSystem": "Windows",
-  "softwareVersion": "2.2.0",
+  "softwareVersion": "__VSAT_VERSION__",
   "softwareRequirements": "PowerShell 7.4 or later; VMware PowerCLI for vSphere targets",
   "license": "https://opensource.org/licenses/MIT",
   "url": "https://nextsecurity.github.io/VSAT/",
@@ -86,21 +86,47 @@
       <span class="line"><span>everything else runs on.</span></span>
     </h1>
     <div class="hero-copy">
-      <p class="lede">VSAT is a portable, read-only PowerShell auditor for the virtualization backbone of your datacenter. Copy it into an isolated network, run one command, and get an evidence-backed report you can open anywhere, with no internet and no telemetry.</p>
+      <p class="lede">VSAT is a portable, read-only security assessment tool for the virtualization backbone of IT and OT networks. Run it on a connected network or carry it into an air-gapped enclave: one command, no agents, no internet, no telemetry, and an evidence-backed report you can open anywhere.</p>
       <div class="cta">
-        <a class="btn btn-primary" href="https://github.com/NextSecurity/VSAT/releases">Download VSAT 2.2.0</a>
+        <a class="btn btn-primary" href="https://github.com/NextSecurity/VSAT/releases">Download VSAT __VSAT_VERSION__</a>
         <a class="btn btn-quiet" href="demo/report.html">Open the demo report</a>
       </div>
-      <div class="oneliner">
-        <span class="ps" aria-hidden="true">PS&gt;</span>
-        <code id="hero-cmd">.\vsat.ps1 -Demo</code>
-        <button class="copy" type="button" data-copy="hero-cmd" aria-label="Copy the demo command">Copy</button>
+      <p class="oneliner-lede">Downloads VSAT, checks it wasn't tampered with, then runs the safe built-in demo. Re-running the same line later updates to the newest release.</p>
+      <div class="os-switch" data-os-switch role="group" aria-label="Operating system">
+        <button type="button" class="os-tab" data-os="win" aria-pressed="true">Windows</button>
+        <button type="button" class="os-tab" data-os="unix" aria-pressed="false">Linux / macOS</button>
       </div>
-      <p class="hero-note">Version 2.2.0 has not yet been validated against live production systems. <a href="#limits">Read the current limits</a>.</p>
+      <div class="oneliner" data-os-panel="win">
+        <span class="ps" aria-hidden="true">PS&gt;</span>
+        <code id="hero-cmd-win">$u="https://github.com/NextSecurity/VSAT/releases/latest/download";iwr "$u/vsat.ps1" -OutFile vsat.ps1;iwr "$u/SHA256SUMS.txt" -OutFile SHA256SUMS.txt;$h=((gc SHA256SUMS.txt|?{$_ -match '\svsat\.ps1$'}) -split '\s+')[0];if((Get-FileHash vsat.ps1).Hash -ne $h){throw 'checksum mismatch - do not run'};Unblock-File vsat.ps1 -EA 0;./vsat.ps1 -Demo</code>
+        <button class="copy" type="button" data-copy="hero-cmd-win" aria-label="Copy the Windows one-liner">Copy</button>
+      </div>
+      <div class="oneliner" data-os-panel="unix" hidden>
+        <span class="ps" aria-hidden="true">$</span>
+        <code id="hero-cmd-unix">u=https://github.com/NextSecurity/VSAT/releases/latest/download; curl -fsSLO $u/vsat.ps1 -O $u/SHA256SUMS.txt &amp;&amp; grep ' vsat.ps1$' SHA256SUMS.txt | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -) &amp;&amp; pwsh ./vsat.ps1 -Demo</code>
+        <button class="copy" type="button" data-copy="hero-cmd-unix" aria-label="Copy the Linux/macOS one-liner">Copy</button>
+      </div>
+      <details class="pin-details" data-os-panel="win">
+        <summary>Pin a version (reproducible)</summary>
+        <div class="oneliner">
+          <span class="ps" aria-hidden="true">PS&gt;</span>
+          <code id="hero-cmd-win-pin">$v='__VSAT_VERSION__';$u="https://github.com/NextSecurity/VSAT/releases/download/v$v";iwr "$u/vsat.ps1" -OutFile vsat.ps1;iwr "$u/SHA256SUMS.txt" -OutFile SHA256SUMS.txt;$h=((gc SHA256SUMS.txt|?{$_ -match '\svsat\.ps1$'}) -split '\s+')[0];if((Get-FileHash vsat.ps1).Hash -ne $h){throw 'checksum mismatch - do not run'};Unblock-File vsat.ps1 -EA 0;./vsat.ps1 -Demo</code>
+          <button class="copy" type="button" data-copy="hero-cmd-win-pin" aria-label="Copy the pinned Windows one-liner">Copy</button>
+        </div>
+      </details>
+      <details class="pin-details" data-os-panel="unix" hidden>
+        <summary>Pin a version (reproducible)</summary>
+        <div class="oneliner">
+          <span class="ps" aria-hidden="true">$</span>
+          <code id="hero-cmd-unix-pin">v=__VSAT_VERSION__; u=https://github.com/NextSecurity/VSAT/releases/download/v$v; curl -fsSLO $u/vsat.ps1 -O $u/SHA256SUMS.txt &amp;&amp; grep ' vsat.ps1$' SHA256SUMS.txt | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -) &amp;&amp; pwsh ./vsat.ps1 -Demo</code>
+          <button class="copy" type="button" data-copy="hero-cmd-unix-pin" aria-label="Copy the pinned Linux/macOS one-liner">Copy</button>
+        </div>
+      </details>
+      <p class="hero-note">Real audit: <code>./vsat.ps1</code> opens the guided UI. Credentials are prompted, never typed on the command line.</p>
     </div>
 
     <aside class="readout" aria-labelledby="readout-title">
-      <h2 id="readout-title" class="readout-title">Platforms in 2.2.0</h2>
+      <h2 id="readout-title" class="readout-title">Platforms in __VSAT_VERSION__</h2>
       <ul class="readout-list">
         <li>
           <span class="led" aria-hidden="true"></span>
@@ -118,7 +144,7 @@
           <span class="ro-num"><strong>23</strong> rules</span>
         </li>
       </ul>
-      <p class="readout-foot">182 rules in rule pack 2026.09.0. All three platforms can be assessed in one run and one report. <a href="https://github.com/NextSecurity/VSAT/blob/master/docs/coverage.md">See&nbsp;every&nbsp;rule</a>.</p>
+      <p class="readout-foot">188 rules in rule pack 2026.09.1, including 6 OT segmentation rules. All three platforms can be assessed in one run and one report. <a href="https://github.com/NextSecurity/VSAT/blob/master/docs/coverage.md">See&nbsp;every&nbsp;rule</a>.</p>
     </aside>
   </div>
 
@@ -137,11 +163,25 @@
   </figure>
 </section>
 
+<section id="who" class="section" aria-labelledby="who-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2 id="who-title" class="display">Built for security professionals</h2>
+      <p class="sec-lede">For teams that assess infrastructure they cannot expose or change, from enterprise datacenters to isolated defense, government and critical-infrastructure networks.</p>
+    </div>
+    <dl class="sec-list">
+      <div><dt>Penetration testers, red and blue teams</dt><dd>Attack paths, blast radius from a compromised account or VM, and an ATT&amp;CK Navigator layer from one read-only run.</dd></div>
+      <div><dt>Assessors, auditors and MSSPs</dt><dd>Every finding carries observed and expected values, evidence, mitigation, rollback and validation. One report format across VMware, Hyper-V and KVM, with baselines that show drift between engagements.</dd></div>
+      <div><dt>Defense, government and OT/ICS teams</dt><dd>Runs inside air-gapped enclaves from a portable, hash-verified package. Installs nothing, sends nothing, never writes to the systems it audits.</dd></div>
+    </dl>
+  </div>
+</section>
+
 <section id="report" class="section" aria-labelledby="report-title">
   <div class="wrap">
     <div class="sec-head">
       <h2 id="report-title" class="display">One file you can carry out of the room</h2>
-      <p class="sec-lede">Every run writes a standalone <code>report.html</code> that works offline, next to an evidence package and CSV worklists. Five features go beyond a checklist, and each one says plainly how much it can tell you.</p>
+      <p class="sec-lede">Every run writes a standalone <code>report.html</code> that works offline, next to an evidence package and CSV worklists. Eight features go beyond a checklist, and each one says plainly how much it can tell you.</p>
     </div>
 
     <div class="viewer" data-tabs>
@@ -186,6 +226,21 @@
     <div class="beyond">
       <h3 class="beyond-title">What each feature is, and what it is not</h3>
       <dl class="ledger">
+        <div class="ledger-row">
+          <dt>Blast radius</dt>
+          <dd class="is">Pick a compromised account or VM and see what an attacker reaches across every platform, and which fixes break the most paths.</dd>
+          <dd class="not">Paths are inferred from configuration, with the confidence of each hop shown.</dd>
+        </div>
+        <div class="ledger-row">
+          <dt>OT segmentation lens</dt>
+          <dd class="is">Declare Purdue levels on scope zones and VSAT checks that OT and IT workloads do not share hosts, virtual switches, management planes, admin accounts or network paths.</dd>
+          <dd class="not">Virtualization layer only. No OT network scanning, industrial protocols or field devices.</dd>
+        </div>
+        <div class="ledger-row">
+          <dt>MITRE ATT&amp;CK mapping</dt>
+          <dd class="is">Attack-path hops and rules map to ATT&amp;CK techniques. Every run writes <code>attack-layer.json</code> for the ATT&amp;CK Navigator.</dd>
+          <dd class="not">Technique scores reflect configuration, not observed adversary activity.</dd>
+        </div>
         <div class="ledger-row">
           <dt>Drift between runs</dt>
           <dd class="is">Pass <code>-Baseline</code> a previous evidence package to see new, resolved, changed and unassessed items, including asset and NSX rule changes.</dd>
@@ -360,15 +415,12 @@
     <div class="memo">
       <div class="memo-head">
         <h2 id="limits-title" class="display">Current limits</h2>
-        <p>What 2.2.0 does not do yet. This list ships with every release.</p>
+        <p>What __VSAT_VERSION__ does not cover. This list ships with every release.</p>
       </div>
       <ul class="memo-list">
-        <li><strong>Not validated against live production systems.</strong> Collectors follow vendor API documentation and are tested with synthetic fixtures, the vcsim vSphere simulator and a mock NSX API. No vCenter, ESXi, NSX, Hyper-V or KVM build is listed as tested.</li>
-        <li><strong>CIS mappings are unverified.</strong> VSAT is not certified by, endorsed by or affiliated with CIS, VMware, Broadcom or Microsoft. A clean run does not mean compliance.</li>
-        <li><strong>No code signing.</strong> There is no signing certificate yet. Verify releases with SHA-256 checksums.</li>
-        <li><strong>You build the offline package</strong> on a connected machine with the provided script, because redistribution rights for PowerShell and PowerCLI are not confirmed.</li>
-        <li><strong>No performance measurements</strong> on large inventories.</li>
-        <li><strong>Windows x64 runner only.</strong> Linux and macOS are not supported runners yet.</li>
+        <li><strong>Not a certification.</strong> VSAT is not certified by, endorsed by or affiliated with CIS, VMware, Broadcom or Microsoft. A clean run does not mean compliance.</li>
+        <li><strong>Virtualization layer in OT.</strong> VSAT audits the hypervisors and virtual networks that host OT workloads. Field devices (PLCs, RTUs) and industrial protocols are out of scope.</li>
+        <li><strong>Windows x64 runner.</strong> Linux and macOS are not supported runners.</li>
       </ul>
       <p class="memo-foot"><a href="https://github.com/NextSecurity/VSAT/blob/master/docs/limitations.md">Read the full list of limitations</a></p>
     </div>
@@ -380,6 +432,7 @@
     <h2 id="docs-title" class="display">Read before you run</h2>
     <ul class="doc-list">
       <li><a href="https://github.com/NextSecurity/VSAT/blob/master/docs/usage.md"><strong>Usage</strong><span>Parameters, scope file, exit codes, outputs</span></a></li>
+      <li><a href="https://github.com/NextSecurity/VSAT/blob/master/docs/security-review.md"><strong>Security review</strong><span>For the team that approves vsat.ps1</span></a></li>
       <li><a href="https://github.com/NextSecurity/VSAT/blob/master/docs/offline-package.md"><strong>Offline package</strong><span>Connected-side builder and hashes</span></a></li>
       <li><a href="https://github.com/NextSecurity/VSAT/blob/master/docs/privileges.md"><strong>Least privileges</strong><span>vCenter Read-only and NSX Auditor roles</span></a></li>
       <li><a href="https://github.com/NextSecurity/VSAT/blob/master/docs/coverage.md"><strong>Coverage matrix</strong><span>Every rule, generated from the rule pack</span></a></li>
@@ -397,7 +450,7 @@
   <div class="wrap foot-grid">
     <div class="foot-brand">
       <img src="assets/logo.svg" alt="" width="28" height="28">
-      <p><strong>VSAT 2.2.0</strong><br>Virtualization Security Audit Tool. Open source under the MIT License.</p>
+      <p><strong>VSAT __VSAT_VERSION__</strong><br>Virtualization Security Audit Tool. Open source under the MIT License.</p>
     </div>
     <nav aria-label="Footer">
       <ul>

@@ -1,8 +1,8 @@
 {
-  "schemaVersion": "2.0",
+  "schemaVersion": "2.3",
   "tool": {
     "name": "VSAT",
-    "version": "2.2.0"
+    "version": "2.3.0"
   },
   "run": {
     "id": "00000000-0000-4000-8000-000000000d30",
@@ -23,7 +23,10 @@
         "build": "24322831",
         "instanceUuid": "7153b5e7-edfb-e742-95ae-c6f5f3fdfa71",
         "apiVersion": "8.0.3.0",
-        "errors": []
+        "errors": [],
+        "resolvedAddresses": [
+          "10.0.0.20"
+        ]
       },
       {
         "id": "ep-nsx01",
@@ -35,16 +38,19 @@
         "build": "4.2.1.3.0.24533884",
         "instanceUuid": null,
         "apiVersion": null,
-        "errors": []
+        "errors": [],
+        "resolvedAddresses": [
+          "10.0.0.21"
+        ]
       }
     ],
     "exclusions": {
-      "reason": "Disposable lab VMs out of scope",
-      "pattern": "vm:lab-*"
+      "pattern": "vm:lab-*",
+      "reason": "Disposable lab VMs out of scope"
     },
     "nativeVlans": {
-      "vlan": 1,
-      "switch": "*"
+      "switch": "*",
+      "vlan": 1
     },
     "authorizedNetflowCollectors": "10.0.0.50",
     "authorizedSyslogTargets": [
@@ -71,43 +77,49 @@
     ],
     "zones": [
       {
-        "match": "name:jump*",
-        "name": "DMZ"
+        "name": "DMZ",
+        "match": "name:jump*"
       },
       {
-        "match": "name:web0*",
-        "name": "Web"
+        "name": "Web",
+        "match": "name:web0*"
       },
       {
-        "match": "name:app0*",
-        "name": "App"
+        "name": "App",
+        "match": "name:app0*"
       },
       {
-        "match": "name:db0*",
-        "name": "Data"
+        "name": "Data",
+        "match": "name:db0*"
       },
       {
-        "match": "name:vcsa*",
-        "name": "Management"
+        "name": "Management",
+        "match": "name:vcsa*"
       }
     ],
     "exceptions": [
       {
-        "owner": "infra-team",
-        "expires": "2026-12-31",
-        "rationale": "Vendor support session (ticket CHG-1042)",
+        "ruleId": "ESXI-SVC-SSH",
         "asset": "esx02.example.local",
-        "ruleId": "ESXI-SVC-SSH"
+        "owner": "infra-team",
+        "rationale": "Vendor support session (ticket CHG-1042)",
+        "expires": "2026-12-31"
       },
       {
-        "owner": "ml-platform",
-        "expires": "2026-06-30",
-        "rationale": "GPU passthrough for model training",
+        "ruleId": "VM-PASSTHROUGH",
         "asset": "ai-train01",
-        "ruleId": "VM-PASSTHROUGH"
+        "owner": "ml-platform",
+        "rationale": "GPU passthrough for model training",
+        "expires": "2026-06-30"
       }
     ],
-    "nsxDeclaredAbsent": false
+    "nsxDeclaredAbsent": false,
+    "entryPoints": [],
+    "credentialStores": [],
+    "identityGroups": [],
+    "identityDomains": [],
+    "aiWorkloads": [],
+    "signoffs": []
   },
   "assets": [
     {
@@ -126,7 +138,8 @@
       "props": {
         "product": "VMware vCenter Server",
         "instanceUuid": "7153b5e7-edfb-e742-95ae-c6f5f3fdfa71",
-        "apiType": "VirtualCenter"
+        "apiType": "VirtualCenter",
+        "rootFolder": "group-d1"
       },
       "facts": {
         "extensions": {
@@ -199,12 +212,17 @@
             {
               "name": "Admin",
               "system": true,
-              "privilegeCount": 600
+              "privilegeCount": 600,
+              "adminPrivileges": [
+                "Authorization.ModifyPermissions",
+                "Host.Config.Settings"
+              ]
             },
             {
               "name": "VirtualMachinePowerUser",
               "system": false,
-              "privilegeCount": 40
+              "privilegeCount": 40,
+              "adminPrivileges": []
             }
           ]
         },
@@ -4655,7 +4673,9 @@
               "id": "cm-1",
               "display_name": "vc01",
               "server": "vc01.example.local",
-              "origin_type": "vCenter"
+              "origin_type": "vCenter",
+              "origin_id": "7153b5e7-edfb-e742-95ae-c6f5f3fdfa71",
+              "username": "svc-nsx@vsphere.local"
             }
           ]
         },
@@ -7596,7 +7616,10 @@
       "type": "manages",
       "provenance": "nsx.compute-managers",
       "confidence": "observed",
-      "props": {}
+      "props": {
+        "server": "vc01.example.local",
+        "name": "vc01"
+      }
     },
     {
       "source": "ep-nsx01:manager",

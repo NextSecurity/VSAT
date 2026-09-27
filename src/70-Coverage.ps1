@@ -17,6 +17,8 @@ $script:VsatDomains = @(
     [ordered]@{ id = 'kvm-host'; name = 'KVM/libvirt hosts'; mandatory = $true; platform = 'kvm'; collectors = @('kvm.host'); assetTypes = @('kvm-host') }
     [ordered]@{ id = 'kvm-vm'; name = 'KVM virtual machines'; mandatory = $true; platform = 'kvm'; collectors = @('kvm.vms'); assetTypes = @('kvm-vm') }
     [ordered]@{ id = 'kvm-network'; name = 'KVM virtual networks'; mandatory = $true; platform = 'kvm'; collectors = @('kvm.network'); assetTypes = @('kvm-network') }
+    # Lens over the domains above, driven by scope zones[].purdueLevel; never mandatory.
+    [ordered]@{ id = 'ot-segmentation'; name = 'OT segmentation (virtualization layer)'; mandatory = $false; platform = 'cross-platform'; collectors = @(); assetTypes = @() }
 )
 
 function Update-VsatNsxDiscovery {
@@ -122,6 +124,24 @@ function Get-VsatCoverage {
                 $d.state = 'PARTIAL'; $d.label = 'PARTIAL: NSX PARTLY ASSESSED'
                 $d.missing = @($d.missing) + "$($checks.UNKNOWN + $checks.ERROR) NSX check(s) lack evidence"
             }
+            $domains.Add($d); continue
+        }
+        if ($def.id -eq 'ot-segmentation') {
+            $d.mandatory = $false
+            if (-not (Test-VsatOtLensDeclared -Scope $Evidence.scope)) {
+                $d.state = 'NOT_APPLICABLE'; $d.label = 'NOT APPLICABLE: NO PURDUE LEVELS DECLARED'
+                $d.detail = 'The OT segmentation lens runs only when scope zones declare purdueLevel. This is not an OT segmentation pass.'
+                $d.evidence = @('No zone declares a Purdue level')
+                $domains.Add($d); continue
+            }
+            $zones = @(@(Get-VsatProp $Evidence.scope 'zones' @()) | Where-Object { $_ -and $null -ne (ConvertTo-VsatPurdueLevel (Get-VsatProp $_ 'purdueLevel' $null)) })
+            $otCount = @($Evidence.assets | Where-Object { $_.type -in $script:VsatOtVmTypes -and $null -ne (Get-VsatProp $_ 'purdueLevel' $null) -and [string]$_.purdueLevel -ne 'dmz' -and [int]$_.purdueLevel -le 3 }).Count
+            $d.evidence = @("$($zones.Count) zone(s) declare a Purdue level: $(@($zones | ForEach-Object { "$($_.name)=$($_.purdueLevel)" }) -join ', ')")
+            $gaps = $checks.UNKNOWN + $checks.ERROR
+            if ($gaps) { $d.state = 'PARTIAL'; $d.label = 'PARTIAL: OT SEGMENTATION'; $d.missing = @("$gaps check(s) lack evidence (UNKNOWN/ERROR)") }
+            else { $d.label = 'OT SEGMENTATION ASSESSED' }
+            $d.detail = "$otCount OT workload(s) (Purdue 0-3) in scope; $($checks.total) check result(s). Virtualization layer only."
+            if (-not $otCount) { $d.detail += ' No workload matched a zone with Purdue level 0-3.' }
             $domains.Add($d); continue
         }
         $platformEps = @(Get-VsatPlatformEndpoints -Evidence $Evidence -Platform $def.platform)

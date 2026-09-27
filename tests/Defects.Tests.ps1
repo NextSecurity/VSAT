@@ -17,8 +17,8 @@ Describe '1.x defect: static ESXi 7.0.3 VIB equality used as patch assessment' {
         $rule = (Get-VsatRulePack).rules | Where-Object { $_.id -eq 'ESXI-PATCH-ADV' }
         (Invoke-VsatCheckAdvisory -Rule $rule -Asset $a -Check $rule.check -Context @{ now = [datetime]::UtcNow }).result | Should -Be 'PASS'
     }
-    It 'returns UNKNOWN (not PASS) for a branch without advisory data (e.g. ESX 9.0)' {
-        $a = [ordered]@{ id = 'h'; name = 'h'; type = 'host'; endpoint = 'e'; observedUtc = 'x'; version = '9.0.0'; build = '24755229'; props = [ordered]@{}; facts = [ordered]@{} }
+    It 'returns UNKNOWN (not PASS) for a branch without advisory data (e.g. a future ESX 10.0)' {
+        $a = [ordered]@{ id = 'h'; name = 'h'; type = 'host'; endpoint = 'e'; observedUtc = 'x'; version = '10.0.0'; build = '99999999'; props = [ordered]@{}; facts = [ordered]@{} }
         $rule = (Get-VsatRulePack).rules | Where-Object { $_.id -eq 'ESXI-PATCH-ADV' }
         (Invoke-VsatCheckAdvisory -Rule $rule -Asset $a -Check $rule.check -Context @{ now = [datetime]::UtcNow }).result | Should -Be 'UNKNOWN'
     }

@@ -47,12 +47,20 @@ function Invoke-VsatCorrelation {
 function Set-VsatScopeAnnotations {
     # Applies operator-supplied criticality and zones; labels inferred values.
     param([Parameter(Mandatory)]$Evidence)
+    # OT lens: on only when at least one zone declares a valid Purdue level (0-5 or 'dmz').
+    $script:VsatOtLens = Test-VsatOtLensDeclared -Scope $Evidence.scope
     foreach ($a in $Evidence.assets) {
+        # A level from an earlier scope (replay with an updated scope file) never lingers.
+        if ($a -is [System.Collections.IDictionary] -and $a.Contains('purdueLevel')) { $a.Remove('purdueLevel') }
         foreach ($c in @($Evidence.scope.criticalAssets)) {
             if (Test-VsatAssetMatch -Asset $a -Match ([string]$c.match)) { $a.criticality = [string]$c.criticality; $a.criticalitySource = 'operator' }
         }
         foreach ($z in @($Evidence.scope.zones)) {
-            if (Test-VsatAssetMatch -Asset $a -Match ([string]$z.match)) { $a.zone = [string]$z.name }
+            if (Test-VsatAssetMatch -Asset $a -Match ([string]$z.match)) {
+                $a.zone = [string]$z.name
+                $lvl = ConvertTo-VsatPurdueLevel (Get-VsatProp $z 'purdueLevel' $null)
+                if ($null -ne $lvl) { $a.purdueLevel = $lvl }
+            }
         }
         if (-not $a.criticality) {
             if ($a.type -in @('vcenter', 'nsx-manager')) { $a.criticality = 'high'; $a.criticalitySource = 'inferred' }

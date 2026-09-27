@@ -26,19 +26,58 @@ function Get-Normalized([string]$Path) {
 
 $srcFiles = Get-ChildItem -LiteralPath (Join-Path $root 'src') -Filter '*.ps1' | Sort-Object { $_.Name } -Culture ([Globalization.CultureInfo]::InvariantCulture)
 $resources = New-Object System.Collections.Generic.List[object]
-foreach ($dir in @('rules', 'data')) {
+# data/attack holds the generated ATT&CK/ATLAS catalog (build/Import-AttackCatalog.ps1) and the edge mappings.
+foreach ($dir in @('rules', 'data', 'data/attack')) {
     Get-ChildItem -LiteralPath (Join-Path $root $dir) -Filter '*.json' | Sort-Object Name | ForEach-Object { $resources.Add(@{ name = "$dir/$($_.Name)"; path = $_.FullName }) }
 }
-foreach ($f in @('assets/report/report.html', 'assets/report/report.css', 'assets/report/report.js', 'assets/ui/app.html', 'assets/ui/app.css', 'assets/ui/app.js')) {
-    $resources.Add(@{ name = $f; path = (Join-Path $root $f) })
+# The report and the UI each get ONE inline script and ONE stylesheet (hash-based CSP, file://).
+# The shared Blast radius files are concatenated in front of each host file, in this order. The
+# Node parity tests import assets/report/blast-core.js directly, so both sides run the same code.
+$blastJs = @('assets/report/blast-core.js', 'assets/report/blast-view.js')
+$blastCss = @('assets/report/blast.css')
+$composed = [ordered]@{
+    'assets/report/report.js' = @($blastJs + 'assets/report/report.js')
+    'assets/report/report.css' = @(@('assets/report/report.css') + $blastCss)
+    'assets/ui/app.js' = @($blastJs + 'assets/ui/app.js')
+    'assets/ui/app.css' = @(@('assets/ui/app.css') + $blastCss)
 }
+foreach ($f in @('assets/report/report.html', 'assets/report/report.css', 'assets/report/report.js', 'assets/ui/app.html', 'assets/ui/app.css', 'assets/ui/app.js')) {
+    if ($composed.Contains($f)) { $resources.Add(@{ name = $f; path = (Join-Path $root $f); parts = @($composed[$f] | ForEach-Object { Join-Path $root $_ }) }) }
+    else { $resources.Add(@{ name = $f; path = (Join-Path $root $f) }) }
+}
+# Embedded so -Doctor can print the exact pinned Install-Module command without a network call.
+$resources.Add(@{ name = 'runtime.lock.json'; path = (Join-Path $root 'build/runtime.lock.json') })
 $resources.Add(@{ name = 'fixtures/demo-evidence.json'; path = (Join-Path $root 'tests/fixtures/demo-evidence.json') })
-foreach ($r in $resources) { if (-not (Test-Path -LiteralPath $r.path)) { throw "Missing build input: $($r.path)" } }
+foreach ($r in $resources) { foreach ($p in @($(if ($r.parts) { $r.parts } else { $r.path }))) { if (-not (Test-Path -LiteralPath $p)) { throw "Missing build input: $p" } } }
 
 # JSON resources are validated at build time so a malformed rule pack never ships.
 foreach ($r in $resources) { if ($r.name -like '*.json') { [void](Get-Normalized $r.path | ConvertFrom-Json) } }
 
 $sb = New-Object System.Text.StringBuilder
+# PSScriptInfo for the PowerShell Gallery (Publish-Script/Publish-PSResource). GUID is a fixed
+# constant reserved for this script; never regenerate it. Deterministic: only $version varies.
+$psScriptInfoGuid = '228b4d14-2c3e-4ace-b07f-9151849e54c6'
+$psScriptInfo = @"
+<#PSScriptInfo
+
+.VERSION $version
+
+.GUID $psScriptInfoGuid
+
+.AUTHOR Efi Jeremiah
+
+.COMPANYNAME NextSecurity
+
+.TAGS VMware vSphere NSX HyperV KVM security audit
+
+.LICENSEURI https://github.com/NextSecurity/VSAT/blob/master/LICENSE
+
+.PROJECTURI https://github.com/NextSecurity/VSAT
+
+#>
+
+"@
+[void]$sb.Append($psScriptInfo.Replace("`r`n", "`n")).Append("`n")
 $header = Get-Normalized $srcFiles[0].FullName
 [void]$sb.Append($header.TrimEnd("`n")).Append("`n`n")
 $sourceHashInput = New-Object System.Text.StringBuilder
@@ -54,13 +93,15 @@ foreach ($f in $srcFiles | Select-Object -Skip 1) {
     [void]$sourceHashInput.Append($f.Name).Append($t)
     [void]$sb.Append("# ---- src/$($f.Name) ----`n").Append($t.TrimEnd("`n")).Append("`n`n")
 }
-[void]$sb.Append("#region Embedded resources (base64 UTF-8; data only, never executed)`n")
+# Resources are embedded as plain text in single-quoted here-strings, so a reviewer can read every
+# rule, data file and report asset in vsat.ps1 itself. Nothing is encoded, and nothing is executed.
+[void]$sb.Append("#region Embedded resources (plain text; data only, never executed)`n")
 [void]$sb.Append("`$script:VsatEmbedded = [ordered]@{`n")
 foreach ($r in $resources) {
-    $t = Get-Normalized $r.path
+    $t = if ($r.parts) { (@($r.parts | ForEach-Object { (Get-Normalized $_).TrimEnd("`n") + "`n" }) -join '') } else { Get-Normalized $r.path }
     [void]$sourceHashInput.Append($r.name).Append($t)
-    $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($t))
-    [void]$sb.Append("    '$($r.name)' = '$b64'`n")
+    if ($t -match "(?m)^'@") { throw "Resource $($r.name) has a line starting with '@, which would end its here-string early." }
+    [void]$sb.Append("    '$($r.name)' = @'`n").Append($t.TrimEnd("`n")).Append("`n'@`n")
 }
 [void]$sb.Append("}`n")
 [void]$sb.Append(@'
@@ -71,7 +112,7 @@ function Get-VsatEmbeddedNames {
 function Get-VsatEmbeddedText {
     param([Parameter(Mandatory)][string]$Name)
     if (-not $script:VsatEmbedded.Contains($Name)) { throw "Embedded resource '$Name' not found" }
-    return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($script:VsatEmbedded[$Name]))
+    return [string]$script:VsatEmbedded[$Name]
 }
 #endregion Embedded resources
 

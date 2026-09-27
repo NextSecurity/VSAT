@@ -13,5 +13,18 @@
       { "name": "VMware.VimAutomation.Core", "version": "13.5.1.25718932" },
       { "name": "VMware.VimAutomation.Storage", "version": "13.5.1.25718932" }
     ]
+  },
+  "attack": {
+    "notes": "Maintainer-side inputs for build/Import-AttackCatalog.ps1, which generates data/attack/attack-catalog.json. Never downloaded at runtime. Latest releases as of 2026-09-24.",
+    "attack": {
+      "version": "19.2",
+      "url": "https://github.com/mitre-attack/attack-stix-data/releases/download/v19.2/enterprise-attack.json",
+      "sha256": "dc1639caa5501d720e280cf1cbd8fbe009884a0c9b3e6e9ed9d0c25166c3d8f4"
+    },
+    "atlas": {
+      "version": "2026.09",
+      "url": "https://github.com/mitre-atlas/atlas-data/releases/download/v2026.09/ATLAS-2026.09.yaml",
+      "sha256": "935efa93e28294432d3e2f537eb94991ef8d1f8c58341cd360ea3321ddb66688"
+    }
   }
 }

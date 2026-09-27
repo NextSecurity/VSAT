@@ -23,20 +23,21 @@
   </div>
   <dl class="run-meta">
     <div><dt>Version</dt><dd id="meta-version">-</dd></div>
-    <div><dt>Run</dt><dd id="meta-run" class="mono">-</dd></div>
-    <div><dt>Generated</dt><dd id="meta-generated">-</dd></div>
     <div><dt>Profile</dt><dd id="meta-profile">-</dd></div>
+    <div><dt>Generated</dt><dd id="meta-generated">-</dd></div>
+    <div><dt>Run</dt><dd id="meta-run" class="mono">-</dd></div>
   </dl>
   <div class="header-actions">
-    <p class="sensitive-note" role="note">
+    <p class="sensitive-note" role="note" title="This report contains sensitive infrastructure data. Handle and share it accordingly.">
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="M8 1 L15 14 H1 Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 6 V9.5 M8 11.5 V12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-      <span>Contains sensitive infrastructure data</span>
+      <span>Sensitive data</span>
     </p>
     <button type="button" id="theme-toggle" class="btn btn-ghost" aria-label="Color theme: system">Theme: System</button>
   </div>
 </header>
 <nav class="tabs" id="tabs" aria-label="Report sections">
   <a href="#overview" data-page="overview">Overview</a>
+  <a href="#blast" data-page="blast" data-view="blast">Blast radius</a>
   <a href="#findings" data-page="findings">Findings</a>
   <a href="#topology" data-page="topology">Topology</a>
   <a href="#nsx" data-page="nsx">NSX</a>
@@ -47,6 +48,70 @@
 <main id="main" tabindex="-1">
   <noscript><p class="notice notice-bad">This report needs JavaScript enabled to display results. The raw results are embedded in this file.</p></noscript>
   <section id="page-overview" class="page" data-page="overview" aria-labelledby="h-overview" hidden></section>
+  <section id="page-blast" class="page" data-page="blast" aria-labelledby="h-blast" hidden>
+  <div class="page-head"><div><h1 id="h-blast">Blast radius</h1><p>What an attacker reaches from one compromised account or VM, across every platform, and which fixes break the most paths.</p></div></div>
+  <div class="br" data-br="root">
+    <div class="br-top" data-br="top">
+      <div class="br-ask">
+        <label for="entry">If this is compromised</label>
+        <select id="entry" class="br-entry" data-br="entry"></select>
+        <p class="br-verdict" data-br="verdict" aria-live="polite"></p>
+        <p class="br-sub" data-br="sub"></p>
+        <p class="br-scope" data-br="scope"></p>
+      </div>
+      <div class="br-switch" role="group" aria-label="View">
+        <button type="button" data-br-view="map" aria-pressed="true">Map</button>
+        <button type="button" data-br-view="list" aria-pressed="false">List</button>
+      </div>
+    </div>
+    <p class="br-partial" data-br="partial" role="note" hidden></p>
+    <div class="br-empty-state" data-br="empty" hidden></div>
+    <div class="br-main" data-br="main">
+      <div class="br-panel">
+        <div class="br-canvas-wrap">
+          <div class="br-canvas" data-br="canvas">
+            <svg data-br="svg" viewBox="-130 -10 1160 920" role="img" aria-labelledby="br-svg-title"><title id="br-svg-title">Blast radius map</title></svg>
+            <div class="br-tip" data-br="tip" role="tooltip"></div>
+          </div>
+          <p class="br-mapnote" data-br="mapnote" hidden></p>
+          <div class="br-legend" role="group" aria-label="Legend">
+            <span><svg viewBox="0 0 28 14" aria-hidden="true" focusable="false"><circle cx="14" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.75"/></svg>Account</span>
+            <span><svg viewBox="0 0 28 14" aria-hidden="true" focusable="false"><rect x="8" y="1" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75"/></svg>Host</span>
+            <span><svg viewBox="0 0 28 14" aria-hidden="true" focusable="false"><rect x="9" y="2" width="10" height="10" rx="3" fill="none" stroke="currentColor" stroke-width="1.75"/></svg>VM</span>
+            <span><svg viewBox="0 0 28 14" aria-hidden="true" focusable="false"><path d="M14 0 L21 7 L14 14 L7 7 Z" fill="none" stroke="currentColor" stroke-width="2"/></svg>Crown jewel</span>
+            <span><svg viewBox="0 0 28 14" aria-hidden="true" focusable="false"><line x1="1" y1="7" x2="27" y2="7" stroke="currentColor" stroke-width="2"/></svg>Seen in config</span>
+            <span><svg viewBox="0 0 28 14" aria-hidden="true" focusable="false"><line x1="1" y1="7" x2="27" y2="7" stroke="currentColor" stroke-width="2" stroke-dasharray="7 5"/></svg>Inferred from policy</span>
+            <span><svg viewBox="0 0 28 14" aria-hidden="true" focusable="false"><line x1="1" y1="7" x2="27" y2="7" stroke="currentColor" stroke-width="2.5" stroke-dasharray="1.5 4.5" stroke-linecap="round"/></svg>Matched by IP</span>
+            <span><svg viewBox="0 0 28 14" aria-hidden="true" focusable="false"><line x1="1" y1="7" x2="27" y2="7" stroke="currentColor" stroke-width="2" stroke-dasharray="9 4 2 4"/></svg>Declared by you</span>
+            <span>Rings numbered by steps from the compromised point · shaded area = current reach · red = attacker reach · blue = your fix</span>
+          </div>
+        </div>
+        <div class="br-list" data-br="list"></div>
+      </div>
+      <aside class="br-panel br-fix" aria-labelledby="br-fix-h">
+        <h2 id="br-fix-h">Break the most paths</h2>
+        <p class="br-hint">Ranked by how many attack paths each fix closes right now, across every starting point. Tick one to see what is left.</p>
+        <p class="br-hint" data-br="fixnote" hidden></p>
+        <div class="br-meter" aria-hidden="true"><i data-br="meter"></i></div>
+        <div class="br-meter-lbl"><span data-br="meter-a"></span><span data-br="meter-b"></span></div>
+        <div data-br="fixes"></div>
+        <p class="br-reroute" data-br="reroute" role="status"></p>
+        <button type="button" class="br-reset" data-br="reset" hidden>Clear selected fixes</button>
+      </aside>
+    </div>
+    <section class="br-panel br-path" aria-labelledby="br-path-h" data-br="path-wrap">
+      <h2 id="br-path-h">How the attacker gets there</h2>
+      <div class="br-pick" data-br="pick" role="group" aria-label="Crown jewel"></div>
+      <p class="br-conf" data-br="conf"></p>
+      <ol class="br-steps" data-br="steps"></ol>
+    </section>
+    <section class="br-panel br-gaps" aria-labelledby="br-gaps-h" data-br="gaps-wrap" hidden>
+      <h2 id="br-gaps-h">Collect this to confirm</h2>
+      <p class="br-hint">Routes that need one hop VSAT could not verify. They are never counted as attack paths or ranked; collect the named evidence to confirm or rule them out.</p>
+      <ul data-br="gaps"></ul>
+    </section>
+  </div>
+  </section>
   <section id="page-findings" class="page" data-page="findings" aria-labelledby="h-findings" hidden></section>
   <section id="page-topology" class="page" data-page="topology" aria-labelledby="h-topology" hidden></section>
   <section id="page-nsx" class="page" data-page="nsx" aria-labelledby="h-nsx" hidden></section>

@@ -13,6 +13,9 @@
 param(
     [Parameter(Mandatory)][string]$VcsimPath,
     [string]$ModulesPath,
+    # vSphere API version the simulator reports (vcsim -api-version), e.g. 8.0.3.0 or 9.0.0.0.
+    [string]$ApiVersion,
+    [switch]$KeepWorkDir,
     [string]$WorkDir = (Join-Path ([IO.Path]::GetTempPath()) ('vsat-it-' + [guid]::NewGuid().ToString('N')))
 )
 $ErrorActionPreference = 'Stop'
@@ -25,7 +28,9 @@ $vc = $null; $mock = $null
 try {
     Copy-Item (Join-Path $PSScriptRoot 'nsx_mock.py') $WorkDir
     & openssl req -x509 -newkey rsa:2048 -nodes -keyout (Join-Path $WorkDir 'key.pem') -out (Join-Path $WorkDir 'cert.pem') -days 2 -subj '/CN=127.0.0.1' -addext 'subjectAltName=IP:127.0.0.1' 2>$null
-    $vc = Start-Process -FilePath $VcsimPath -ArgumentList '-l', '127.0.0.1:18989', '-dc', '1', '-cluster', '2', '-host', '2', '-vm', '2', '-standalone-host', '1', '-pod', '0', '-ds', '2', '-pg', '2' -PassThru -RedirectStandardOutput (Join-Path $WorkDir 'vcsim.log') -RedirectStandardError (Join-Path $WorkDir 'vcsim.err')
+    $vcArgs = @('-l', '127.0.0.1:18989', '-dc', '1', '-cluster', '2', '-host', '2', '-vm', '2', '-standalone-host', '1', '-pod', '0', '-ds', '2', '-pg', '2')
+    if ($ApiVersion) { $vcArgs += @('-api-version', $ApiVersion) }
+    $vc = Start-Process -FilePath $VcsimPath -ArgumentList $vcArgs -PassThru -RedirectStandardOutput (Join-Path $WorkDir 'vcsim.log') -RedirectStandardError (Join-Path $WorkDir 'vcsim.err')
     $mock = Start-Process -FilePath python3 -ArgumentList 'nsx_mock.py', '18443' -WorkingDirectory $WorkDir -PassThru -RedirectStandardOutput (Join-Path $WorkDir 'mock.out') -RedirectStandardError (Join-Path $WorkDir 'mock.err')
     Start-Sleep -Seconds 3
 
@@ -58,6 +63,14 @@ exit `$LASTEXITCODE
         Assert-It ($rec -and $rec.status -eq 'ok') "collector $c ok ($($rec.status) $($rec.error))"
     }
     Assert-It (@($ev.assets | Where-Object { $_.type -eq 'host' }).Count -eq 5) 'five simulated hosts inventoried'
+    $vcRoot = @($ev.assets | Where-Object { $_.type -eq 'vcenter' })[0]
+    Assert-It ($null -ne $vcRoot -and $vcRoot.props.apiType -eq 'VirtualCenter') 'target recognized as vCenter (ApiType VirtualCenter)'
+    if ($ApiVersion) {
+        $vcEp = @($ev.scope.endpoints | Where-Object { $_.address -eq '127.0.0.1:18989' })[0]
+        Assert-It ($vcEp.apiVersion -eq $ApiVersion) "vCenter reports API version $ApiVersion ($($vcEp.apiVersion))"
+    }
+    $hostsWithFacts = @($ev.assets | Where-Object { $_.type -eq 'host' -and $_.facts.services.status -eq 'ok' -and $_.facts.firewall.status -eq 'ok' -and $_.facts.advanced.status -eq 'ok' })
+    Assert-It ($hostsWithFacts.Count -eq 5) 'every vCenter-managed host has services/firewall/advanced facts with status ok'
     Assert-It (@($ev.assets | Where-Object { $_.type -eq 'vm' }).Count -ge 6) 'simulated VMs inventoried'
     Assert-It (@($ev.assets | Where-Object { $_.type -eq 'nsx-group' }).Count -eq 3) 'paginated NSX groups (3 over 2 pages)'
     $f = { param($id, $name) @($r.findings | Where-Object { $_.ruleId -eq $id -and (-not $name -or $_.assetName -eq $name) })[0] }
@@ -83,5 +96,5 @@ finally {
 }
 if ($failures.Count) { Write-Host "$($failures.Count) integration assertion(s) failed. Work dir: $WorkDir" -ForegroundColor Red; exit 1 }
 Write-Host 'Integration test passed.' -ForegroundColor Green
-Remove-Item -Recurse -Force $WorkDir -ErrorAction SilentlyContinue
+if (-not $KeepWorkDir) { Remove-Item -Recurse -Force $WorkDir -ErrorAction SilentlyContinue }
 exit 0

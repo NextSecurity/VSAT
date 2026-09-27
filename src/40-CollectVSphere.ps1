@@ -11,6 +11,10 @@ $script:VsatEsxcliAllowed = @(
     'iscsi.adapter.list', 'iscsi.adapter.auth.chap.get', 'software.vib.list'
 )
 
+# Every per-host configuration fact the vSphere collector records (used to mark all of them
+# when a host is unreachable or its collection fails part-way).
+$script:VsatHostFactNames = @('lockdown', 'advanced', 'services', 'ntp', 'firewall', 'certificate', 'secureBoot', 'attestation', 'acceptance', 'kernel', 'modules', 'coredump', 'syslog', 'iscsiAdapters', 'network', 'neighbors', 'vmkernel')
+
 function Import-VsatPowerCli {
     # Loads the core PowerCLI module process-locally (offline package ./modules first).
     if (Get-Command -Name Connect-VIServer -ErrorAction SilentlyContinue) { return $true }
@@ -88,7 +92,7 @@ function Invoke-VsatVSphereCollection {
     $isVc = ($about.ApiType -eq 'VirtualCenter')
     if (-not $isVc) { $Endpoint.type = 'esxi' }
     $rootId = "${ep}:root"
-    $root = Add-VsatAsset -Evidence $Evidence -Id $rootId -Type $(if ($isVc) { 'vcenter' } else { 'esxi-endpoint' }) -Name $Endpoint.address -Endpoint $ep -Version $about.Version -Build $about.Build -Props ([ordered]@{ product = $about.FullName; instanceUuid = $about.InstanceUuid; apiType = $about.ApiType })
+    $root = Add-VsatAsset -Evidence $Evidence -Id $rootId -Type $(if ($isVc) { 'vcenter' } else { 'esxi-endpoint' }) -Name $Endpoint.address -Endpoint $ep -Version $about.Version -Build $about.Build -Props ([ordered]@{ product = $about.FullName; instanceUuid = $about.InstanceUuid; apiType = $about.ApiType; rootFolder = $(try { [string]$srv.ExtensionData.Content.RootFolder.Value } catch { $null }) })
     $hostIndex = @{}; $netIndex = @{}; $dsIndex = @{}
 
     Invoke-VsatCollector -Evidence $Evidence -Name 'vsphere.vcenter' -Endpoint $ep -Affects @('VC-*') -Script {
@@ -101,7 +105,7 @@ function Invoke-VsatVSphereCollection {
             @(Get-VIPermission -Server $srv -ErrorAction Stop | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ principal = $_.Principal; role = $_.Role; entity = [string]$_.Entity; entityId = $_.EntityId; propagate = $_.Propagate; isGroup = $_.IsGroup } })
         }
         Invoke-VsatFact $root 'roles' {
-            @(Get-VIRole -Server $srv -ErrorAction Stop | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ name = $_.Name; system = $_.IsSystem; privilegeCount = @($_.PrivilegeList).Count } })
+            @(Get-VIRole -Server $srv -ErrorAction Stop | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ name = $_.Name; system = $_.IsSystem; privilegeCount = @($_.PrivilegeList).Count; adminPrivileges = @($_.PrivilegeList | Where-Object { $_ -like 'Host.Config.*' -or $_ -eq 'Authorization.ModifyPermissions' }) } })
         }
         Invoke-VsatFact $root 'settings' {
             $om = Get-View -Server $srv -Id $srv.ExtensionData.Content.Setting -Property Setting
@@ -147,9 +151,10 @@ function Invoke-VsatVSphereCollection {
     Invoke-VsatCollector -Evidence $Evidence -Name 'vsphere.hosts' -Endpoint $ep -Affects @('ESXI-*') -Script {
         $props = 'Name', 'Parent', 'Runtime', 'Summary.Config.Product', 'Config.LockdownMode', 'Config.AdminDisabled', 'Config.Certificate', 'Config.Network', 'Config.DateTimeInfo', 'Config.Option', 'Config.Service', 'Config.Firewall', 'Config.StorageDevice', 'Capability', 'ConfigManager', 'Datastore', 'Hardware.SystemInfo'
         $hosts = Get-View -Server $srv -ViewType HostSystem -Property $props
-        $n = 0
+        $n = 0; $total = 0; $down = 0; $broken = 0
         foreach ($h in $hosts) {
             if (Test-VsatCancel) { break }
+            $total++
             $hid = "${ep}:" + (Get-VsatMoRef $h)
             $prod = $h.Summary.Config.Product
             $a = Add-VsatAsset -Evidence $Evidence -Id $hid -Type 'host' -Name $h.Name -Endpoint $ep -Version $prod.Version -Build $prod.Build -Props ([ordered]@{
@@ -159,64 +164,83 @@ function Invoke-VsatVSphereCollection {
             if ($hostIndex.ContainsKey((Get-VsatMoRef $h))) { Add-VsatRelationship -Evidence $Evidence -Source $hostIndex[(Get-VsatMoRef $h)] -Target $hid -Type contains -Provenance 'vsphere.inventory' }
             elseif ($isVc) { Add-VsatRelationship -Evidence $Evidence -Source $rootId -Target $hid -Type contains -Provenance 'vsphere.inventory' -Confidence inferred }
             if ([string]$h.Runtime.ConnectionState -ne 'connected') {
-                foreach ($f in 'lockdown', 'advanced', 'services', 'ntp', 'firewall') { Set-VsatFact -Asset $a -Name $f -Status error -Value $null -ErrorMessage "Host is $($h.Runtime.ConnectionState); configuration not readable" }
+                # Disconnected / notResponding: vCenter only has cached data. Record every host
+                # fact as an error so each check reports UNKNOWN, and make no per-host calls.
+                foreach ($f in $script:VsatHostFactNames) { Set-VsatFact -Asset $a -Name $f -Status error -Value $null -ErrorMessage "Host is $($h.Runtime.ConnectionState) in vCenter; configuration not readable" }
+                $down++
                 continue
             }
-            # HostConfigInfo.lockdownMode is the authoritative enum; adminDisabled is a deprecated Boolean.
-            $lm = $h.Config.LockdownMode
-            if ($null -ne $lm) { Set-VsatFact -Asset $a -Name 'lockdown' -Value ([ordered]@{ mode = [string]$lm }) }
-            else { Set-VsatFact -Asset $a -Name 'lockdown' -Status unsupported -Value $null -ErrorMessage 'lockdownMode not exposed by this host version' }
-            Invoke-VsatFact $a 'advanced' { $o = [ordered]@{}; foreach ($opt in $h.Config.Option) { $o[$opt.Key] = $opt.Value }; $o }
-            Invoke-VsatFact $a 'services' { @($h.Config.Service.Service | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ key = $_.Key; label = $_.Label; running = [bool]$_.Running; policy = [string]$_.Policy } }) }
-            Invoke-VsatFact $a 'ntp' { [ordered]@{ servers = @($h.Config.DateTimeInfo.NtpConfig.Server); protocol = [string]$h.Config.DateTimeInfo.Protocol } }
-            Invoke-VsatFact $a 'firewall' {
-                $fw = $h.Config.Firewall
-                [ordered]@{
-                    defaultIncomingBlocked = [bool]$fw.DefaultPolicy.IncomingBlocked; defaultOutgoingBlocked = [bool]$fw.DefaultPolicy.OutgoingBlocked
-                    rulesets = @($fw.Ruleset | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ key = $_.Key; enabled = [bool]$_.Enabled; allIp = [bool]$_.AllowedHosts.AllIp; allowedIps = @($_.AllowedHosts.IpAddress) + @($_.AllowedHosts.IpNetwork | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.Network)/$($_.PrefixLength)" }) } })
+            try {
+                # HostConfigInfo.lockdownMode is the authoritative enum; adminDisabled is a deprecated Boolean.
+                $lm = $h.Config.LockdownMode
+                if ($null -ne $lm) { Set-VsatFact -Asset $a -Name 'lockdown' -Value ([ordered]@{ mode = [string]$lm }) }
+                else { Set-VsatFact -Asset $a -Name 'lockdown' -Status unsupported -Value $null -ErrorMessage 'lockdownMode not exposed by this host version' }
+                Invoke-VsatFact $a 'advanced' { $o = [ordered]@{}; foreach ($opt in $h.Config.Option) { $o[$opt.Key] = $opt.Value }; $o }
+                Invoke-VsatFact $a 'services' { @($h.Config.Service.Service | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ key = $_.Key; label = $_.Label; running = [bool]$_.Running; policy = [string]$_.Policy } }) }
+                Invoke-VsatFact $a 'ntp' { [ordered]@{ servers = @($h.Config.DateTimeInfo.NtpConfig.Server); protocol = [string]$h.Config.DateTimeInfo.Protocol } }
+                Invoke-VsatFact $a 'firewall' {
+                    $fw = $h.Config.Firewall
+                    [ordered]@{
+                        defaultIncomingBlocked = [bool]$fw.DefaultPolicy.IncomingBlocked; defaultOutgoingBlocked = [bool]$fw.DefaultPolicy.OutgoingBlocked
+                        rulesets = @($fw.Ruleset | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ key = $_.Key; enabled = [bool]$_.Enabled; allIp = [bool]$_.AllowedHosts.AllIp; allowedIps = @($_.AllowedHosts.IpAddress) + @($_.AllowedHosts.IpNetwork | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.Network)/$($_.PrefixLength)" }) } })
+                    }
                 }
-            }
-            Invoke-VsatFact $a 'certificate' {
-                if (-not $h.Config.Certificate) { return $null }
-                $x = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, [byte[]]$h.Config.Certificate)
-                [ordered]@{ subject = $x.Subject; issuer = $x.Issuer; notAfter = $x.NotAfter.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); selfSigned = ($x.Subject -eq $x.Issuer); vmcaSigned = ($x.Issuer -match 'VMCA|CA,.*VMware|O=VMware') }
-            }
-            Invoke-VsatFact $a 'secureBoot' {
-                $cap = $h.Capability
-                [ordered]@{ uefiSecureBoot = $cap.UefiSecureBoot; tpmSupported = $cap.TpmSupported; tpmVersion = $cap.TpmVersion }
-            }
-            Invoke-VsatFact $a 'attestation' {
-                $h2 = Get-View -Server $srv -Id $h.MoRef -Property 'Runtime.TpmAttestation', 'Summary.TpmAttestation' -ErrorAction Stop
-                $t = $h2.Runtime.TpmAttestation
-                if ($null -eq $t) { return $null }
-                [ordered]@{ status = [string]$t.Status; message = $(if ($t.Message) { $t.Message.Message } else { $null }) }
-            }
-            $esx = $null
-            try { $esx = Get-EsxCli -Server $srv -VMHost (Get-VMHost -Server $srv -Id $h.MoRef -ErrorAction Stop) -V2 -ErrorAction Stop }
-            catch { foreach ($f in 'acceptance', 'coredump', 'syslog', 'kernel', 'modules', 'iscsiAdapters') { Set-VsatFact -Asset $a -Name $f -Status (Get-VsatErrorClass $_) -Value $null -ErrorMessage $_.Exception.Message } }
-            if ($esx) {
-                Invoke-VsatFact $a 'acceptance' { [string](Invoke-VsatEsxcli $esx 'software.acceptance.get') }
-                Invoke-VsatFact $a 'kernel' { $o = [ordered]@{}; foreach ($k in (Invoke-VsatEsxcli $esx 'system.settings.kernel.list')) { $o[$k.Name] = $k.Configured }; $o }
-                Invoke-VsatFact $a 'modules' { @(Invoke-VsatEsxcli $esx 'system.module.list' | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ name = $_.Name; loaded = $_.IsLoaded; enabled = $_.IsEnabled } }) }
-                Invoke-VsatFact $a 'coredump' {
-                    $net = Invoke-VsatEsxcli $esx 'system.coredump.network.get'
-                    $file = @(Invoke-VsatEsxcli $esx 'system.coredump.file.list')
-                    [ordered]@{ networkEnabled = [bool]($net.Enabled -eq 'true' -or $net.Enabled -eq $true); networkServer = $net.NetworkServerIP; fileActive = @($file | Where-Object { $_.Active -eq 'true' -or $_.Active -eq $true }).Count }
+                Invoke-VsatFact $a 'certificate' {
+                    if (-not $h.Config.Certificate) { return $null }
+                    $x = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, [byte[]]$h.Config.Certificate)
+                    [ordered]@{ subject = $x.Subject; issuer = $x.Issuer; notAfter = $x.NotAfter.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); selfSigned = ($x.Subject -eq $x.Issuer); vmcaSigned = ($x.Issuer -match 'VMCA|CA,.*VMware|O=VMware') }
                 }
-                Invoke-VsatFact $a 'syslog' { $s = Invoke-VsatEsxcli $esx 'system.syslog.config.get'; [ordered]@{ remoteHost = [string]$s.RemoteHost; logDir = [string]$s.LocalLogOutput; logDirUnique = $s.LocalLogOutputIsPersistent } }
-                Invoke-VsatFact $a 'iscsiAdapters' {
-                    $ads = @(Invoke-VsatEsxcli $esx 'iscsi.adapter.list')
-                    @(foreach ($ad in $ads) {
-                            $chap = $null; $mchap = $null
-                            try { $chap = Invoke-VsatEsxcli $esx 'iscsi.adapter.auth.chap.get' @{ adapter = $ad.Adapter; direction = 'uni' } } catch { }
-                            try { $mchap = Invoke-VsatEsxcli $esx 'iscsi.adapter.auth.chap.get' @{ adapter = $ad.Adapter; direction = 'mutual' } } catch { }
-                            [ordered]@{ adapter = $ad.Adapter; chapLevel = $(if ($chap) { [string]$chap.Level } else { $null }); mutualChapLevel = $(if ($mchap) { [string]$mchap.Level } else { $null }) }
-                        })
+                Invoke-VsatFact $a 'secureBoot' {
+                    $cap = $h.Capability
+                    [ordered]@{ uefiSecureBoot = $cap.UefiSecureBoot; tpmSupported = $cap.TpmSupported; tpmVersion = $cap.TpmVersion }
                 }
+                Invoke-VsatFact $a 'attestation' {
+                    $h2 = Get-View -Server $srv -Id $h.MoRef -Property 'Runtime.TpmAttestation', 'Summary.TpmAttestation' -ErrorAction Stop
+                    $t = $h2.Runtime.TpmAttestation
+                    if ($null -eq $t) { return $null }
+                    [ordered]@{ status = [string]$t.Status; message = $(if ($t.Message) { $t.Message.Message } else { $null }) }
+                }
+                $esx = $null
+                try { $esx = Get-EsxCli -Server $srv -VMHost (Get-VMHost -Server $srv -Id $h.MoRef -ErrorAction Stop) -V2 -ErrorAction Stop }
+                catch { foreach ($f in 'acceptance', 'coredump', 'syslog', 'kernel', 'modules', 'iscsiAdapters') { Set-VsatFact -Asset $a -Name $f -Status (Get-VsatErrorClass $_) -Value $null -ErrorMessage $_.Exception.Message } }
+                if ($esx) {
+                    Invoke-VsatFact $a 'acceptance' { [string](Invoke-VsatEsxcli $esx 'software.acceptance.get') }
+                    Invoke-VsatFact $a 'kernel' { $o = [ordered]@{}; foreach ($k in (Invoke-VsatEsxcli $esx 'system.settings.kernel.list')) { $o[$k.Name] = $k.Configured }; $o }
+                    Invoke-VsatFact $a 'modules' { @(Invoke-VsatEsxcli $esx 'system.module.list' | Where-Object { $null -ne $_ } | ForEach-Object { [ordered]@{ name = $_.Name; loaded = $_.IsLoaded; enabled = $_.IsEnabled } }) }
+                    Invoke-VsatFact $a 'coredump' {
+                        $net = Invoke-VsatEsxcli $esx 'system.coredump.network.get'
+                        $file = @(Invoke-VsatEsxcli $esx 'system.coredump.file.list')
+                        [ordered]@{ networkEnabled = [bool]($net.Enabled -eq 'true' -or $net.Enabled -eq $true); networkServer = $net.NetworkServerIP; fileActive = @($file | Where-Object { $_.Active -eq 'true' -or $_.Active -eq $true }).Count }
+                    }
+                    Invoke-VsatFact $a 'syslog' { $s = Invoke-VsatEsxcli $esx 'system.syslog.config.get'; [ordered]@{ remoteHost = [string]$s.RemoteHost; logDir = [string]$s.LocalLogOutput; logDirUnique = $s.LocalLogOutputIsPersistent } }
+                    Invoke-VsatFact $a 'iscsiAdapters' {
+                        $ads = @(Invoke-VsatEsxcli $esx 'iscsi.adapter.list')
+                        @(foreach ($ad in $ads) {
+                                $chap = $null; $mchap = $null
+                                try { $chap = Invoke-VsatEsxcli $esx 'iscsi.adapter.auth.chap.get' @{ adapter = $ad.Adapter; direction = 'uni' } } catch { }
+                                try { $mchap = Invoke-VsatEsxcli $esx 'iscsi.adapter.auth.chap.get' @{ adapter = $ad.Adapter; direction = 'mutual' } } catch { }
+                                [ordered]@{ adapter = $ad.Adapter; chapLevel = $(if ($chap) { [string]$chap.Level } else { $null }); mutualChapLevel = $(if ($mchap) { [string]$mchap.Level } else { $null }) }
+                            })
+                    }
+                }
+                Add-VsatHostNetwork -Evidence $Evidence -Asset $a -HostView $h -Server $srv -NetIndex $netIndex -Endpoint $ep
+                foreach ($ds in $h.Datastore) { $dsIndex[[string]$ds.Value] = $true; Add-VsatRelationship -Evidence $Evidence -Source $hid -Target ("${ep}:" + $ds.Value) -Type depends -Provenance 'vsphere.hosts' -Props ([ordered]@{ kind = 'mount' }) }
             }
-            Add-VsatHostNetwork -Evidence $Evidence -Asset $a -HostView $h -Server $srv -NetIndex $netIndex -Endpoint $ep
-            foreach ($ds in $h.Datastore) { $dsIndex[[string]$ds.Value] = $true; Add-VsatRelationship -Evidence $Evidence -Source $hid -Target ("${ep}:" + $ds.Value) -Type depends -Provenance 'vsphere.hosts' -Props ([ordered]@{ kind = 'mount' }) }
+            catch {
+                # One faulty host must not abort collection of the other hosts in the vCenter.
+                $cls = Get-VsatErrorClass $_
+                foreach ($f in $script:VsatHostFactNames) { if (-not $a.facts.Contains($f)) { Set-VsatFact -Asset $a -Name $f -Status $cls -Value $null -ErrorMessage "Host collection stopped: $($_.Exception.Message)" } }
+                Write-VsatLog -Level warn -Source 'vsphere.hosts' -Message "Host $($h.Name) partially collected: $($_.Exception.Message)"
+                $broken++
+                continue
+            }
             $n++
+        }
+        if ($down -or $broken) {
+            $parts = @()
+            if ($down) { $parts += "$down of $total hosts not connected (disconnected or not responding)" }
+            if ($broken) { $parts += "$broken of $total hosts partly collected" }
+            return @{ count = $n; status = 'partial'; error = ($parts -join '; ') }
         }
         $n
     }
@@ -359,7 +383,7 @@ function Invoke-VsatVSphereCollection {
                         }
                     })
             }
-            foreach ($d in @($a.facts.devices.value | Where-Object { $_.Contains('mac') })) {
+            foreach ($d in @($a.facts.devices.value | Where-Object { $null -ne $_ -and $_.Contains('mac') })) {
                 if ($d.network) { Add-VsatRelationship -Evidence $Evidence -Source $vid -Target $d.network -Type connects -Provenance 'vsphere.vms' -Props ([ordered]@{ nic = $d.label }) }
                 elseif ($d.portgroupKey) {
                     # dvPortgroup keys may differ from MoRef values on older releases; record for correlation.

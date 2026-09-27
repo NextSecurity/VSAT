@@ -50,6 +50,18 @@ function Invoke-VsatNsxGet {
     }
 }
 
+function ConvertTo-VsatComputeManagerFact {
+    # Projection of GET /api/v1/fabric/compute-managers. NSX stores the compute manager's
+    # service account; VSAT records only its username, never password, thumbprint or tokens.
+    param($Items)
+    foreach ($cm in @($Items | Where-Object { $null -ne $_ })) {
+        [ordered]@{
+            id = [string](Get-VsatProp $cm 'id'); display_name = [string](Get-VsatProp $cm 'display_name'); server = [string](Get-VsatProp $cm 'server')
+            origin_type = [string](Get-VsatProp $cm 'origin_type'); origin_id = [string](Get-VsatProp $cm 'origin_id'); username = [string](Get-VsatProp $cm 'credential.username')
+        }
+    }
+}
+
 function ConvertTo-VsatNsxRef {
     # Normalizes NSX group/service references: "ANY" stays ANY, paths are kept verbatim.
     param($Values)
@@ -97,6 +109,8 @@ function Invoke-VsatNsxCollection {
             Set-VsatFact -Asset $mgr -Name 'certificates' -Status $(if (@($parsed).Count) { 'ok' } else { 'absent' }) -Value @($parsed)
         }
         $cms = Invoke-VsatNsxGet $Session $mgr 'computeManagers' '/api/v1/fabric/compute-managers' -Paged
+        # Keep a projection only: identifiers and the service account name, never credential material.
+        if ($null -ne $mgr.facts.computeManagers.value) { $mgr.facts.computeManagers.value = @(ConvertTo-VsatComputeManagerFact $mgr.facts.computeManagers.value) }
         [void](Invoke-VsatNsxGet $Session $mgr 'transportNodeStates' '/api/v1/transport-nodes/state' -Paged)
         [void](Invoke-VsatNsxGet $Session $mgr 'dfwSettings' '/policy/api/v1/infra/settings/firewall/security')
         [void](Invoke-VsatNsxGet $Session $mgr 'excludeList' '/policy/api/v1/infra/settings/firewall/security/exclude-list')

@@ -1,6 +1,6 @@
 # Contributing to VSAT
 
-Thanks for helping. VSAT is in **alpha**, and the most valuable contributions right now are the ones that turn assumptions into verified facts.
+Thanks for helping. The most valuable contributions right now are the ones that turn assumptions into verified facts.
 
 By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md). **Report security issues privately** as described in [SECURITY.md](SECURITY.md), never in public issues.
 

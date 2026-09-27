@@ -29,7 +29,7 @@ VSAT 2.0 is a rewrite. The 1.x script is preserved unchanged at [`legacy/vsat-1.
 | VDS security policy | Passed when the switch or policy object existed | Effective policy evaluated for **each port group**, including overrides |
 | Native VLAN | Assumed VLAN 1 | `UNKNOWN` unless you supply `nativeVlans` in the scope file |
 | Manual controls | 18 placeholder functions that printed text | `MANUAL`, counted explicitly, never merged into passes |
-| Framework mapping | CIS number in the check name | Separate `frameworks[]` with edition and `mappingStatus` (`unverified` in this alpha) |
+| Framework mapping | CIS number in the check name | Separate `frameworks[]` with edition and `mappingStatus` (currently `unverified`) |
 | Exceptions | None | Scoped exceptions (owner, rationale, expiry). The finding stays `FAIL`. |
 | NSX | Not assessed | Mandatory domain. If NSX is detected but not assessed, the run is `INCOMPLETE: NSX NOT ASSESSED` (exit `2`). |
 

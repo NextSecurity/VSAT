@@ -153,7 +153,16 @@ function Test-VsatApplies {
     $ver = if ($Asset.version) { $Asset.version } else { $null }
     if (($minV -or $maxV) -and -not $ver) { return $null }  # version unknown: evaluate, facts decide
     if ($minV -and (Compare-VsatVersion $ver $minV) -lt 0) { return "Requires version $minV or later (observed $ver)" }
-    if ($maxV -and (Compare-VsatVersion $ver $maxV) -gt 0) { return "Applies up to version $maxV (observed $ver)" }
+    if ($maxV) {
+        # maxVersion names a release branch and includes every update of it: maxVersion 8.0
+        # covers 8.0.3.x, so the observed version is truncated to the same number of parts.
+        $depth = @(([string]$maxV).Split('.')).Count
+        $verCut = (@(([string]$ver).Split('.')) | Select-Object -First $depth) -join '.'
+        if ((Compare-VsatVersion $verCut $maxV) -gt 0) {
+            $why = Get-VsatProp $ap 'reason'
+            return "Applies up to version $maxV (observed $ver)$(if ($why) { ": $why" })"
+        }
+    }
     foreach ($c in @(Get-VsatProp $ap 'props' @())) {
         $v = Get-VsatProp $Asset.props $c.path
         if (-not (Test-VsatOperator $v $c.op (Get-VsatProp $c 'value'))) { return "Not applicable: $($c.path) is $(Format-VsatValue $v)" }
@@ -187,7 +196,52 @@ function New-VsatFinding {
     return $f
 }
 
+function Get-VsatHostConnectionState {
+    param($HostAsset)
+    if (-not $HostAsset -or $HostAsset.type -ne 'host' -or -not $HostAsset.props) { return $null }
+    $st = [string](Get-VsatProp $HostAsset.props 'connectionState' '')
+    if (-not $st -or $st -eq 'connected') { return $null }
+    return $st
+}
+
+function Get-VsatUnreachableHostState {
+    # A vCenter-managed host that is disconnected or not responding: vCenter still lists it,
+    # but its configuration and even its reported build are the last values vCenter cached.
+    # The same holds for a VM on such a host. Returns a description, or $null when reachable.
+    param($Asset, $Context)
+    if ($Asset.type -eq 'host') {
+        $st = Get-VsatHostConnectionState $Asset
+        if ($st) { return "Host is $st (not connected) in vCenter" }
+        return $null
+    }
+    if ($Asset.type -eq 'vm' -and $Context -and $Context.out) {
+        foreach ($r in @($Context.out[$Asset.id])) {
+            if (-not $r -or $r.type -ne 'runs-on') { continue }
+            $h = $Context.assets[$r.target]
+            $st = Get-VsatHostConnectionState $h
+            if ($st) { return "VM runs on host $($h.name), which is $st (not connected) in vCenter" }
+        }
+    }
+    return $null
+}
+
 function Invoke-VsatRuleOnAsset {
+    param($Rule, $Asset, $Context)
+    $out = Invoke-VsatRuleOnAssetCore -Rule $Rule -Asset $Asset -Context $Context
+    $state = Get-VsatUnreachableHostState -Asset $Asset -Context $Context
+    if (-not $state) { return $out }
+    # Nothing on an unreachable host (or a VM on it) can be confirmed: PASS and ERROR become UNKNOWN.
+    foreach ($f in @($out)) {
+        if ($f -and $f.result -in @('PASS', 'ERROR')) {
+            $f.result = 'UNKNOWN'
+            $f.observed = "$state; current configuration cannot be confirmed. Last cached evidence: $($f.observed)"
+            $f.confidence = 'inferred'
+        }
+    }
+    return $out
+}
+
+function Invoke-VsatRuleOnAssetCore {
     param($Rule, $Asset, $Context)
     $na = Test-VsatApplies -Rule $Rule -Asset $Asset -Context $Context
     if ($na) { return (New-VsatFinding -Rule $Rule -Asset $Asset -Result 'NOT_APPLICABLE' -Observed $na -Expected '' ) }
@@ -328,6 +382,8 @@ function New-VsatRuleContext {
         $ctx.out[$r.source].Add($r); $ctx.in[$r.target].Add($r)
     }
     $ctx.nsxState = (Get-VsatNsxCoverage -Evidence $Evidence).state
+    # OT lens state follows the evidence being evaluated (baseline and replay included).
+    $script:VsatOtLens = Test-VsatOtLensDeclared -Scope $Evidence.scope
     return $ctx
 }
 

@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0",
   "snapshotDate": "2026-09-23",
-  "notes": "Seed snapshot. Build ranges verified against cited sources on verifiedDate. Not exhaustive. Matching rule: for a given product+branch, select the affected entry with the greatest minBuild <= host build (a missing minBuild means 0); the host is exposed if build < fixedBuild. fixedBuild null means no public fix exists for that line (exposed; see entry notes). An optional per-entry 'cves' list means that entry only covers those CVEs; otherwise it covers all CVEs of the advisory. NSX entries use compareBy=version: select by minVersion and compare the dotted version against fixedVersionNumber (NSX build numbers are not monotonic across patch lines). Caveat: ESXi 8.0 GA-line express patches (8.0d/8.0e/8.0f/8.0g, builds 24118393/24569005/24814147/25191479) are not listed in these advisories and are not handled correctly by build comparison. Build-to-version mappings from Broadcom KB 316595 (ESXi) and KB 326316 (vCenter).",
+  "notes": "Seed snapshot. Build ranges verified against cited sources on verifiedDate. Not exhaustive. Matching rule: for a given product+branch, select the affected entry with the greatest minBuild <= host build (a missing minBuild means 0); the host is exposed if build < fixedBuild. fixedBuild null means no public fix exists for that line (exposed; see entry notes). An optional per-entry 'cves' list means that entry only covers those CVEs; otherwise it covers all CVEs of the advisory. NSX entries use compareBy=version: select by minVersion and compare the dotted version against fixedVersionNumber (NSX build numbers are not monotonic across patch lines). Caveat: ESXi 8.0 GA-line express patches (8.0d/8.0e/8.0f/8.0g, builds 24118393/24569005/24814147/25191479) are not listed in these advisories and are not handled correctly by build comparison. Build-to-version mappings from Broadcom KB 316595 (ESXi) and KB 326316 (vCenter). ESX/vCenter 9.x name patches with dotted versions (e.g. ESX 9.0.2.0100); their branch is the first two parts (9.0, 9.1). An optional per-entry severity overrides the advisory severity for that release line. knownExploitedCves lists the advisory's CVEs in the CISA KEV catalog (catalog 2026.09.23); an entry is labelled known-exploited only if one of its effective CVEs is in that list.",
   "advisories": [
     {
       "id": "VMSA-2025-0004",
@@ -11,6 +11,7 @@
       "severity": "critical",
       "cves": ["CVE-2025-22224", "CVE-2025-22225", "CVE-2025-22226"],
       "knownExploited": true,
+      "knownExploitedCves": ["CVE-2025-22224", "CVE-2025-22225", "CVE-2025-22226"],
       "knownExploitedSource": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=CVE-2025-22224",
       "url": "https://support.broadcom.com/web/ecx/support-content-notification/-/external/content/SecurityAdvisories/0/25390",
       "verifiedDate": "2026-09-23",
@@ -28,6 +29,7 @@
       "severity": "moderate",
       "cves": ["CVE-2024-37085", "CVE-2024-37086", "CVE-2024-37087"],
       "knownExploited": true,
+      "knownExploitedCves": ["CVE-2024-37085"],
       "knownExploitedSource": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=CVE-2024-37085",
       "url": "https://support.broadcom.com/web/ecx/support-content-notification/-/external/content/SecurityAdvisories/0/24505",
       "verifiedDate": "2026-09-23",
@@ -47,6 +49,7 @@
       "severity": "critical",
       "cves": ["CVE-2024-38812", "CVE-2024-38813"],
       "knownExploited": true,
+      "knownExploitedCves": ["CVE-2024-38812", "CVE-2024-38813"],
       "knownExploitedSource": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=CVE-2024-38812",
       "url": "https://support.broadcom.com/web/ecx/support-content-notification/-/external/content/SecurityAdvisories/0/24968",
       "verifiedDate": "2026-09-23",
@@ -64,6 +67,7 @@
       "severity": "critical",
       "cves": ["CVE-2024-37079", "CVE-2024-37080", "CVE-2024-37081"],
       "knownExploited": true,
+      "knownExploitedCves": ["CVE-2024-37079"],
       "knownExploitedSource": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=CVE-2024-37079",
       "url": "https://support.broadcom.com/web/ecx/support-content-notification/-/external/content/SecurityAdvisories/0/24453",
       "verifiedDate": "2026-09-23",
@@ -87,7 +91,8 @@
       "affected": [
         { "product": "esxi", "branch": "8.0", "minBuild": 24022510, "fixedBuild": 24784735, "fixedVersion": "ESXi 8.0 Update 3f (ESXi80U3f-24784735)", "notes": "8.0 U3 line." },
         { "product": "esxi", "branch": "8.0", "fixedBuild": 24789317, "fixedVersion": "ESXi 8.0 Update 2e (ESXi80U2e-24789317)", "notes": "Hosts below 8.0 U3 GA. The U2e build is higher than the U3f build; U3-line hosts are matched by the U3 entry." },
-        { "product": "esxi", "branch": "7.0", "fixedBuild": 24784741, "fixedVersion": "ESXi 7.0 Update 3w (ESXi70U3w-24784741)" }
+        { "product": "esxi", "branch": "7.0", "fixedBuild": 24784741, "fixedVersion": "ESXi 7.0 Update 3w (ESXi70U3w-24784741)" },
+        { "product": "esxi", "branch": "9.0", "cves": ["CVE-2025-41237"], "severity": "important", "fixedBuild": 24813472, "fixedVersion": "ESX 9.0.0.0100 (ESXi-9.0.0.0100-24813472)", "notes": "Matrix row 'ESX 9.0.0.0': CVE-2025-41237 is Important, fixed in ESXi-9.0.0.0100-24813472; CVE-2025-41236, CVE-2025-41238 and CVE-2025-41239 are Unaffected on 9.0. Build confirmed in KB 316595." }
       ]
     },
     {
@@ -117,6 +122,7 @@
       "severity": "critical",
       "cves": ["CVE-2026-59309", "CVE-2026-59310", "CVE-2026-47876", "CVE-2026-41703", "CVE-2026-41709"],
       "knownExploited": true,
+      "knownExploitedCves": ["CVE-2026-59310"],
       "knownExploitedSource": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=CVE-2026-59310",
       "url": "https://support.broadcom.com/web/ecx/support-content-notification/-/external/content/SecurityAdvisories/0/38017",
       "verifiedDate": "2026-09-23",
@@ -126,11 +132,19 @@
         { "product": "vcenter", "branch": "7.0", "cves": ["CVE-2026-59309", "CVE-2026-59310"], "fixedBuild": null, "fixedVersion": null, "notes": "No public fix. The matrix says 'Contact Broadcom Support if you have extended support contract' (7.0 is past End of General Support)." },
         { "product": "esxi", "branch": "8.0", "minBuild": 24022510, "cves": ["CVE-2026-47876", "CVE-2026-41703", "CVE-2026-41709"], "fixedBuild": 25595708, "fixedVersion": "ESXi 8.0 Update 3k (ESXi80U3k-25595708)", "notes": "8.0 U3 line. U3k is the fix for CVE-2026-47876 and is cumulative. The first fixed builds were U3i (25205845) for CVE-2026-41703 and U3j (25429389) for CVE-2026-41709." },
         { "product": "esxi", "branch": "8.0", "cves": ["CVE-2026-47876"], "fixedBuild": 25626445, "fixedVersion": "ESXi 8.0 Update 2f (ESXi80U2f-25626445)", "notes": "Hosts below 8.0 U3 GA. The matrix has no 8.0 U2 row for CVE-2026-41703 or CVE-2026-41709." },
-        { "product": "esxi", "branch": "7.0", "cves": ["CVE-2026-47876"], "fixedBuild": null, "fixedVersion": null, "notes": "No public fix. The matrix says 'Contact Broadcom Support if you have extended support contract'." }
+        { "product": "esxi", "branch": "7.0", "cves": ["CVE-2026-47876"], "fixedBuild": null, "fixedVersion": null, "notes": "No public fix. The matrix says 'Contact Broadcom Support if you have extended support contract'." },
+        { "product": "vcenter", "branch": "9.0", "cves": ["CVE-2026-59309", "CVE-2026-59310"], "fixedBuild": 25629525, "fixedVersion": "vCenter 9.0.2.0100", "notes": "Matrix row 'vCenter 9.0.x.x' (VCF / vSphere Foundation), fixed version 9.0.2.0100. Build from KB 326316." },
+        { "product": "vcenter", "branch": "9.1", "cves": ["CVE-2026-59309", "CVE-2026-59310"], "fixedBuild": 25629530, "fixedVersion": "vCenter 9.1.0.0300", "notes": "Matrix row 'vCenter 9.1.x.x' (VCF / vSphere Foundation), fixed version 9.1.0.0300. Build from KB 326316." },
+        { "product": "esxi", "branch": "9.0", "cves": ["CVE-2026-47876", "CVE-2026-41703", "CVE-2026-41709"], "fixedBuild": 25595025, "fixedVersion": "ESX 9.0.2.0100 (ESXi-9.0.2.0100-25595025)", "notes": "Matrix rows 'ESX 9.0.x.x': all three ESX CVEs are fixed in ESXi-9.0.2.0100-25595025. Build confirmed in KB 316595." },
+        { "product": "esxi", "branch": "9.1", "cves": ["CVE-2026-47876"], "fixedBuild": 25557999, "fixedVersion": "ESX 9.1.0.0200 (ESXi-9.1.0.0200-25557999)", "notes": "Matrix row 'ESX 9.1.x.x' for CVE-2026-47876. Build confirmed in KB 316595." },
+        { "product": "esxi", "branch": "9.1", "cves": ["CVE-2026-41703", "CVE-2026-41709"], "severity": "important", "fixedBuild": 25370933, "fixedVersion": "ESX 9.1.0.0 (ESXi-9.1.0.0-25370933)", "notes": "Matrix rows 'ESX 9.1.x.x' for CVE-2026-41703 (Important) and CVE-2026-41709 (Low): fixed in the 9.1.0.0 GA build, so every 9.1 build is fixed." }
       ]
     }
   ],
   "lifecycle": [
+    { "product": "esxi", "branch": "9.x", "endOfGeneralSupport": null, "endOfTechnicalGuidance": null, "url": "https://blogs.vmware.com/cloud-foundation/2025/07/16/vmware-cloud-foundation-9-ushers-in-new-support-model-and-release-cadence/", "verifiedDate": "2026-09-23", "notes": "Broadcom states VCF 9 support is per major release: 6 years of general support from the 9.0 release, 'an estimated End of Service date of 17-June 2031' for the VCF 9.x code line, and about 27 months per minor release (9.0, 9.1, 9.2). No official per-minor end-of-general-support date was found, so none is encoded (check returns MANUAL)." },
+    { "product": "vcenter", "branch": "9.x", "endOfGeneralSupport": null, "endOfTechnicalGuidance": null, "url": "https://blogs.vmware.com/cloud-foundation/2025/07/16/vmware-cloud-foundation-9-ushers-in-new-support-model-and-release-cadence/", "verifiedDate": "2026-09-23", "notes": "Broadcom states VCF 9 support is per major release: 6 years of general support from the 9.0 release, 'an estimated End of Service date of 17-June 2031' for the VCF 9.x code line, and about 27 months per minor release (9.0, 9.1, 9.2). No official per-minor end-of-general-support date was found, so none is encoded (check returns MANUAL)." },
+    { "product": "nsx", "branch": "9.x", "endOfGeneralSupport": null, "endOfTechnicalGuidance": null, "url": "https://blogs.vmware.com/cloud-foundation/2025/07/16/vmware-cloud-foundation-9-ushers-in-new-support-model-and-release-cadence/", "verifiedDate": "2026-09-23", "notes": "Broadcom states VCF 9 support is per major release: 6 years of general support from the 9.0 release, 'an estimated End of Service date of 17-June 2031' for the VCF 9.x code line, and about 27 months per minor release (9.0, 9.1, 9.2). No official per-minor end-of-general-support date was found, so none is encoded (check returns MANUAL)." },
     { "product": "esxi", "branch": "7.0", "endOfGeneralSupport": "2025-10-02", "endOfTechnicalGuidance": "2027-04-02", "url": "https://knowledge.broadcom.com/external/article/415405/end-of-general-support-for-vsphere", "eotgUrl": "https://ftpdocs.broadcom.com/cadocs/0/contentimages/Product_EOTG_Dates.pdf", "verifiedDate": "2026-09-23" },
     { "product": "vcenter", "branch": "7.0", "endOfGeneralSupport": "2025-10-02", "endOfTechnicalGuidance": "2027-04-02", "url": "https://knowledge.broadcom.com/external/article/415405/end-of-general-support-for-vsphere", "eotgUrl": "https://ftpdocs.broadcom.com/cadocs/0/contentimages/Product_EOTG_Dates.pdf", "verifiedDate": "2026-09-23" },
     { "product": "esxi", "branch": "8.0", "endOfGeneralSupport": null, "endOfTechnicalGuidance": "2029-10-11", "url": "https://ftpdocs.broadcom.com/cadocs/0/contentimages/Product_EOTG_Dates.pdf", "verifiedDate": "2026-09-23", "notes": "No official Broadcom page seen gives the exact EoGS day. A Broadcom VCF blog (https://blogs.vmware.com/cloud-foundation/2025/08/01/sap-customers-running-on-vmware-vsphere-7-call-to-action/) says vSphere 8 'will be supported until October 2027'. Third parties report 2027-10-11 (not verified)." },

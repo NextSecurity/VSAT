@@ -35,7 +35,7 @@ This document covers VSAT `2.0.0`. It maps each threat from the product plan (§
 
 ## Residual risks
 
-These risks remain and are accepted or open in this alpha:
+These risks remain and are accepted or open:
 
 - **PowerShell cannot guarantee memory zeroization.** `SecureString` and `PSCredential` reduce exposure, but strings are copied during authentication, so secrets can remain in process memory until garbage collection. A memory dump of the runner could expose them. VSAT disconnects sessions on completion or cancellation to limit their lifetime.
 - **Loopback is not an authentication boundary.** Other processes running as the same user on the runner can reach `127.0.0.1`. The per-run token reduces this risk but does not remove it. Run VSAT on a trusted, single-user runner.
@@ -44,7 +44,7 @@ These risks remain and are accepted or open in this alpha:
 - **No code signing.** Users must verify SHA-256 checksums obtained over a trusted channel.
 - **Dependency trust.** The offline package relies on vendor downloads made on the connected side. Pinned hashes protect against changes after pinning, not against a compromised upstream at pinning time.
 - **Performance impact is unmeasured.** Collection load on large vCenter or NSX deployments has not been measured.
-- **Not validated live.** Every control above has been verified only against fixtures. Real endpoint behavior, such as unusual redirect patterns, API edge cases or permission shapes, may differ.
+- **Verified only against fixtures.** Every control above has been checked against fixtures, not a live environment. Real endpoint behavior, such as unusual redirect patterns, API edge cases or permission shapes, may differ.
 - **Output permissions** depend on the filesystem. Restrictive ACLs may not apply on network shares or non-NTFS volumes.
 
 ## Reporting

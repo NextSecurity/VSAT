@@ -1,6 +1,6 @@
 #region Model
 
-$script:VsatSchemaVersion = '2.0'
+$script:VsatSchemaVersion = '2.3'
 
 function New-VsatEvidence {
     param([ValidateSet('live', 'fixture', 'replay', 'demo')][string]$Mode = 'live', $Scope)
@@ -18,6 +18,40 @@ function New-VsatEvidence {
     return $ev
 }
 
+# The 2.3 Blast Radius scope keys (controller ruling P51) that get light type validation.
+# Kept as one script-scope list so New-VsatScope and the -Replay scope merge (99-Main.ps1)
+# agree on exactly which keys are validated.
+$script:VsatNewScopeArrayKeys = @('entryPoints', 'credentialStores', 'identityGroups', 'identityDomains', 'aiWorkloads', 'signoffs')
+
+function Read-VsatScopeArrayKey {
+    # Reads one array-shaped scope key and reports whether it was present, so a caller can tell
+    # "operator explicitly set an empty array" (present=true, value=@()) apart from "key absent,
+    # keep the current/default value" (present=false). Deliberately does NOT use Get-VsatProp:
+    # that helper returns through a function `return`, and PowerShell's pipeline collapses an
+    # array it doesn't enumerate to more than one object down to that one object - a single-
+    # element array unwraps to its bare element, and a zero-element (empty) array unwraps to
+    # $null, indistinguishable from "absent". Direct indexing avoids both.
+    # On a bad shape (string or a single dictionary, i.e. not wrapped in an array), warns and
+    # reports not-present so the caller keeps its current/default value.
+    param([Parameter(Mandatory)]$Scope, [Parameter(Mandatory)][string]$Key)
+    $absent = [ordered]@{ present = $false; value = $null }
+    if ($null -eq $Scope) { return $absent }
+    $has = $false; $v = $null
+    if ($Scope -is [System.Collections.IDictionary]) {
+        if ($Scope.Contains($Key)) { $v = $Scope[$Key]; $has = $true }
+    }
+    else {
+        $p = $Scope.PSObject.Properties[$Key]
+        if ($p) { $v = $p.Value; $has = $true }
+    }
+    if (-not $has -or $null -eq $v) { return $absent }
+    if ($v -is [string] -or $v -is [System.Collections.IDictionary]) {
+        Write-VsatLog -Level warn -Source 'scope' -Message "Scope key '$Key' must be an array; ignoring and using the default"
+        return $absent
+    }
+    return [ordered]@{ present = $true; value = @($v) }
+}
+
 function New-VsatScope {
     param($Scope)
     $s = [ordered]@{
@@ -30,15 +64,51 @@ function New-VsatScope {
         zones                       = @()
         exceptions                  = @()
         nsxDeclaredAbsent           = $false
+        # 2.3 Blast Radius scope keys (controller ruling P51): array-shaped, safe defaults.
+        entryPoints                 = @()
+        credentialStores            = @()
+        identityGroups              = @()
+        identityDomains             = @()
+        aiWorkloads                 = @()
+        signoffs                    = @()
     }
+    # Pre-existing keys (including `exceptions`, which may now also carry optional
+    # `approver`/`compensatingControl`/`ticket` fields per element) keep their original,
+    # unvalidated pass-through so already-deployed scope files behave exactly as before.
     if ($Scope) {
         foreach ($k in @($s.Keys)) {
-            $v = Get-VsatProp $Scope $k
-            if ($null -ne $v) { $s[$k] = $v }
+            if ($script:VsatNewScopeArrayKeys -contains $k) {
+                $r = Read-VsatScopeArrayKey -Scope $Scope -Key $k
+                if ($r.present) { $s[$k] = $r.value }
+            }
+            else {
+                $v = Get-VsatProp $Scope $k
+                if ($null -ne $v) { $s[$k] = $v }
+            }
         }
     }
     $s.endpoints = New-VsatList $s.endpoints
     return $s
+}
+
+function Merge-VsatScopeOverrides {
+    # Re-applies -ScopeFile overrides onto evidence that already has a scope (used by -Replay,
+    # where the evidence's own scope was captured at the original run and the operator may have
+    # since updated scope.json). Pre-existing keys keep their original, unvalidated assignment
+    # for backward compatibility; the 2.3 Blast Radius keys (controller ruling P51) go through
+    # Read-VsatScopeArrayKey so a bad shape warns instead of being silently applied, and so an
+    # explicit empty-array override (e.g. `"identityDomains": []`) is honoured rather than
+    # ignored as if the key were absent.
+    param([Parameter(Mandatory)]$Scope, [Parameter(Mandatory)][System.Collections.IDictionary]$EvidenceScope)
+    if (-not $Scope) { return }
+    foreach ($k in @('exclusions', 'nativeVlans', 'authorizedNetflowCollectors', 'authorizedSyslogTargets', 'criticalAssets', 'zones', 'exceptions')) {
+        $v = Get-VsatProp $Scope $k
+        if ($null -ne $v) { $EvidenceScope[$k] = $v }
+    }
+    foreach ($k in $script:VsatNewScopeArrayKeys) {
+        $r = Read-VsatScopeArrayKey -Scope $Scope -Key $k
+        if ($r.present) { $EvidenceScope[$k] = $r.value }
+    }
 }
 
 function Add-VsatEndpoint {

@@ -102,6 +102,27 @@ function Split-VsatAddress {
     return @{ host = $Address; port = $DefaultPort }
 }
 
+function Resolve-VsatEndpointAddress {
+    # Records endpoint.resolvedAddresses at connect time. This is a lookup of the operator-named
+    # target through the local resolver only (no other egress). An IP literal is used as is.
+    # The graph correlates VM IPs against these recorded addresses and never resolves names later.
+    param([Parameter(Mandatory)]$Endpoint)
+    $raw = ([string]$Endpoint.address) -replace '^[A-Za-z][A-Za-z0-9+.-]*://', '' -replace '/.*$', ''
+    $h = (Split-VsatAddress $raw).host
+    $ip = $null
+    if ([System.Net.IPAddress]::TryParse($h, [ref]$ip)) { $Endpoint.resolvedAddresses = @($ip.ToString()); return }
+    try {
+        $list = @([System.Net.Dns]::GetHostAddresses($h) | ForEach-Object { $_.ToString() } | Sort-Object -Unique)
+        $Endpoint.resolvedAddresses = $list
+        if (-not $list.Count) { $Endpoint.resolvedAddressesNote = "Address $h not resolved: no addresses returned" }
+    }
+    catch {
+        $Endpoint.resolvedAddresses = @()
+        $Endpoint.resolvedAddressesNote = Protect-VsatText "Address $h not resolved: $($_.Exception.Message)"
+        Write-VsatLog -Level warn -Source 'session' -Message "Could not resolve $h; VM-to-endpoint correlation for $($Endpoint.id) is unknown"
+    }
+}
+
 function Get-VsatCertificateInfo {
     param([Parameter(Mandatory)][string]$HostName, [int]$Port = 0)
     if (-not (Initialize-VsatTls)) { return $null }

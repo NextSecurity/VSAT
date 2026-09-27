@@ -1,6 +1,6 @@
 # Control coverage matrix
 
-Generated from rule pack **2026.09.0** for VSAT **2.2.0** by `build/New-CoverageDoc.ps1`. Do not edit by hand.
+Generated from rule pack **2026.09.1** for VSAT **2.3.0** by `build/New-CoverageDoc.ps1`. Do not edit by hand.
 
 - **Automated** checks evaluate collected evidence; missing or denied evidence yields UNKNOWN, never PASS.
 - **Manual** checks always produce MANUAL results with guidance; completion is not certification.
@@ -19,10 +19,11 @@ Generated from rule pack **2026.09.0** for VSAT **2.2.0** by `build/New-Coverage
 | kvm-vm | 9 | 9 | 0 |
 | kvm-network | 1 | 1 | 0 |
 | nsx | 27 | 26 | 1 |
+| ot-segmentation | 6 | 6 | 0 |
 | vcenter | 9 | 5 | 4 |
 | cluster | 4 | 4 | 0 |
 | vm | 24 | 23 | 1 |
-| **total** | **182** | **168** | **14** |
+| **total** | **188** | **174** | **14** |
 
 ## esxi
 
@@ -218,6 +219,17 @@ Generated from rule pack **2026.09.0** for VSAT **2.2.0** by `build/New-Coverage
 | `NSX-NAT-BYPASS` | NAT rules do not bypass the gateway firewall | nsx-t1 | medium | automated | standard, strict | VSAT NSX-NAT-BYPASS |
 | `NSX-IDS` | Distributed IDS/IPS is enabled where licensed | nsx-manager | info | automated | standard, strict | VSAT NSX-IDS |
 | `NSX-FEDERATION` | Federation / multi-tenancy context reviewed | nsx-manager | info | manual | standard, strict | VSAT NSX-FEDERATION |
+
+## ot-segmentation
+
+| Rule | Title | Asset | Severity | Type | Profiles | Framework references |
+|---|---|---|---|---|---|---|
+| `OT-SHARED-HOST` | OT and IT workloads do not share a hypervisor host | host, hyperv-host, kvm-host | high | automated | standard, strict | VSAT OT-SHARED-HOST |
+| `OT-SHARED-VSWITCH` | OT and IT workloads do not share a virtual switch | vss, vds, hyperv-vswitch, kvm-network | high | automated | standard, strict | VSAT OT-SHARED-VSWITCH |
+| `OT-SHARED-MGMT` | OT hosts have their own management plane | vcenter, hyperv-cluster | medium | automated | standard, strict | VSAT OT-SHARED-MGMT |
+| `OT-IT-ADMIN` | No identity administers both OT and IT hosts | host, hyperv-host, kvm-host | high | automated | standard, strict | VSAT OT-IT-ADMIN |
+| `OT-IT-PATH` | No IT entry point reaches an OT workload | vm, hyperv-vm, kvm-vm | critical | automated | standard, strict | VSAT OT-IT-PATH |
+| `OT-DMZ-BYPASS` | IT workloads reach plant workloads only through the OT DMZ | vm, hyperv-vm, kvm-vm | high | automated | standard, strict | VSAT OT-DMZ-BYPASS |
 
 ## vcenter
 

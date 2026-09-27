@@ -110,3 +110,29 @@ Describe 'NSX policy analysis' {
         @($r.analysis.attackPaths | Where-Object { $_.decision -eq 'deny' }) | Should -BeNullOrEmpty
     }
 }
+
+Describe 'NSX compute-manager collection' {
+    It 'computeManagers collected with username but no credential material' {
+        Mock Invoke-VsatRest {
+            if ($Path -like '/api/v1/fabric/compute-managers*') {
+                return [ordered]@{ result_count = 1; results = @([ordered]@{
+                            id = 'cm-1'; display_name = 'vc01'; server = 'vc01.example.local'; origin_type = 'vCenter'; origin_id = '7153b5e7-edfb-e742-95ae-c6f5f3fdfa71'
+                            credential = [ordered]@{ credential_type = 'UsernamePasswordLoginCredential'; username = 'svc-nsx@vsphere.local'; password = 'S3cret!'; thumbprint = 'AA:BB:CC' }
+                        }) }
+            }
+            if ($Path -like '*page_size*') { return [ordered]@{ result_count = 0; results = @() } }
+            return $null
+        }
+        $ev = New-VsatEvidence -Mode fixture
+        $ep = Add-VsatEndpoint -Evidence $ev -Type nsx -Address 'nsx01.example.local'
+        Invoke-VsatNsxCollection -Evidence $ev -Endpoint $ep -Session @{ headers = @{} }
+        $asset = @($ev.assets | Where-Object type -eq 'nsx-manager')[0]
+        $asset.facts.computeManagers.status | Should -Be 'ok'
+        $cm = @($asset.facts.computeManagers.value)[0]
+        $cm.server | Should -Be 'vc01.example.local'
+        $cm.username | Should -Be 'svc-nsx@vsphere.local'
+        $cm.origin_id | Should -Be '7153b5e7-edfb-e742-95ae-c6f5f3fdfa71'
+        ConvertTo-VsatJson $asset.facts.computeManagers | Should -Not -Match 'password|thumbprint|S3cret|AA:BB'
+        @($ev.relationships | Where-Object { $_.type -eq 'manages' -and $_.target -eq 'vcenter:vc01.example.local' }).Count | Should -Be 1
+    }
+}

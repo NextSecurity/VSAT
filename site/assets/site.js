@@ -37,6 +37,28 @@
       });
     });
 
+    // Hero OS switch: toggle which one-liner (Windows vs. Linux/macOS) is shown.
+    document.querySelectorAll('[data-os-switch]').forEach(function (root) {
+      var tabs = Array.prototype.slice.call(root.querySelectorAll('.os-tab'));
+      var panels = Array.prototype.slice.call(document.querySelectorAll('[data-os-panel]'));
+      function select(tab, focus) {
+        tabs.forEach(function (t) { t.setAttribute('aria-pressed', t === tab ? 'true' : 'false'); });
+        panels.forEach(function (p) { p.hidden = p.getAttribute('data-os-panel') !== tab.getAttribute('data-os'); });
+        if (focus) { tab.focus(); }
+      }
+      tabs.forEach(function (tab, i) {
+        tab.addEventListener('click', function () { select(tab, false); });
+        tab.addEventListener('keydown', function (e) {
+          var n = null;
+          if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { n = (i + 1) % tabs.length; }
+          else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { n = (i - 1 + tabs.length) % tabs.length; }
+          else if (e.key === 'Home') { n = 0; }
+          else if (e.key === 'End') { n = tabs.length - 1; }
+          if (n !== null) { e.preventDefault(); select(tabs[n], true); }
+        });
+      });
+    });
+
     // Report viewer tabs (WAI-ARIA tabs pattern, automatic activation).
     document.querySelectorAll('[data-tabs]').forEach(function (root) {
       var tabs = Array.prototype.slice.call(root.querySelectorAll('[role="tab"]'));
