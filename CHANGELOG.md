@@ -6,6 +6,24 @@ The format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-09-27
+
+Adds the **Audit pack**: one control matrix across frameworks, with sign-offs and exceptions, ready to hand to an auditor.
+
+### Added
+
+- `-AuditPack` (live runs, `-Demo` and `-Replay`) writes `audit-pack/`: `control-matrix.csv`, a standalone `control-matrix.html`, `signoffs.csv`, `exceptions.csv`, a copy of the evidence package and a manifest with the SHA-256 of every file and the package receipt.
+- Framework mappings for all 201 rules: NIST SP 800-53 Rev. 5, IEC 62443-3-3 system requirements, MITRE ATT&CK mitigations and DISA STIG for vSphere 8 (ESXi, vCenter, virtual machine), matched by exact setting names from the published DISA package. Mappings carry IDs and VSAT's own wording only, with a review status (`proposed` or `verified`).
+- CIS with your own license: `build/Import-CisMapping.ps1` imports a licensed CIS benchmark; VSAT ships no CIS content.
+- Scope key `signoffs` for manual checks, and exception fields `approver`, `compensatingControl`, `ticket` and `expires`.
+- A Compliance page in the report with a framework selector, the matrix and both registers.
+- Control states stay separate: `satisfied`, `not-satisfied`, `partial`, `not-assessed`, `manual-open`, `manual-signed-off`, `excepted`. Missing evidence is always `not-assessed`.
+- End-to-end test and CI smoke step covering blast radius, change timeline, receipt, ransomware readiness, AI workloads and the audit pack together.
+
+### Changed
+
+- CIS and Security Configuration Guide IDs carried over from VSAT 1.x are labeled `legacy-unverified`.
+
 ## [2.6.0] - 2026-09-27
 
 Adds **AI & GPU isolation** across VMware, Hyper-V and KVM.
@@ -199,7 +217,8 @@ These 1.x defects are covered by regression fixtures:
 - First release: the VMware vSphere security audit script `vsat.ps1`. It had PowerCLI-based `Ensure-*` checks derived from CIS VMware ESXi benchmark controls, console output and `vsat.log`.
 - The static ESXi patch list `vmware/patches.json`.
 
-[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.6.0...HEAD
+[Unreleased]: https://github.com/NextSecurity/VSAT/compare/v2.7.0...HEAD
+[2.7.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.7.0
 [2.6.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.6.0
 [2.5.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.5.0
 [2.4.0]: https://github.com/NextSecurity/VSAT/releases/tag/v2.4.0

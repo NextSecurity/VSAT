@@ -26,8 +26,9 @@ function Get-Normalized([string]$Path) {
 
 $srcFiles = Get-ChildItem -LiteralPath (Join-Path $root 'src') -Filter '*.ps1' | Sort-Object { $_.Name } -Culture ([Globalization.CultureInfo]::InvariantCulture)
 $resources = New-Object System.Collections.Generic.List[object]
-# data/attack holds the generated ATT&CK/ATLAS catalog (build/Import-AttackCatalog.ps1) and the edge mappings.
-foreach ($dir in @('rules', 'data', 'data/attack')) {
+# data/attack holds the generated ATT&CK/ATLAS catalog (build/Import-AttackCatalog.ps1) and the edge mappings;
+# data/frameworks holds the compliance catalogs and crosswalk (build/New-CrosswalkSeed.ps1).
+foreach ($dir in @('rules', 'data', 'data/attack', 'data/frameworks')) {
     Get-ChildItem -LiteralPath (Join-Path $root $dir) -Filter '*.json' | Sort-Object Name | ForEach-Object { $resources.Add(@{ name = "$dir/$($_.Name)"; path = $_.FullName }) }
 }
 # The report and the UI each get ONE inline script and ONE stylesheet (hash-based CSP, file://).
@@ -123,7 +124,7 @@ if (-not $LibraryMode) {
         Cli = [bool]$Cli; Doctor = [bool]$Doctor; Replay = $Replay; Baseline = $Baseline; Redact = [bool]$Redact
         TrustedThumbprint = $TrustedThumbprint; Port = $Port; NoBrowser = [bool]$NoBrowser; Demo = [bool]$Demo; Version = [bool]$Version
     }
-    foreach ($vsatOpt in 'HyperVServer', 'HyperVCredential', 'HyperVEvidence', 'ExportCollector', 'KvmServer', 'KvmUser', 'KvmEvidence', 'EngagementStart', 'CollectOnly', 'Receipt') {
+    foreach ($vsatOpt in 'HyperVServer', 'HyperVCredential', 'HyperVEvidence', 'ExportCollector', 'KvmServer', 'KvmUser', 'KvmEvidence', 'EngagementStart', 'CollectOnly', 'Receipt', 'AuditPack') {
         $vsatVar = Get-Variable -Name $vsatOpt -Scope Script -ErrorAction SilentlyContinue
         if ($vsatVar) { $vsatArgs[$vsatOpt] = $vsatVar.Value }
     }

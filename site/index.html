@@ -181,7 +181,7 @@
   <div class="wrap">
     <div class="sec-head">
       <h2 id="report-title" class="display">One file you can carry out of the room</h2>
-      <p class="sec-lede">Every run writes a standalone <code>report.html</code> that works offline, next to an evidence package and CSV worklists. Eleven features go beyond a checklist, and each one says plainly how much it can tell you.</p>
+      <p class="sec-lede">Every run writes a standalone <code>report.html</code> that works offline, next to an evidence package and CSV worklists. Twelve features go beyond a checklist, and each one says plainly how much it can tell you.</p>
     </div>
 
     <div class="viewer" data-tabs>
@@ -245,6 +245,11 @@
           <dt>AI &amp; GPU isolation</dt>
           <dd class="is">GPU passthrough and sharing, IOMMU, ACS overrides, SR-IOV next to management traffic, exposed model and dataset storage, and reachable Kubernetes control planes.</dd>
           <dd class="not">Reads configuration only; no GPU workload or model inspection.</dd>
+        </div>
+        <div class="ledger-row">
+          <dt>Audit pack</dt>
+          <dd class="is">One control matrix across NIST SP 800-53, IEC 62443-3-3, DISA STIG and ATT&amp;CK mitigations, with your sign-offs and exceptions, the evidence package and its receipt. CIS through your own licensed benchmark.</dd>
+          <dd class="not">Each mapping shows whether it has been reviewed. A satisfied control is not a certification.</dd>
         </div>
         <div class="ledger-row">
           <dt>MITRE ATT&amp;CK mapping</dt>
@@ -404,6 +409,7 @@
           <li><code>findings.csv</code><span>One row per finding</span></li>
           <li><code>worklist.csv</code><span>Work packages for ticketing</span></li>
           <li><code>changes.csv</code><span>Engagement change timeline</span></li>
+          <li><code>audit-pack/</code><span>Control matrix, sign-offs, exceptions (with <code>-AuditPack</code>)</span></li>
           <li><code>attack-layer.json</code><span>MITRE ATT&amp;CK Navigator layer</span></li>
           <li><code>manifest.json</code><span>SHA-256 of every output and the receipt code</span></li>
         </ul>

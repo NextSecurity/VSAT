@@ -22,8 +22,8 @@ Describe 'Rule pack integrity' {
         foreach ($r in $script:Pack.rules) {
             @($r.frameworks).Count | Should -BeGreaterThan 0
             foreach ($f in $r.frameworks) {
-                $f.mappingStatus | Should -BeIn @('verified', 'unverified')
-                if ($f.framework -like 'CIS*') { $f.mappingStatus | Should -Be 'unverified' }
+                $f.mappingStatus | Should -BeIn @('verified', 'legacy-unverified', 'proposed', 'derived')
+                if ($f.framework -like 'CIS*') { $f.mappingStatus | Should -Be 'legacy-unverified' }
             }
         }
     }

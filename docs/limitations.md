@@ -4,7 +4,8 @@ This page lists what VSAT does not cover. It is updated with every release.
 
 ## Benchmarks and results
 
-- **CIS control IDs** are carried over from the 1.x mapping and carry the `unverified` mapping status in reports. The technical checks are original implementations.
+- **CIS control IDs** are carried over from the 1.x mapping and carry the `legacy-unverified` mapping status in reports. The technical checks are original implementations.
+- **Audit pack mappings** (NIST SP 800-53, IEC 62443-3-3, ATT&CK mitigations, DISA STIG) ship as `proposed`: no reviewer has confirmed them yet, so the control matrix shows them as unverified. DISA STIG rows cover only the vSphere 8.0 ESXi, vCenter and Virtual Machine STIGs and only settings VSAT reads by name. CIS mappings need a licensed reviewer (bring your license). ISO/IEC 27001 is not included. The control matrix is an aid for an auditor, not a certification.
 - **VSAT is not certified by, endorsed by or affiliated with CIS, VMware or Broadcom.** A run with no failures does **not** mean compliance with any benchmark or standard.
 - "Complete" means every applicable planned check reached a known result. It does not mean every risk was assessed. `MANUAL` controls always need human review.
 - Advisory evaluation depends on a dated snapshot. It cannot know about later advisories. Version exposure does not prove exploitability.

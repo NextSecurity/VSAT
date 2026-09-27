@@ -212,12 +212,14 @@ function Write-VsatSummary {
 
 function Complete-VsatRun {
     # Shared tail for CLI, replay and demo: analysis, outputs, summary.
-    param($Evidence, [string]$ProfileName, [string]$OutputDir, $BaselineEvidence, [switch]$Redact, $ReceiptCheck)
+    param($Evidence, [string]$ProfileName, [string]$OutputDir, $BaselineEvidence, [switch]$Redact, $ReceiptCheck, [switch]$AuditPack)
     $results = Invoke-VsatAnalysisPipeline -Evidence $Evidence -ProfileName $ProfileName -BaselineEvidence $BaselineEvidence
     if ($ReceiptCheck) { $results.receiptVerification = $ReceiptCheck }
     Update-VsatProgress -Phase 'writing' -Message 'Writing report and evidence package'
     $script:VsatLastReceipt = $null
     $files = Write-VsatOutputs -Evidence $Evidence -Results $results -OutputDir $OutputDir -Redact:$Redact
+    # The audit pack copies the finished package and repeats its receipt, so it is written last.
+    if ($AuditPack) { $files = @($files) + @(Write-VsatAuditPack -Results $results -OutputDir $OutputDir) }
     return @{ results = $results; files = $files; receipt = $script:VsatLastReceipt }
 }
 
@@ -302,6 +304,7 @@ function Invoke-VsatMain {
     }
 
     if ($A.Receipt -and -not $A.Replay) { throw 'The -Receipt parameter verifies a package and requires -Replay <assessment.vsat.zip>.' }
+    if ($A.AuditPack -and $A.CollectOnly -and -not $A.Replay) { Write-VsatLog -Level warn -Source 'audit-pack' -Message '-AuditPack has no effect with -CollectOnly (no findings); replay the package with -AuditPack' }
     $engagement = if ($A.EngagementStart) { Resolve-VsatEngagementStart -Value $A.EngagementStart -RunStartUtc (Get-VsatUtcNow) } else { $null }
 
     $outDir = Resolve-VsatOutputDir $A.OutputPath
@@ -333,7 +336,7 @@ function Invoke-VsatMain {
         # Re-applies the operator's current scope.json overrides onto replayed evidence (see
         # Merge-VsatScopeOverrides in 20-Model.ps1).
         if ($scope) { Merge-VsatScopeOverrides -Scope $scope -EvidenceScope $ev.scope }
-        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact -ReceiptCheck $receiptCheck
+        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact -ReceiptCheck $receiptCheck -AuditPack:([bool]$A.AuditPack)
         Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files -Receipt $r.receipt
         if (-not $A.Cli -and -not $A.NoBrowser) { Open-VsatBrowser (Join-Path $outDir 'report.html') }
         return $r.results.status.exitCode
@@ -348,7 +351,7 @@ function Invoke-VsatMain {
             Write-VsatCollectSummary -Evidence $ev -OutputDir $outDir -Files $c.files -Receipt $c.receipt
             return 0
         }
-        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact
+        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact -AuditPack:([bool]$A.AuditPack)
         Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files -Receipt $r.receipt
         return $r.results.status.exitCode
     }
@@ -372,7 +375,7 @@ function Invoke-VsatMain {
             Write-VsatCollectSummary -Evidence $ev -OutputDir $outDir -Files $c.files -Receipt $c.receipt
             return (Get-VsatCollectOnlyExitCode -Evidence $ev)
         }
-        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact
+        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact -AuditPack:([bool]$A.AuditPack)
         Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files -Receipt $r.receipt
         return $r.results.status.exitCode
     }
@@ -509,7 +512,7 @@ function Invoke-VsatUi {
                             Write-VsatCollectSummary -Evidence $ev -OutputDir $OutputDir -Files $c.files -Receipt $c.receipt
                             break
                         }
-                        $r = Complete-VsatRun -Evidence $ev -ProfileName $cmd.profile -OutputDir $OutputDir -BaselineEvidence $Baseline -Redact:$A.Redact
+                        $r = Complete-VsatRun -Evidence $ev -ProfileName $cmd.profile -OutputDir $OutputDir -BaselineEvidence $Baseline -Redact:$A.Redact -AuditPack:([bool]$A.AuditPack)
                         $state.reportHtml = [System.IO.File]::ReadAllText((Join-Path $OutputDir 'report.html'))
                         $state.result = @{ status = $r.results.status; summary = $r.results.summary; outputDir = $OutputDir; runId = [string]$r.results.run.id; reportUrl = '/report'; files = @($r.files); receipt = $r.receipt; blastRadius = $r.results.analysis.blastRadius; workPackageCatalog = @($r.results.analysis.workPackageCatalog); workPackages = @($r.results.analysis.workPackages | ForEach-Object { [ordered]@{ id = $_.id; title = $_.title } }); ransomware = (Get-VsatRansomwareSummary $r.results.analysis.ransomware) }
                         $state.phase = $(if ($r.results.status.overall -eq 'canceled') { 'canceled' } else { 'done' })

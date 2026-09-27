@@ -72,6 +72,10 @@
 .PARAMETER Receipt
     With -Replay: verify the package against the receipt code read out when it was
     collected (VSAT-XXXX-XXXX-XXXX-XXXX). A mismatch stops with exit code 3.
+.PARAMETER AuditPack
+    Also write audit-pack/: the control matrix (NIST SP 800-53, DISA STIG, ATT&CK mitigations,
+    IEC 62443-3-3) as CSV and offline HTML, the sign-off and exception registers, a copy of the
+    evidence package and a manifest with hashes and the receipt code. Works with -Demo and -Replay.
 
 .EXAMPLE
     .\vsat.ps1
@@ -83,6 +87,8 @@
     .\vsat.ps1 -CollectOnly -EngagementStart 2026-09-01
 .EXAMPLE
     .\vsat.ps1 -Replay .\assessment.vsat.zip -Receipt VSAT-7Q2M-XK4D-9HNB-3TRE
+.EXAMPLE
+    .\vsat.ps1 -Replay .\assessment.vsat.zip -ScopeFile .\scope.json -AuditPack
 
 .NOTES
     Exit codes: 0 complete/no failing automated controls, 1 complete/findings present,
@@ -123,6 +129,7 @@ param(
     [string]$EngagementStart,
     [switch]$CollectOnly,
     [string]$Receipt,
+    [switch]$AuditPack,
     [Parameter(DontShow)]
     [switch]$LibraryMode
 )

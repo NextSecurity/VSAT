@@ -452,3 +452,25 @@ dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .rw-groups > .card + .card, .rw-groups > details + .card, .rw-groups > .card + details, .rw-groups > details + details { margin-top: 12px; }
 .rw-groups h3 { margin: 0 0 8px; font-size: 1rem; }
 .rw-groups summary { cursor: pointer; }
+
+/* compliance: control matrix states (report Compliance page and audit-pack/control-matrix.html) */
+.cm-state { display: inline-block; font-weight: 700; font-size: .72rem; letter-spacing: .03em; padding: 1px 7px; border-radius: var(--radius-sm); border: 1px solid; white-space: nowrap; }
+.cm-st-satisfied { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+.cm-st-manual-signed-off { color: var(--ok); background: transparent; border-color: var(--ok); border-style: dashed; }
+.cm-st-not-satisfied { color: var(--bad); background: var(--bad-bg); border-color: var(--bad-border); }
+.cm-st-not-assessed { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); border-style: dashed; }
+.cm-st-manual-open { color: var(--res-manual); background: transparent; border-color: var(--res-manual); }
+.cm-st-partial { color: var(--warn); background: transparent; border-color: var(--warn-border); }
+.cm-st-excepted { color: var(--text-2); background: var(--surface-2); border-color: var(--border-strong); }
+.cm-b-satisfied { background: var(--res-pass); } .cm-b-manual-signed-off { background: var(--ok); opacity: .6; }
+.cm-b-not-satisfied { background: var(--res-fail); } .cm-b-not-assessed { background: var(--res-unknown); }
+.cm-b-manual-open { background: var(--res-manual); } .cm-b-partial { background: var(--warn-border); } .cm-b-excepted { background: var(--res-na); }
+.cm-bad { color: var(--res-fail); }
+.cm-sum .legend-inline { gap: 6px 12px; }
+.cm-import { display: inline-block; margin-left: 6px; font-size: .72rem; font-weight: 700; color: var(--warn); border: 1px dashed var(--warn-border); border-radius: 3px; padding: 0 5px; }
+td.cm-ctl { min-width: 190px; }
+/* Eleven tabs stay on one row down to 1024px. */
+@media (max-width: 1180px) { .tabs { padding: 0 12px; } .tabs a { padding: 12px 9px 10px; } }
+.cm-rules summary { cursor: pointer; white-space: nowrap; color: var(--accent); }
+.cm-rules[open] summary { margin-bottom: 4px; }
+@media (max-width: 1180px) { .cm-matrix th, .cm-matrix td { padding: 7px 6px; } td.cm-ctl { min-width: 150px; } }

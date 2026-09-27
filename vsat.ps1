@@ -1,6 +1,6 @@
 ﻿<#PSScriptInfo
 
-.VERSION 2.6.0
+.VERSION 2.7.0
 
 .GUID 228b4d14-2c3e-4ace-b07f-9151849e54c6
 
@@ -90,6 +90,10 @@
 .PARAMETER Receipt
     With -Replay: verify the package against the receipt code read out when it was
     collected (VSAT-XXXX-XXXX-XXXX-XXXX). A mismatch stops with exit code 3.
+.PARAMETER AuditPack
+    Also write audit-pack/: the control matrix (NIST SP 800-53, DISA STIG, ATT&CK mitigations,
+    IEC 62443-3-3) as CSV and offline HTML, the sign-off and exception registers, a copy of the
+    evidence package and a manifest with hashes and the receipt code. Works with -Demo and -Replay.
 
 .EXAMPLE
     .\vsat.ps1
@@ -101,6 +105,8 @@
     .\vsat.ps1 -CollectOnly -EngagementStart 2026-09-01
 .EXAMPLE
     .\vsat.ps1 -Replay .\assessment.vsat.zip -Receipt VSAT-7Q2M-XK4D-9HNB-3TRE
+.EXAMPLE
+    .\vsat.ps1 -Replay .\assessment.vsat.zip -ScopeFile .\scope.json -AuditPack
 
 .NOTES
     Exit codes: 0 complete/no failing automated controls, 1 complete/findings present,
@@ -141,6 +147,7 @@ param(
     [string]$EngagementStart,
     [switch]$CollectOnly,
     [string]$Receipt,
+    [switch]$AuditPack,
     [Parameter(DontShow)]
     [switch]$LibraryMode
 )
@@ -152,8 +159,8 @@ $ErrorActionPreference = 'Stop'
 # Build: pwsh ./build/Build-Vsat.ps1
 # ---------------------------------------------------------------------------
 
-$script:VsatVersion = '2.6.0'
-$script:VsatBuildCommit = 'src-43d1f1a34f6d659e'
+$script:VsatVersion = '2.7.0'
+$script:VsatBuildCommit = 'src-2a3a1f093ecf8d85'
 
 # ---- src/10-Util.ps1 ----
 #region Util
@@ -2585,11 +2592,13 @@ function Get-VsatRulePack {
     foreach ($r in $rules) {
         if ($ids.ContainsKey($r.id)) { throw "Duplicate rule id $($r.id)" }
         $ids[$r.id] = $true
-        # Expand compact framework references into explicit, honestly-labelled mappings.
+        # Expand compact framework references into explicit, honestly-labelled mappings: the 1.x
+        # legacy ids first (never verified), then the crosswalk rows (data/frameworks, 84-Compliance.ps1).
         $fw = [System.Collections.Generic.List[object]]::new()
-        if ($r.Contains('cis')) { $fw.Add([ordered]@{ framework = 'CIS VMware ESXi Benchmark'; edition = 'VSAT 1.x legacy mapping (ESXi 7.0 edition not recorded)'; control = [string]$r.cis; mappingStatus = 'unverified' }) }
-        if ($r.Contains('scg')) { $fw.Add([ordered]@{ framework = 'Broadcom vSphere/NSX Security Configuration Guide'; edition = 'edition to be confirmed'; control = [string]$r.scg; mappingStatus = 'unverified' }) }
-        if ($r.Contains('vsat') -or $fw.Count -eq 0) { $fw.Add([ordered]@{ framework = 'VSAT'; edition = $meta.version; control = $r.id; mappingStatus = 'verified' }) }
+        if ($r.Contains('cis')) { $fw.Add([ordered]@{ framework = 'CIS VMware ESXi Benchmark'; frameworkId = 'cis-esxi-legacy'; edition = 'VSAT 1.x legacy mapping (ESXi 7.0 edition not recorded)'; control = [string]$r.cis; relation = 'supports'; mappingStatus = 'legacy-unverified'; sourceRef = $null }) }
+        if ($r.Contains('scg')) { $fw.Add([ordered]@{ framework = 'Broadcom vSphere/NSX Security Configuration Guide'; frameworkId = 'scg'; edition = 'edition to be confirmed'; control = [string]$r.scg; relation = 'supports'; mappingStatus = 'legacy-unverified'; sourceRef = $null }) }
+        if ($r.Contains('vsat') -or $fw.Count -eq 0) { $fw.Add([ordered]@{ framework = 'VSAT'; frameworkId = 'vsat'; edition = $meta.version; control = $r.id; relation = 'equivalent'; mappingStatus = 'verified'; sourceRef = 'rules/' }) }
+        foreach ($x in @(Get-VsatRuleCrosswalkRefs -RuleId $r.id)) { $fw.Add($x) }
         $r.frameworks = @($fw)
         $m = if ($r.Contains('mitigation')) { $r.mitigation } else { [ordered]@{} }
         $wp = $wps[[string](Get-VsatProp $m 'workPackage' '')]
@@ -4902,8 +4911,10 @@ function Set-VsatExceptions {
             if ($f.ruleId -notlike [string]$ex.ruleId) { continue }
             $pat = if ($ex.asset) { [string]$ex.asset } else { '*' }
             if ($f.assetName -notlike $pat -and $f.assetId -notlike $pat) { continue }
-            # Exceptions stay visible and never turn a FAIL into a PASS.
-            $f.exception = [ordered]@{ owner = $ex.owner; rationale = $ex.rationale; expires = $ex.expires; active = $active }
+            # Exceptions stay visible and never turn a FAIL into a PASS. approver, compensatingControl and
+            # ticket (2.7, optional) feed the exception register; without an approver the control matrix
+            # does not treat the FAIL as excepted.
+            $f.exception = [ordered]@{ owner = $ex.owner; rationale = $ex.rationale; expires = $ex.expires; active = $active; approver = (Get-VsatProp $ex 'approver'); compensatingControl = (Get-VsatProp $ex 'compensatingControl'); ticket = (Get-VsatProp $ex 'ticket') }
         }
     }
 }
@@ -7416,6 +7427,8 @@ function Invoke-VsatAnalysisPipeline {
     $wps = Get-VsatWorkPackages -Findings $findings
     $results = New-VsatResultsObject -Evidence $Evidence -Eval $eval -Coverage $coverage -Status $status -ProfileName $ProfileName
     $results.analysis = [ordered]@{ attackPaths = @($paths.attackPaths); privilegePaths = @($paths.privilegePaths); chokepoints = @($paths.chokepoints); pathNotes = @($paths.notes); impact = @($impact); workPackages = @($wps); drift = $null; blastRadius = $blast; ransomware = $ransomware; workPackageCatalog = @(Get-VsatWorkPackageCatalog); changes = $changes; aiWorkloads = @(Get-VsatAiWorkloads -Findings $findings -Context $eval.context -Blast $blast) }
+    # Control matrix across the framework crosswalk, with the sign-off and exception registers.
+    $results.compliance = Get-VsatComplianceResults -Findings $findings -Scope $Evidence.scope
     if ($BaselineEvidence) {
         Update-VsatProgress -Message 'Comparing with baseline'
         $saveIdx = $script:VsatAssetIndex
@@ -7883,6 +7896,389 @@ function Protect-VsatRedactString {
 }
 
 #endregion Redaction
+
+# ---- src/84-Compliance.ps1 ----
+#region Compliance crosswalk
+# data/frameworks (generated by build/New-CrosswalkSeed.ps1): framework catalogs (control IDs plus
+# VSAT-written paraphrases, never standards text) and the rule -> control crosswalk with provenance.
+# A mapping is "verified" only with reviewer, review date, source reference and a confirmed framework
+# edition. The loader never trusts a verified row without them: it is shown as proposed instead.
+
+$script:VsatCrosswalkCache = $null
+# Matrix states, worst first. Missing evidence (UNKNOWN/ERROR) is never satisfied.
+$script:VsatMatrixStates = @('not-satisfied', 'not-assessed', 'manual-open', 'excepted', 'partial', 'manual-signed-off', 'satisfied')
+
+function Test-VsatMappingProvenance {
+    # Returns the reasons a mapping marked verified is not provably verified (empty when it is, or
+    # when it does not claim to be verified). This is the verified-mapping gate.
+    param([Parameter(Mandatory)]$Mapping, [Parameter(Mandatory)]$Catalogs)
+    if ([string](Get-VsatProp $Mapping 'status' '') -ne 'verified') { return @() }
+    $why = [System.Collections.Generic.List[string]]::new()
+    if (-not [string](Get-VsatProp $Mapping 'reviewer' '')) { $why.Add('no reviewer') }
+    if ([string](Get-VsatProp $Mapping 'reviewedUtc' '') -notmatch '^\d{4}-\d{2}-\d{2}') { $why.Add('no review date') }
+    if (-not [string](Get-VsatProp $Mapping 'sourceRef' '')) { $why.Add('no source reference') }
+    $fw = @($Catalogs.frameworks | Where-Object { $_.id -eq [string](Get-VsatProp $Mapping 'framework' '') })[0]
+    if (-not $fw) { $why.Add('unknown framework') }
+    elseif ([string]$fw.edition -match '(?i)^\s*$|to be confirmed|unknown|tbd|none imported') { $why.Add('framework edition not confirmed') }
+    return @($why)
+}
+
+function ConvertTo-VsatCrosswalk {
+    param([Parameter(Mandatory)]$Catalogs, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Mappings)
+    $byRule = @{}; $byControl = @{}; $fws = [ordered]@{}
+    foreach ($f in @($Catalogs.frameworks)) { $fws[[string]$f.id] = $f }
+    $all = foreach ($src in $Mappings) {
+        $m = [ordered]@{}; foreach ($k in $src.Keys) { $m[$k] = $src[$k] }
+        $why = @(Test-VsatMappingProvenance -Mapping $m -Catalogs $Catalogs)
+        if ($why.Count) { $m.status = 'proposed'; $m.demoted = "verified claim without provenance ($($why -join ', '))" }
+        if (-not $byRule.ContainsKey($m.ruleId)) { $byRule[$m.ruleId] = [System.Collections.Generic.List[object]]::new() }
+        $byRule[$m.ruleId].Add($m)
+        $k = "$($m.framework)|$($m.control)"
+        if (-not $byControl.ContainsKey($k)) { $byControl[$k] = [System.Collections.Generic.List[object]]::new() }
+        $byControl[$k].Add($m)
+        $m
+    }
+    return [ordered]@{ catalogs = $Catalogs; frameworks = $fws; mappings = @($all); byRule = $byRule; byControl = $byControl }
+}
+
+function Get-VsatCrosswalk {
+    if ($script:VsatCrosswalkCache) { return $script:VsatCrosswalkCache }
+    $cat = ConvertFrom-VsatJson (Get-VsatEmbeddedText 'data/frameworks/catalogs.json')
+    $x = ConvertFrom-VsatJson (Get-VsatEmbeddedText 'data/frameworks/crosswalk.json')
+    $script:VsatCrosswalkCache = ConvertTo-VsatCrosswalk -Catalogs $cat -Mappings @($x.mappings)
+    return $script:VsatCrosswalkCache
+}
+
+function Get-VsatRuleCrosswalkRefs {
+    # Crosswalk rows of one rule in the shape of rule.frameworks entries.
+    param([Parameter(Mandatory)][string]$RuleId)
+    $cw = Get-VsatCrosswalk
+    return @(foreach ($m in @($cw.byRule[$RuleId])) {
+            if (-not $m) { continue }
+            $fw = $cw.frameworks[[string]$m.framework]
+            [ordered]@{ framework = [string]$fw.name; frameworkId = [string]$m.framework; edition = [string]$fw.edition; control = [string]$m.control; relation = [string]$m.relation; mappingStatus = [string]$m.status; sourceRef = [string](Get-VsatProp $m 'sourceRef' '') }
+        })
+}
+
+function Get-VsatControlLabel {
+    # Paraphrase from the catalog; ATT&CK mitigation names come from the pinned ATT&CK catalog.
+    param([Parameter(Mandatory)]$Framework, [Parameter(Mandatory)][string]$Control)
+    foreach ($c in @($Framework.controls)) { if ($c -and [string]$c.id -eq $Control) { return [string](Get-VsatProp $c 'paraphrase' '') } }
+    if ([string]$Framework.id -eq 'mitre-attack-mitigations') {
+        $mit = (Get-VsatAttackCatalog).mitigations
+        if ($mit.Contains($Control)) { return [string]$mit[$Control].name }
+    }
+    return ''
+}
+
+function ConvertTo-VsatControlSortKey {
+    # Natural order: AC-2 before AC-11, SR 1.2 before SR 1.11.
+    param([string]$Id)
+    return [regex]::Replace([string]$Id, '\d+', { param($m) $m.Value.PadLeft(6, '0') })
+}
+#endregion Compliance crosswalk
+
+#region Sign-off and exception registers
+function Get-VsatFindingAssetRef {
+    param($Finding)
+    $a = Get-VsatAsset -Id ([string]$Finding.assetId)
+    if ($a) { return $a }
+    return [ordered]@{ id = $Finding.assetId; name = $Finding.assetName; type = $Finding.assetType; tags = @(); zone = $null }
+}
+
+function Test-VsatRegisterAsset {
+    # Sign-off/exception asset selector: empty or * = any; name:/type:/tag:/id:/zone: or a name pattern.
+    param($Finding, [string]$Selector)
+    if (-not $Selector -or $Selector -eq '*') { return $true }
+    if ($Finding.assetName -like $Selector -or $Finding.assetId -like $Selector) { return $true }
+    return (Test-VsatAssetMatch -Asset (Get-VsatFindingAssetRef $Finding) -Match $Selector)
+}
+
+function ConvertTo-VsatRegisterDate {
+    param($Value)
+    if (-not $Value) { return $null }
+    try { return [DateTime]::Parse([string]$Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal) } catch { return $null }
+}
+
+function Get-VsatSignoffRegister {
+    # One row per (sign-off, matching finding). Only MANUAL findings take sign-offs. States:
+    #   valid       complete, current sign-off on a MANUAL finding
+    #   expired     past its expires date
+    #   incomplete  missing reviewer, date or a known decision
+    #   orphan      no finding matches (wrong rule or asset, or the rule is automated and not failing)
+    #   conflict    says satisfied on an automated FAIL, or disagrees with another valid sign-off
+    # A sign-off never changes a finding's result; it only feeds the control matrix.
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings, $Scope)
+    $today = [DateTime]::UtcNow.Date
+    $rows = [System.Collections.Generic.List[object]]::new()
+    foreach ($s in @(Get-VsatProp $Scope 'signoffs' @())) {
+        if (-not $s) { continue }
+        $rule = [string](Get-VsatProp $s 'ruleId' ''); $sel = [string](Get-VsatProp $s 'asset' '')
+        $decision = [string](Get-VsatProp $s 'decision' '')
+        $exp = ConvertTo-VsatRegisterDate (Get-VsatProp $s 'expires')
+        $flags = [System.Collections.Generic.List[string]]::new()
+        if (-not [string](Get-VsatProp $s 'reviewer' '')) { $flags.Add('no-reviewer') }
+        if (-not (ConvertTo-VsatRegisterDate (Get-VsatProp $s 'dateUtc'))) { $flags.Add('no-date') }
+        if ($decision -notin @('satisfied', 'not-satisfied', 'not-applicable')) { $flags.Add('unknown-decision') }
+        if (-not [string](Get-VsatProp $s 'evidenceRef' '')) { $flags.Add('no-evidence-ref') }
+        $expired = ($exp -and $exp.Date -lt $today)
+        $base = { param($f, [string]$state) [ordered]@{ findingKey = $(if ($f) { $f.key } else { $null }); ruleId = $rule; asset = $sel; assetName = $(if ($f) { $f.assetName } else { $null }); result = $(if ($f) { $f.result } else { $null }); reviewer = (Get-VsatProp $s 'reviewer' ''); decision = $decision; evidenceRef = (Get-VsatProp $s 'evidenceRef' ''); dateUtc = (Get-VsatProp $s 'dateUtc' ''); expires = (Get-VsatProp $s 'expires' ''); state = $state; flags = @($flags) } }
+        $hits = @($Findings | Where-Object { $rule -and $_.ruleId -like $rule -and (Test-VsatRegisterAsset -Finding $_ -Selector $sel) })
+        $manual = @($hits | Where-Object { $_.result -eq 'MANUAL' })
+        if ($manual.Count) {
+            $st = if (@($flags | Where-Object { $_ -ne 'no-evidence-ref' }).Count) { 'incomplete' } elseif ($expired) { 'expired' } else { 'valid' }
+            foreach ($f in $manual) { $rows.Add((& $base $f $st)) }
+            continue
+        }
+        $fails = @($hits | Where-Object { $_.result -eq 'FAIL' })
+        if ($fails.Count -and $decision -ne 'not-satisfied') { foreach ($f in $fails) { $rows.Add((& $base $f 'conflict')) }; continue }
+        $rows.Add((& $base $null 'orphan'))
+    }
+    # Two valid sign-offs that disagree on one finding cannot both stand.
+    foreach ($g in @($rows | Where-Object { $_.state -eq 'valid' } | Group-Object { $_.findingKey })) {
+        if (@($g.Group | ForEach-Object { $_.decision } | Sort-Object -Unique).Count -gt 1) { foreach ($r in $g.Group) { $r.state = 'conflict' } }
+    }
+    return @($rows)
+}
+
+function Get-VsatExceptionRegister {
+    # Scope exceptions with their register flags: unapproved (no approver), expired, no-expiry and
+    # orphan (matches no finding). Only an active, approved exception makes a FAIL "excepted" in
+    # the control matrix; the finding itself stays FAIL.
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings, $Scope)
+    $today = [DateTime]::UtcNow.Date
+    return @(foreach ($ex in @(Get-VsatProp $Scope 'exceptions' @())) {
+            if (-not $ex) { continue }
+            $rule = [string](Get-VsatProp $ex 'ruleId' ''); $pat = [string](Get-VsatProp $ex 'asset' '*')
+            if (-not $pat) { $pat = '*' }
+            $exp = ConvertTo-VsatRegisterDate (Get-VsatProp $ex 'expires')
+            $active = ($null -eq $exp -or $exp.Date -ge $today)
+            $hits = @($Findings | Where-Object { $rule -and $_.ruleId -like $rule -and ($_.assetName -like $pat -or $_.assetId -like $pat) })
+            $flags = [System.Collections.Generic.List[string]]::new()
+            if (-not [string](Get-VsatProp $ex 'approver' '')) { $flags.Add('unapproved') }
+            if (-not $active) { $flags.Add('expired') }
+            if (-not (Get-VsatProp $ex 'expires')) { $flags.Add('no-expiry') }
+            if (-not $hits.Count) { $flags.Add('orphan') }
+            [ordered]@{
+                ruleId = $rule; asset = $pat; owner = (Get-VsatProp $ex 'owner' ''); approver = (Get-VsatProp $ex 'approver' ''); rationale = (Get-VsatProp $ex 'rationale' '')
+                compensatingControl = (Get-VsatProp $ex 'compensatingControl' ''); ticket = (Get-VsatProp $ex 'ticket' ''); expires = (Get-VsatProp $ex 'expires' '')
+                active = $active; findings = $hits.Count; failing = @($hits | Where-Object { $_.result -eq 'FAIL' }).Count; flags = @($flags)
+            }
+        })
+}
+#endregion Sign-off and exception registers
+
+#region Control matrix
+function Get-VsatControlState {
+    # Precedence (worst wins); a control is never satisfied with missing evidence:
+    #  1 unexcepted FAIL or a manual "not-satisfied" sign-off   -> not-satisfied
+    #  2 any UNKNOWN or ERROR                                    -> not-assessed
+    #  3 open MANUAL: alone -> manual-open, with positives -> partial
+    #  4 approved active exception: alone -> excepted, with positives -> partial
+    #  5 only signed-off MANUAL -> manual-signed-off
+    #  6 PASS (with or without signed-off MANUAL) -> satisfied
+    #  7 nothing but NOT_APPLICABLE, or no finding at all -> not-assessed
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Counts)
+    $n = { param($k) [int](Get-VsatProp $Counts $k 0) }
+    if ((& $n 'FAIL') -gt 0 -or (& $n 'SIGNED_NOT_SATISFIED') -gt 0) { return 'not-satisfied' }
+    if ((& $n 'UNKNOWN') -gt 0 -or (& $n 'ERROR') -gt 0) { return 'not-assessed' }
+    $pos = (& $n 'PASS') + (& $n 'SIGNED_OFF')
+    $open = (& $n 'MANUAL') - (& $n 'SIGNED_OFF') - (& $n 'SIGNED_NOT_SATISFIED')
+    if ($open -gt 0) { if ($pos -gt 0 -or (& $n 'EXCEPTED') -gt 0) { return 'partial' }; return 'manual-open' }
+    if ((& $n 'EXCEPTED') -gt 0) { if ($pos -gt 0) { return 'partial' }; return 'excepted' }
+    if ((& $n 'SIGNED_OFF') -gt 0 -and (& $n 'PASS') -eq 0) { return 'manual-signed-off' }
+    if ($pos -gt 0) { return 'satisfied' }
+    return 'not-assessed'
+}
+
+function Get-VsatControlMatrix {
+    # Rows { control, paraphrase, rules, assets, state, counts, mappingStatus, mappingStatuses } for one
+    # framework. mappingStatus is verified only when every mapping behind the control is verified.
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings, [Parameter(Mandatory)][string]$FrameworkId, [AllowEmptyCollection()][object[]]$Signoffs = @())
+    $cw = Get-VsatCrosswalk
+    $fw = $cw.frameworks[$FrameworkId]
+    if (-not $fw) { return @() }
+    $byRule = @{}
+    foreach ($f in $Findings) { if (-not $byRule.ContainsKey($f.ruleId)) { $byRule[$f.ruleId] = [System.Collections.Generic.List[object]]::new() }; $byRule[$f.ruleId].Add($f) }
+    $sig = @{}; foreach ($s in @($Signoffs)) { if ($s -and $s.state -eq 'valid' -and $s.findingKey) { $sig[[string]$s.findingKey] = [string]$s.decision } }
+    $controls = [ordered]@{}
+    foreach ($m in @($cw.mappings | Where-Object { $_.framework -eq $FrameworkId })) {
+        if (-not $controls.Contains([string]$m.control)) { $controls[[string]$m.control] = [System.Collections.Generic.List[object]]::new() }
+        $controls[[string]$m.control].Add($m)
+    }
+    $rows = foreach ($ctl in $controls.Keys) {
+        $maps = $controls[$ctl]
+        $rules = @($maps | ForEach-Object { [string]$_.ruleId } | Sort-Object -Unique)
+        $c = [ordered]@{ PASS = 0; FAIL = 0; MANUAL = 0; UNKNOWN = 0; ERROR = 0; NOT_APPLICABLE = 0; EXCEPTED = 0; SIGNED_OFF = 0; SIGNED_NOT_SATISFIED = 0 }
+        $assets = @{}
+        foreach ($rid in $rules) {
+            foreach ($f in @($byRule[$rid])) {
+                if (-not $f) { continue }
+                $assets[[string]$f.assetId] = $true
+                switch ([string]$f.result) {
+                    'FAIL' { if ($f.exception -and $f.exception.active -and [string](Get-VsatProp $f.exception 'approver' '')) { $c.EXCEPTED++ } else { $c.FAIL++ } }
+                    'MANUAL' {
+                        $c.MANUAL++
+                        $d = $sig[[string]$f.key]
+                        if ($d -in @('satisfied', 'not-applicable')) { $c.SIGNED_OFF++ } elseif ($d -eq 'not-satisfied') { $c.SIGNED_NOT_SATISFIED++ }
+                    }
+                    default { if ($c.Contains([string]$f.result)) { $c[[string]$f.result]++ } }
+                }
+            }
+        }
+        $statuses = @($maps | ForEach-Object { [string]$_.status } | Sort-Object -Unique)
+        [ordered]@{
+            control = $ctl; paraphrase = (Get-VsatControlLabel -Framework $fw -Control $ctl); rules = $rules; assets = $assets.Count
+            state = (Get-VsatControlState -Counts $c); counts = $c
+            mappingStatus = $(if ($statuses.Count -eq 1 -and $statuses[0] -eq 'verified') { 'verified' } else { 'unverified' }); mappingStatuses = $statuses
+        }
+    }
+    return @($rows | Sort-Object { ConvertTo-VsatControlSortKey $_.control } -Culture ([Globalization.CultureInfo]::InvariantCulture))
+}
+
+function Get-VsatComplianceResults {
+    # results.compliance: per framework the matrix plus headline counts that keep verified and
+    # unverified mappings apart; the sign-off and exception registers.
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Findings, $Scope)
+    $cw = Get-VsatCrosswalk
+    $signoffs = @(Get-VsatSignoffRegister -Findings $Findings -Scope $Scope)
+    $exceptions = @(Get-VsatExceptionRegister -Findings $Findings -Scope $Scope)
+    $frameworks = foreach ($fw in $cw.frameworks.Values) {
+        $maps = @($cw.mappings | Where-Object { $_.framework -eq $fw.id })
+        $rows = @(Get-VsatControlMatrix -Findings $Findings -FrameworkId $fw.id -Signoffs $signoffs)
+        $states = [ordered]@{ verified = [ordered]@{}; unverified = [ordered]@{} }
+        foreach ($s in $script:VsatMatrixStates) { $states.verified[$s] = 0; $states.unverified[$s] = 0 }
+        foreach ($r in $rows) { $states[$r.mappingStatus][$r.state]++ }
+        $ms = [ordered]@{ verified = 0; proposed = 0; derived = 0 }
+        foreach ($m in $maps) { $ms[[string]$m.status] = [int]$ms[[string]$m.status] + 1 }
+        $o = [ordered]@{
+            id = $fw.id; name = $fw.name; edition = $fw.edition; publisher = (Get-VsatProp $fw 'publisher' ''); license = $fw.license; note = (Get-VsatProp $fw 'note' '')
+            importRequired = ([bool](Get-VsatProp $fw 'importRequired' $false) -or $maps.Count -eq 0)
+            verifiedMappings = [int]$ms.verified; unverifiedMappings = $maps.Count - [int]$ms.verified; mappingStatuses = $ms
+            rulesMapped = @($maps | ForEach-Object { $_.ruleId } | Sort-Object -Unique).Count
+            states = $states; controls = $rows
+        }
+        # Pinned source (DISA package name and SHA-256). URLs stay in the catalog: the report links nowhere.
+        $src = Get-VsatProp $fw 'source' $null
+        if ($src) { $o.source = [ordered]@{ package = $src.package; sha256 = $src.sha256 } }
+        $o
+    }
+    return [ordered]@{
+        states = $script:VsatMatrixStates
+        note = 'Unverified rows (proposed or derived mappings) are shown separately and never count toward a verified result. Missing evidence is never satisfied.'
+        frameworks = @($frameworks); signoffs = $signoffs; exceptions = $exceptions
+    }
+}
+#endregion Control matrix
+
+#region Audit pack
+function Get-VsatControlMatrixRows {
+    param([Parameter(Mandatory)]$Results)
+    foreach ($fw in @(Get-VsatProp $Results 'compliance.frameworks' @())) {
+        foreach ($c in @($fw.controls)) {
+            [ordered]@{
+                framework = $fw.id; frameworkName = $fw.name; edition = $fw.edition; control = $c.control; description = $c.paraphrase; state = $c.state
+                mappingStatus = $c.mappingStatus; mappingStatuses = (@($c.mappingStatuses) -join '; '); rules = (@($c.rules) -join '; '); assets = $c.assets
+                PASS = $c.counts.PASS; FAIL = $c.counts.FAIL; EXCEPTED = $c.counts.EXCEPTED; MANUAL = $c.counts.MANUAL; SIGNED_OFF = $c.counts.SIGNED_OFF
+                SIGNED_NOT_SATISFIED = $c.counts.SIGNED_NOT_SATISFIED; UNKNOWN = $c.counts.UNKNOWN; ERROR = $c.counts.ERROR; NOT_APPLICABLE = $c.counts.NOT_APPLICABLE
+            }
+        }
+    }
+}
+
+function Write-VsatAuditPack {
+    # -AuditPack: audit-pack/ next to the evidence package. Plain files only (CSV, HTML, JSON and a
+    # copy of the package); manifest.json hashes every file and repeats the package's receipt code.
+    # Runs after Write-VsatOutputs, so assessment.vsat.zip and its receipt already exist.
+    param([Parameter(Mandatory)]$Results, [Parameter(Mandatory)][string]$OutputDir)
+    $dir = Join-Path $OutputDir 'audit-pack'
+    if (-not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Path $dir -Force) }
+    $zip = Join-Path $OutputDir 'assessment.vsat.zip'
+    $receipt = Get-VsatReceipt -Path $zip
+    Export-VsatCsv -Rows @(Get-VsatControlMatrixRows -Results $Results) -Columns @('framework', 'frameworkName', 'edition', 'control', 'description', 'state', 'mappingStatus', 'mappingStatuses', 'rules', 'assets', 'PASS', 'FAIL', 'EXCEPTED', 'MANUAL', 'SIGNED_OFF', 'SIGNED_NOT_SATISFIED', 'UNKNOWN', 'ERROR', 'NOT_APPLICABLE') -Path (Join-Path $dir 'control-matrix.csv')
+    $sig = @(foreach ($s in @(Get-VsatProp $Results 'compliance.signoffs' @())) { $o = [ordered]@{}; foreach ($k in $s.Keys) { $o[$k] = $s[$k] }; $o.flags = (@($s.flags) -join '; '); $o })
+    Export-VsatCsv -Rows $sig -Columns @('state', 'ruleId', 'asset', 'findingKey', 'assetName', 'result', 'reviewer', 'decision', 'evidenceRef', 'dateUtc', 'expires', 'flags') -Path (Join-Path $dir 'signoffs.csv')
+    $exc = @(foreach ($x in @(Get-VsatProp $Results 'compliance.exceptions' @())) { $o = [ordered]@{}; foreach ($k in $x.Keys) { $o[$k] = $x[$k] }; $o.flags = (@($x.flags) -join '; '); $o })
+    Export-VsatCsv -Rows $exc -Columns @('ruleId', 'asset', 'owner', 'approver', 'rationale', 'compensatingControl', 'ticket', 'expires', 'active', 'findings', 'failing', 'flags') -Path (Join-Path $dir 'exceptions.csv')
+    Write-VsatFile -Path (Join-Path $dir 'control-matrix.html') -Content (New-VsatControlMatrixHtml -Results $Results -Receipt $receipt)
+    Copy-Item -LiteralPath $zip -Destination (Join-Path $dir 'assessment.vsat.zip') -Force
+    $names = @('control-matrix.csv', 'control-matrix.html', 'signoffs.csv', 'exceptions.csv', 'assessment.vsat.zip')
+    $manifest = [ordered]@{
+        schemaVersion = $script:VsatSchemaVersion
+        tool = [ordered]@{ name = 'VSAT'; version = $script:VsatVersion; buildCommit = $script:VsatBuildCommit }
+        kind = 'audit-pack'; runId = $Results.run.id; generatedUtc = (Get-VsatUtcNow); statusLabel = $Results.status.label
+        package = [ordered]@{ name = 'assessment.vsat.zip'; sha256 = (Get-VsatSha256 -Path $zip); bytes = (Get-Item -LiteralPath $zip).Length }
+        receipt = $receipt
+        receiptNote = 'Receipt of the evidence package copied here. Verify with: vsat.ps1 -Replay assessment.vsat.zip -Receipt <code>.'
+        frameworks = @(foreach ($fw in @(Get-VsatProp $Results 'compliance.frameworks' @())) { [ordered]@{ id = $fw.id; edition = $fw.edition; verifiedMappings = $fw.verifiedMappings; unverifiedMappings = $fw.unverifiedMappings; importRequired = $fw.importRequired } })
+        files = @($names | ForEach-Object { $p = Join-Path $dir $_; [ordered]@{ name = $_; sha256 = (Get-VsatSha256 -Path $p); bytes = (Get-Item -LiteralPath $p).Length } })
+        note = 'SHA-256 hashes provide integrity checking of these files, not proof that source systems reported truthfully. Unverified mappings are proposals, not certification. Contains sensitive infrastructure data.'
+    }
+    Write-VsatFile -Path (Join-Path $dir 'manifest.json') -Content (ConvertTo-VsatJson $manifest)
+    Write-VsatLog -Source 'audit-pack' -Message "Audit pack written to $dir (receipt $receipt)"
+    return @($names + 'manifest.json' | ForEach-Object { "audit-pack/$_" })
+}
+
+$script:VsatMatrixStateLabel = [ordered]@{ 'not-satisfied' = 'Not satisfied'; 'not-assessed' = 'Not assessed'; 'manual-open' = 'Manual, open'; 'excepted' = 'Excepted'; 'partial' = 'Partial'; 'manual-signed-off' = 'Manual, signed off'; 'satisfied' = 'Satisfied' }
+
+function New-VsatControlMatrixHtml {
+    # Standalone, offline control matrix. Rendered here as static HTML (every value HTML-encoded), so
+    # the page needs no script at all: the CSP allows only the report stylesheet, by hash.
+    param([Parameter(Mandatory)]$Results, [string]$Receipt)
+    $e = { param($v) [System.Net.WebUtility]::HtmlEncode([string]$v) }
+    $css = Get-VsatEmbeddedText 'assets/report/report.css'
+    $csp = "default-src 'none'; style-src 'sha256-$(Get-VsatSha256Base64 $css)'; img-src data:; base-uri 'none'; form-action 'none'"
+    $cmp = Get-VsatProp $Results 'compliance' $null
+    $sb = [System.Text.StringBuilder]::new()
+    $st = { param([string]$s) "<span class=`"cm-state cm-st-$s`">$(& $e $script:VsatMatrixStateLabel[$s])</span>" }
+    $n = { param($v) if ([int]$v) { (& $e $v) } else { '<span class="muted">0</span>' } }
+    [void]$sb.Append("<!DOCTYPE html>`n<html lang=`"en`">`n<head>`n<meta charset=`"utf-8`">`n<meta http-equiv=`"Content-Security-Policy`" content=`"$csp`">`n<meta name=`"referrer`" content=`"no-referrer`">`n<meta name=`"viewport`" content=`"width=device-width, initial-scale=1`">`n<meta name=`"color-scheme`" content=`"light dark`">`n<meta name=`"robots`" content=`"noindex, nofollow`">`n<title>VSAT control matrix</title>`n<style>$css</style>`n</head>`n<body>`n")
+    [void]$sb.Append('<header class="app-header"><div class="brand"><svg class="brand-mark" viewBox="0 0 24 28" width="24" height="28" aria-hidden="true" focusable="false"><path d="M12 1 L22 5 V13 C22 20 17.5 24.8 12 27 C6.5 24.8 2 20 2 13 V5 Z" fill="currentColor"/><path d="M7.5 13.5 L10.8 16.8 L16.8 10.2" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="wordmark">VSAT</span><span class="brand-sub">Control matrix</span></div>')
+    [void]$sb.Append("<dl class=`"run-meta`"><div><dt>Version</dt><dd id=`"meta-version`">VSAT $(& $e $script:VsatVersion)</dd></div><div><dt>Generated</dt><dd>$(& $e (([string]$Results.generatedUtc) -replace '^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}).*$', '$1 $2 UTC'))</dd></div><div><dt>Run</dt><dd class=`"mono`">$(& $e $Results.run.id)</dd></div>")
+    if ($Receipt) { [void]$sb.Append("<div><dt>Receipt</dt><dd class=`"mono`">$(& $e $Receipt)</dd></div>") }
+    [void]$sb.Append('</dl><div class="header-actions"><p class="sensitive-note" role="note">Sensitive data</p></div></header>' + "`n<main id=`"main`">`n")
+    [void]$sb.Append("<div class=`"page-head`"><div><h1>Control matrix</h1><p>$(& $e $Results.status.label). One row per framework control with at least one VSAT rule mapped to it.</p></div></div>`n")
+    [void]$sb.Append("<div class=`"notice notice-info`" role=`"note`"><strong>How to read this</strong>$(& $e (Get-VsatProp $cmp 'note' '')) A control is satisfied only when every mapped check passed or was signed off; UNKNOWN or ERROR makes it not assessed. Mapping rows marked unverified are proposals for a reviewer, not certification.</div>`n")
+    [void]$sb.Append('<section class="card section"><h2>Frameworks</h2><div class="table-wrap"><table><thead><tr><th>Framework</th><th>Edition</th><th class="num" title="Mappings with reviewer, date, edition and source reference">Verified</th><th class="num" title="Proposed or derived mappings">Unverified</th><th>Controls, verified mappings</th><th>Controls, unverified mappings</th></tr></thead><tbody>')
+    $summ = {
+        param($counts)
+        $parts = @(foreach ($s in $script:VsatMatrixStates) { if ([int]$counts[$s]) { "<span class=`"nowrap`">$(& $st $s) $([int]$counts[$s])</span>" } })
+        if ($parts.Count) { $parts -join ' ' } else { '<span class="muted">none</span>' }
+    }
+    foreach ($fw in @(Get-VsatProp $cmp 'frameworks' @())) {
+        $name = if ($fw.importRequired) { "$(& $e $fw.name) <span class=`"cm-import`">Import required</span>" } else { & $e $fw.name }
+        [void]$sb.Append("<tr><td><a href=`"#fw-$(& $e $fw.id)`">$name</a></td><td>$(& $e $fw.edition)</td><td class=`"num`">$(& $e $fw.verifiedMappings)</td><td class=`"num`">$(& $e $fw.unverifiedMappings)</td><td>$(& $summ $fw.states.verified)</td><td>$(& $summ $fw.states.unverified)</td></tr>")
+    }
+    [void]$sb.Append("</tbody></table></div></section>`n")
+    foreach ($fw in @(Get-VsatProp $cmp 'frameworks' @())) {
+        [void]$sb.Append("<section class=`"card section cm-matrix`" id=`"fw-$(& $e $fw.id)`"><div class=`"card-head`"><h2>$(& $e $fw.name)</h2><span class=`"muted small`">$(& $e $fw.edition) &middot; $(& $e $fw.publisher)</span></div>")
+        if ($fw.note) { [void]$sb.Append("<p class=`"small muted`">$(& $e $fw.note)</p>") }
+        if ($fw.source) { [void]$sb.Append("<p class=`"small muted`">Source: <span class=`"mono`">$(& $e $fw.source.package)</span>, SHA-256 <span class=`"mono break`">$(& $e $fw.source.sha256)</span></p>") }
+        if ($fw.importRequired) {
+            [void]$sb.Append("<div class=`"notice notice-warn`" role=`"note`"><strong>Import required</strong>VSAT ships no mappings for this framework. See docs/compliance-mapping.md.</div></section>`n")
+            continue
+        }
+        [void]$sb.Append('<div class="table-wrap"><table><thead><tr><th>Control</th><th>State</th><th>Mapping</th><th>VSAT rules</th><th class="num">Assets</th><th class="num">Pass</th><th class="num">Fail</th><th class="num">Excepted</th><th class="num">Manual / signed</th><th class="num">Unknown</th><th class="num">N/A</th></tr></thead><tbody>')
+        foreach ($c in @($fw.controls)) {
+            $map = if ($c.mappingStatus -eq 'verified') { '<span class="verified">verified</span>' } else { "<span class=`"unverified`">$(& $e (@($c.mappingStatuses) -join ', '))</span>" }
+            [void]$sb.Append("<tr><td class=`"cm-ctl`"><span class=`"mono`">$(& $e $c.control)</span><span class=`"sub`">$(& $e $c.paraphrase)</span></td><td>$(& $st $c.state)</td><td>$map</td><td class=`"small`"><details class=`"cm-rules`"><summary>$(@($c.rules).Count) rule$(if (@($c.rules).Count -ne 1) { 's' })</summary><span class=`"mono break`">$(& $e (@($c.rules) -join ', '))</span></details></td><td class=`"num`">$(& $e $c.assets)</td><td class=`"num`">$(& $n $c.counts.PASS)</td><td class=`"num`">$(& $n $c.counts.FAIL)</td><td class=`"num`">$(& $n $c.counts.EXCEPTED)</td><td class=`"num`">$(& $n $c.counts.MANUAL) / $([int]$c.counts.SIGNED_OFF)</td><td class=`"num`">$(& $n ([int]$c.counts.UNKNOWN + [int]$c.counts.ERROR))</td><td class=`"num`">$(& $n $c.counts.NOT_APPLICABLE)</td></tr>")
+        }
+        [void]$sb.Append("</tbody></table></div></section>`n")
+    }
+    $reg = {
+        param([string]$Title, [object[]]$Rows, [string[]]$Cols, [string[]]$Labels, [string]$Empty)
+        [void]$sb.Append("<section class=`"card section`"><h2>$(& $e $Title) ($(@($Rows).Count))</h2>")
+        if (-not @($Rows).Count) { [void]$sb.Append("<p class=`"muted`">$(& $e $Empty)</p></section>`n"); return }
+        [void]$sb.Append('<div class="table-wrap"><table><thead><tr>' + (($Labels | ForEach-Object { "<th>$(& $e $_)</th>" }) -join '') + '</tr></thead><tbody>')
+        foreach ($r in $Rows) { [void]$sb.Append('<tr>' + (($Cols | ForEach-Object { $v = $r[$_]; if ($v -is [array]) { $v = $v -join ', ' }; "<td class=`"break`">$(& $e $v)</td>" }) -join '') + '</tr>') }
+        [void]$sb.Append("</tbody></table></div></section>`n")
+    }
+    & $reg 'Sign-offs' @(Get-VsatProp $cmp 'signoffs' @()) @('state', 'ruleId', 'assetName', 'reviewer', 'decision', 'evidenceRef', 'dateUtc', 'expires', 'flags') @('State', 'Rule', 'Asset', 'Reviewer', 'Decision', 'Evidence', 'Date', 'Expires', 'Flags') 'No sign-offs in the scope file (scope key signoffs).'
+    & $reg 'Exceptions' @(Get-VsatProp $cmp 'exceptions' @()) @('ruleId', 'asset', 'owner', 'approver', 'compensatingControl', 'ticket', 'expires', 'findings', 'flags') @('Rule', 'Asset', 'Owner', 'Approver', 'Compensating control', 'Ticket', 'Expires', 'Findings', 'Flags') 'No exceptions in the scope file (scope key exceptions).'
+    [void]$sb.Append("</main>`n</body>`n</html>`n")
+    return $sb.ToString()
+}
+#endregion Audit pack
 
 # ---- src/90-Server.ps1 ----
 #region Local UI server
@@ -8438,12 +8834,14 @@ function Write-VsatSummary {
 
 function Complete-VsatRun {
     # Shared tail for CLI, replay and demo: analysis, outputs, summary.
-    param($Evidence, [string]$ProfileName, [string]$OutputDir, $BaselineEvidence, [switch]$Redact, $ReceiptCheck)
+    param($Evidence, [string]$ProfileName, [string]$OutputDir, $BaselineEvidence, [switch]$Redact, $ReceiptCheck, [switch]$AuditPack)
     $results = Invoke-VsatAnalysisPipeline -Evidence $Evidence -ProfileName $ProfileName -BaselineEvidence $BaselineEvidence
     if ($ReceiptCheck) { $results.receiptVerification = $ReceiptCheck }
     Update-VsatProgress -Phase 'writing' -Message 'Writing report and evidence package'
     $script:VsatLastReceipt = $null
     $files = Write-VsatOutputs -Evidence $Evidence -Results $results -OutputDir $OutputDir -Redact:$Redact
+    # The audit pack copies the finished package and repeats its receipt, so it is written last.
+    if ($AuditPack) { $files = @($files) + @(Write-VsatAuditPack -Results $results -OutputDir $OutputDir) }
     return @{ results = $results; files = $files; receipt = $script:VsatLastReceipt }
 }
 
@@ -8528,6 +8926,7 @@ function Invoke-VsatMain {
     }
 
     if ($A.Receipt -and -not $A.Replay) { throw 'The -Receipt parameter verifies a package and requires -Replay <assessment.vsat.zip>.' }
+    if ($A.AuditPack -and $A.CollectOnly -and -not $A.Replay) { Write-VsatLog -Level warn -Source 'audit-pack' -Message '-AuditPack has no effect with -CollectOnly (no findings); replay the package with -AuditPack' }
     $engagement = if ($A.EngagementStart) { Resolve-VsatEngagementStart -Value $A.EngagementStart -RunStartUtc (Get-VsatUtcNow) } else { $null }
 
     $outDir = Resolve-VsatOutputDir $A.OutputPath
@@ -8559,7 +8958,7 @@ function Invoke-VsatMain {
         # Re-applies the operator's current scope.json overrides onto replayed evidence (see
         # Merge-VsatScopeOverrides in 20-Model.ps1).
         if ($scope) { Merge-VsatScopeOverrides -Scope $scope -EvidenceScope $ev.scope }
-        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact -ReceiptCheck $receiptCheck
+        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact -ReceiptCheck $receiptCheck -AuditPack:([bool]$A.AuditPack)
         Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files -Receipt $r.receipt
         if (-not $A.Cli -and -not $A.NoBrowser) { Open-VsatBrowser (Join-Path $outDir 'report.html') }
         return $r.results.status.exitCode
@@ -8574,7 +8973,7 @@ function Invoke-VsatMain {
             Write-VsatCollectSummary -Evidence $ev -OutputDir $outDir -Files $c.files -Receipt $c.receipt
             return 0
         }
-        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact
+        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact -AuditPack:([bool]$A.AuditPack)
         Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files -Receipt $r.receipt
         return $r.results.status.exitCode
     }
@@ -8598,7 +8997,7 @@ function Invoke-VsatMain {
             Write-VsatCollectSummary -Evidence $ev -OutputDir $outDir -Files $c.files -Receipt $c.receipt
             return (Get-VsatCollectOnlyExitCode -Evidence $ev)
         }
-        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact
+        $r = Complete-VsatRun -Evidence $ev -ProfileName $profileName -OutputDir $outDir -BaselineEvidence $baseline -Redact:$A.Redact -AuditPack:([bool]$A.AuditPack)
         Write-VsatSummary -Results $r.results -OutputDir $outDir -Files $r.files -Receipt $r.receipt
         return $r.results.status.exitCode
     }
@@ -8735,7 +9134,7 @@ function Invoke-VsatUi {
                             Write-VsatCollectSummary -Evidence $ev -OutputDir $OutputDir -Files $c.files -Receipt $c.receipt
                             break
                         }
-                        $r = Complete-VsatRun -Evidence $ev -ProfileName $cmd.profile -OutputDir $OutputDir -BaselineEvidence $Baseline -Redact:$A.Redact
+                        $r = Complete-VsatRun -Evidence $ev -ProfileName $cmd.profile -OutputDir $OutputDir -BaselineEvidence $Baseline -Redact:$A.Redact -AuditPack:([bool]$A.AuditPack)
                         $state.reportHtml = [System.IO.File]::ReadAllText((Join-Path $OutputDir 'report.html'))
                         $state.result = @{ status = $r.results.status; summary = $r.results.summary; outputDir = $OutputDir; runId = [string]$r.results.run.id; reportUrl = '/report'; files = @($r.files); receipt = $r.receipt; blastRadius = $r.results.analysis.blastRadius; workPackageCatalog = @($r.results.analysis.workPackageCatalog); workPackages = @($r.results.analysis.workPackages | ForEach-Object { [ordered]@{ id = $_.id; title = $_.title } }); ransomware = (Get-VsatRansomwareSummary $r.results.analysis.ransomware) }
                         $state.phase = $(if ($r.results.status.overall -eq 'canceled') { 'canceled' } else { 'done' })
@@ -11620,6 +12019,841 @@ $script:VsatEmbedded = [ordered]@{
   ]
 }
 '@
+    'data/frameworks/catalogs.json' = @'
+{
+  "notes": "Generated by build/New-CrosswalkSeed.ps1. Do not edit by hand. Control IDs are public identifiers; paraphrases are VSAT-written. No standards text.",
+  "frameworks": [
+    {"id":"nist-800-53r5","name":"NIST SP 800-53 Rev. 5","edition":"Revision 5","publisher":"NIST","license":"public-domain","url":"https://csrc.nist.gov/pubs/sp/800/53/r5/upd1/final","note":"Rows are proposed by VSAT rule category (build/New-CrosswalkSeed.ps1); a reviewer confirms them before they count as verified.","controls":[{"id":"AC-2","paraphrase":"Manage system accounts through their whole life cycle."},{"id":"AC-3","paraphrase":"Enforce approved authorizations for access to resources."},{"id":"AC-4","paraphrase":"Control how information flows within and between systems."},{"id":"AC-5","paraphrase":"Separate duties so no single person holds conflicting privileges."},{"id":"AC-6","paraphrase":"Grant only the privileges each user or process needs."},{"id":"AC-7","paraphrase":"Limit consecutive failed logons and lock or delay afterwards."},{"id":"AC-10","paraphrase":"Limit concurrent sessions per account or console."},{"id":"AC-11","paraphrase":"Lock idle sessions after a period of inactivity."},{"id":"AC-12","paraphrase":"End sessions automatically after defined conditions."},{"id":"AC-17","paraphrase":"Authorize and protect remote access to systems."},{"id":"AU-4","paraphrase":"Provide enough storage for audit logs."},{"id":"AU-6","paraphrase":"Review and analyze audit records for suspicious activity."},{"id":"AU-8","paraphrase":"Use synchronized, reliable time stamps in audit records."},{"id":"AU-9","paraphrase":"Protect audit information and tools from unauthorized change."},{"id":"AU-11","paraphrase":"Retain audit records long enough for investigations."},{"id":"AU-12","paraphrase":"Generate audit records for defined events."},{"id":"CM-6","paraphrase":"Set and enforce secure configuration settings."},{"id":"CM-7","paraphrase":"Provide only essential functions, ports, protocols and services."},{"id":"CM-8","paraphrase":"Keep an accurate inventory of system components."},{"id":"CP-9","paraphrase":"Back up system and user data and protect the backups."},{"id":"CP-10","paraphrase":"Recover and reconstitute the system to a known state."},{"id":"IA-2","paraphrase":"Uniquely identify and authenticate organizational users."},{"id":"IA-3","paraphrase":"Identify and authenticate devices before connecting them."},{"id":"IA-5","paraphrase":"Manage authenticators such as passwords, keys and certificates."},{"id":"RA-5","paraphrase":"Scan for and remediate known vulnerabilities."},{"id":"SA-22","paraphrase":"Replace or justify components no longer vendor supported."},{"id":"SC-4","paraphrase":"Prevent information leaking through shared system resources."},{"id":"SC-6","paraphrase":"Protect resource availability through allocation and priority."},{"id":"SC-7","paraphrase":"Monitor and control communications at system boundaries."},{"id":"SC-8","paraphrase":"Protect confidentiality and integrity of transmitted information."},{"id":"SC-10","paraphrase":"Terminate network connections after inactivity."},{"id":"SC-12","paraphrase":"Establish and manage cryptographic keys."},{"id":"SC-17","paraphrase":"Issue and manage public key certificates properly."},{"id":"SC-28","paraphrase":"Protect information at rest."},{"id":"SC-32","paraphrase":"Partition the system into separate physical or logical domains."},{"id":"SC-39","paraphrase":"Keep a separate execution domain for each process."},{"id":"SI-2","paraphrase":"Identify, report and correct system flaws promptly."},{"id":"SI-4","paraphrase":"Monitor the system to detect attacks and anomalies."},{"id":"SI-7","paraphrase":"Detect unauthorized changes to software, firmware and information."},{"id":"SI-12","paraphrase":"Manage and retain information according to requirements."}]},
+    {"id":"iec-62443-3-3","name":"IEC 62443-3-3 system requirements","edition":"IEC 62443-3-3:2013","publisher":"IEC / ISA","license":"copyrighted-ids-only","url":"https://www.isa.org/standards-and-publications/isa-standards/isa-iec-62443-series-of-standards","note":"SR identifiers with VSAT-written paraphrases only; no IEC text. Rows are proposed by rule category until an OT reviewer confirms them.","controls":[{"id":"SR 1.1","paraphrase":"Identify and authenticate every human user."},{"id":"SR 1.2","paraphrase":"Identify and authenticate software processes and devices."},{"id":"SR 1.3","paraphrase":"Manage accounts: add, change, disable and remove."},{"id":"SR 1.5","paraphrase":"Manage authenticators such as passwords and keys."},{"id":"SR 1.7","paraphrase":"Enforce strong password-based authentication."},{"id":"SR 1.8","paraphrase":"Operate public key infrastructure certificates correctly."},{"id":"SR 1.11","paraphrase":"Limit unsuccessful login attempts."},{"id":"SR 1.13","paraphrase":"Control access arriving over untrusted networks."},{"id":"SR 2.1","paraphrase":"Enforce authorization for every user action."},{"id":"SR 2.5","paraphrase":"Lock sessions after inactivity."},{"id":"SR 2.6","paraphrase":"Terminate remote sessions automatically."},{"id":"SR 2.7","paraphrase":"Limit concurrent sessions."},{"id":"SR 2.8","paraphrase":"Record security-relevant events in audit records."},{"id":"SR 2.9","paraphrase":"Provide sufficient audit storage capacity."},{"id":"SR 2.11","paraphrase":"Time-stamp audit records from a synchronized source."},{"id":"SR 3.1","paraphrase":"Protect the integrity of transmitted information."},{"id":"SR 3.4","paraphrase":"Detect unauthorized changes to software and information."},{"id":"SR 3.9","paraphrase":"Protect audit information from unauthorized access."},{"id":"SR 4.1","paraphrase":"Protect confidentiality of information at rest and in transit."},{"id":"SR 4.3","paraphrase":"Use recognized cryptography and manage keys."},{"id":"SR 5.1","paraphrase":"Segment control system networks from other networks."},{"id":"SR 5.2","paraphrase":"Monitor and control traffic at zone boundaries."},{"id":"SR 5.4","paraphrase":"Partition data and applications by criticality."},{"id":"SR 6.1","paraphrase":"Give authorized people read access to audit logs."},{"id":"SR 6.2","paraphrase":"Monitor the control system continuously for security events."},{"id":"SR 7.1","paraphrase":"Keep operating during denial-of-service conditions."},{"id":"SR 7.2","paraphrase":"Manage resources to prevent exhaustion."},{"id":"SR 7.3","paraphrase":"Back up control system information."},{"id":"SR 7.4","paraphrase":"Recover and reconstitute to a known secure state."},{"id":"SR 7.6","paraphrase":"Configure network and security settings to a baseline."},{"id":"SR 7.7","paraphrase":"Disable unnecessary functions, ports, protocols and services."},{"id":"SR 7.8","paraphrase":"Maintain an inventory of control system components."}]},
+    {"id":"mitre-attack-mitigations","name":"MITRE ATT&CK Mitigations","edition":"Enterprise ATT&CK v19.2; ATLAS 2026.09","publisher":"The MITRE Corporation","license":"copyrighted-ids-only","url":"https://attack.mitre.org/mitigations/enterprise/","note":"From each rule's attack.mitigation field, checked against the pinned ATT&CK catalog (data/attack). Names shown come from that catalog.","controls":[]},
+    {"id":"cis-benchmarks","name":"CIS Benchmarks (bring your license)","edition":"none imported","publisher":"Center for Internet Security","license":"licensed-ids-only","url":"https://www.cisecurity.org/cis-benchmarks","importRequired":true,"note":"VSAT ships no CIS mappings. A licensed reviewer imports them with build/Import-CisMapping.ps1 (docs/compliance-mapping.md).","controls":[]},
+    {"id":"disa-stig-esxi-8","name":"DISA VMware vSphere 8.0 ESXi STIG","edition":"V2R4 (01 Jul 2026)","publisher":"DISA","license":"public-domain","url":"https://public.cyber.mil/stigs/downloads/","source":{"package":"U_VMW_vSphere_8-0_Y26M07_STIG.zip","sha256":"4009353b08bdaaffc38ba5ce8377ea364908c2ad93755e0c4bdbcd797c34f652","url":"https://dl.dod.cyber.mil/wp-content/uploads/stigs/zip/U_VMW_vSphere_8-0_Y26M07_STIG.zip","file":"U_VMW_vSphere_8-0-ESXi_STIG_V2R4_Manual-xccdf.xml","fileSha256":"a3a47c1b157b039496d75c44657f30451c84197a94b51ff3b9c0f237af21aa5e"},"note":"Imported from the pinned DISA XCCDF by build/Import-StigXccdf.ps1; rows are proposed until reviewed.","controls":[]},
+    {"id":"disa-stig-vcenter-8","name":"DISA VMware vSphere 8.0 vCenter STIG","edition":"V2R4 (01 Jul 2026)","publisher":"DISA","license":"public-domain","url":"https://public.cyber.mil/stigs/downloads/","source":{"package":"U_VMW_vSphere_8-0_Y26M07_STIG.zip","sha256":"4009353b08bdaaffc38ba5ce8377ea364908c2ad93755e0c4bdbcd797c34f652","url":"https://dl.dod.cyber.mil/wp-content/uploads/stigs/zip/U_VMW_vSphere_8-0_Y26M07_STIG.zip","file":"U_VMW_vSphere_8-0_vCenter_STIG_V2R4_Manual-xccdf.xml","fileSha256":"96e1e7739af94feccb51e08ff6e33175793910cc98a4b6c928dce555821a907e"},"note":"Imported from the pinned DISA XCCDF by build/Import-StigXccdf.ps1; rows are proposed until reviewed.","controls":[]},
+    {"id":"disa-stig-vm-8","name":"DISA VMware vSphere 8.0 Virtual Machine STIG","edition":"V2R1 (01 Aug 2024)","publisher":"DISA","license":"public-domain","url":"https://public.cyber.mil/stigs/downloads/","source":{"package":"U_VMW_vSphere_8-0_Y26M07_STIG.zip","sha256":"4009353b08bdaaffc38ba5ce8377ea364908c2ad93755e0c4bdbcd797c34f652","url":"https://dl.dod.cyber.mil/wp-content/uploads/stigs/zip/U_VMW_vSphere_8-0_Y26M07_STIG.zip","file":"U_VMW_vSphere_8-0_Virtual_Machine_STIG_V2R1_Manual-xccdf.xml","fileSha256":"113bc8bfc52a78351dccb05c29deec161e7c59ce2343e217084dbcaa769675ed"},"note":"Imported from the pinned DISA XCCDF by build/Import-StigXccdf.ps1; rows are proposed until reviewed.","controls":[]}
+  ]
+}
+'@
+    'data/frameworks/crosswalk.json' = @'
+{
+  "notes": "Generated by build/New-CrosswalkSeed.ps1. Do not edit by hand. status: verified (reviewer, date, edition and source reference), proposed (not reviewed), derived (from a published mapping).",
+  "mappings": [
+    {"ruleId":"AI-ACS-OVERRIDE","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-GPU-SHARED-NO-MIG","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-GPU-SHARED-NO-MIG","framework":"nist-800-53r5","control":"SC-4","relation":"supports","status":"proposed","basis":"shared accelerator or IOMMU group can leak data between guests","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-IOMMU-GROUP-SHARED","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-IOMMU-GROUP-SHARED","framework":"nist-800-53r5","control":"SC-4","relation":"supports","status":"proposed","basis":"shared accelerator or IOMMU group can leak data between guests","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-IOMMU-IR","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-IOMMU-OFF","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-K8S-CP-EXPOSED","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-K8S-CP-EXPOSED","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SHARE-PLAINTEXT","framework":"nist-800-53r5","control":"SC-8","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SHARE-SMB","framework":"nist-800-53r5","control":"AC-3","relation":"supports","status":"proposed","basis":"model and dataset shares restrict who can read and write","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SHARE-SMB","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"model and dataset shares restrict who can read and write","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SHARE-SMB","framework":"nist-800-53r5","control":"SC-8","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SHARE-WORLD","framework":"nist-800-53r5","control":"AC-3","relation":"supports","status":"proposed","basis":"model and dataset shares restrict who can read and write","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SHARE-WORLD","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"model and dataset shares restrict who can read and write","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SRIOV-HOST","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SRIOV-HOST","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"CL-DRS","framework":"nist-800-53r5","control":"SC-6","relation":"supports","status":"proposed","basis":"capacity and path redundancy keep resources available","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"CL-HA","framework":"nist-800-53r5","control":"CP-10","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"CL-HA-ADMISSION","framework":"nist-800-53r5","control":"CP-10","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"CL-MULTIHOST","framework":"nist-800-53r5","control":"CP-10","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-ACCEPTANCE","framework":"nist-800-53r5","control":"SI-7","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-ACCOUNT-LOCK","framework":"nist-800-53r5","control":"AC-7","relation":"supports","status":"proposed","basis":"account lockout after failed logons","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-ACCOUNT-UNLOCK","framework":"nist-800-53r5","control":"AC-7","relation":"supports","status":"proposed","basis":"account lockout after failed logons","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-AD-ADMINS-AUTOADD","framework":"nist-800-53r5","control":"AC-2","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-AD-ADMINS-AUTOADD","framework":"nist-800-53r5","control":"AC-3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-AD-ADMINS-AUTOADD","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-AD-ADMINS-GROUP","framework":"nist-800-53r5","control":"AC-2","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-AD-ADMINS-GROUP","framework":"nist-800-53r5","control":"AC-3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-AD-ADMINS-GROUP","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-BPDU","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-BPDU","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-CERT-EXPIRY","framework":"nist-800-53r5","control":"IA-5","relation":"supports","status":"proposed","basis":"trusted, valid certificates","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-CERT-EXPIRY","framework":"nist-800-53r5","control":"SC-17","relation":"supports","status":"proposed","basis":"trusted, valid certificates","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-CERT-SELFSIGNED","framework":"nist-800-53r5","control":"IA-5","relation":"supports","status":"proposed","basis":"trusted, valid certificates","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-CERT-SELFSIGNED","framework":"nist-800-53r5","control":"SC-17","relation":"supports","status":"proposed","basis":"trusted, valid certificates","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-COREDUMP","framework":"nist-800-53r5","control":"AU-4","relation":"supports","status":"proposed","basis":"crash data collected centrally and protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-COREDUMP","framework":"nist-800-53r5","control":"AU-9","relation":"supports","status":"proposed","basis":"crash data collected centrally and protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-DCUI-ACCESS","framework":"nist-800-53r5","control":"AC-2","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-DCUI-ACCESS","framework":"nist-800-53r5","control":"AC-3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-DCUI-ACCESS","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-DCUI-TIMEOUT","framework":"nist-800-53r5","control":"AC-11","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-DCUI-TIMEOUT","framework":"nist-800-53r5","control":"AC-12","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-DVFILTER","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-EXEC-INSTALLED-ONLY","framework":"nist-800-53r5","control":"SI-7","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-FW-ALLIP","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-FW-ALLIP","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-FW-DEFAULT","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-FW-DEFAULT","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-HOSTCLIENT-TIMEOUT","framework":"nist-800-53r5","control":"AC-11","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-HOSTCLIENT-TIMEOUT","framework":"nist-800-53r5","control":"AC-12","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-HOSTCLIENT-TIMEOUT","framework":"nist-800-53r5","control":"SC-10","relation":"supports","status":"proposed","basis":"idle connections are closed","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-ISCSI-CHAP","framework":"nist-800-53r5","control":"IA-3","relation":"supports","status":"proposed","basis":"storage peers authenticate each other","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-ISCSI-CHAP","framework":"nist-800-53r5","control":"SC-8","relation":"supports","status":"proposed","basis":"storage peers authenticate each other","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LIFECYCLE","framework":"nist-800-53r5","control":"SA-22","relation":"supports","status":"proposed","basis":"vendor support ended: unsupported components","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LIFECYCLE","framework":"nist-800-53r5","control":"SI-2","relation":"supports","status":"proposed","basis":"vendor support ended: unsupported components","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LOCAL-ACCOUNTS","framework":"nist-800-53r5","control":"AC-2","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LOCAL-ACCOUNTS","framework":"nist-800-53r5","control":"AC-3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LOCAL-ACCOUNTS","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LOCKDOWN","framework":"nist-800-53r5","control":"AC-2","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LOCKDOWN","framework":"nist-800-53r5","control":"AC-3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LOCKDOWN","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LOG-LEVEL","framework":"nist-800-53r5","control":"AU-12","relation":"supports","status":"proposed","basis":"security events are logged","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-MOB","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-NTP","framework":"nist-800-53r5","control":"AU-8","relation":"supports","status":"proposed","basis":"synchronized time for audit records","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-PASS-HISTORY","framework":"nist-800-53r5","control":"IA-5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-PASS-QUALITY","framework":"nist-800-53r5","control":"IA-5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-PATCH-ADV","framework":"nist-800-53r5","control":"RA-5","relation":"supports","status":"proposed","basis":"known security advisories: flaw remediation and vulnerability monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-PATCH-ADV","framework":"nist-800-53r5","control":"SI-2","relation":"supports","status":"proposed","basis":"known security advisories: flaw remediation and vulnerability monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SALT","framework":"nist-800-53r5","control":"SC-4","relation":"supports","status":"proposed","basis":"guest/host or guest/guest information leak through shared resources","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SHELL-IDLE","framework":"nist-800-53r5","control":"AC-11","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SHELL-IDLE","framework":"nist-800-53r5","control":"AC-12","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SHELL-IDLE","framework":"nist-800-53r5","control":"SC-10","relation":"supports","status":"proposed","basis":"idle connections are closed","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SHELL-TIMEOUT","framework":"nist-800-53r5","control":"AC-11","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SHELL-TIMEOUT","framework":"nist-800-53r5","control":"AC-12","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SHELL-WARNING","framework":"nist-800-53r5","control":"SI-4","relation":"supports","status":"proposed","basis":"visibility of attacks and risky states: system monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SVC-CIM","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SVC-SHELL","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SVC-SLP","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SVC-SNMP","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SVC-SSH","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-PERSIST","framework":"nist-800-53r5","control":"AU-4","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-PERSIST","framework":"nist-800-53r5","control":"AU-6","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-PERSIST","framework":"nist-800-53r5","control":"AU-9","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-REMOTE","framework":"nist-800-53r5","control":"AU-4","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-REMOTE","framework":"nist-800-53r5","control":"AU-6","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-REMOTE","framework":"nist-800-53r5","control":"AU-9","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-TPM-ATTEST","framework":"nist-800-53r5","control":"SI-7","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-VMK-SEPARATION","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-VMK-SEPARATION","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-ADMINS","framework":"nist-800-53r5","control":"AC-2","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-ADMINS","framework":"nist-800-53r5","control":"AC-3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-ADMINS","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-ENHANCED-SESSION","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-FIREWALL","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-FIREWALL","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-MIGRATION-AUTH","framework":"nist-800-53r5","control":"IA-2","relation":"supports","status":"proposed","basis":"strong authentication for administrative or service access","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-MIGRATION-NETWORK","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-MIGRATION-NETWORK","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-OS-LIFECYCLE","framework":"nist-800-53r5","control":"SA-22","relation":"supports","status":"proposed","basis":"vendor support ended: unsupported components","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-OS-LIFECYCLE","framework":"nist-800-53r5","control":"SI-2","relation":"supports","status":"proposed","basis":"vendor support ended: unsupported components","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-OS-PATCH-AGE","framework":"nist-800-53r5","control":"SI-2","relation":"supports","status":"proposed","basis":"current updates: flaw remediation","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-RDP-NLA","framework":"nist-800-53r5","control":"IA-2","relation":"supports","status":"proposed","basis":"strong authentication for administrative or service access","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-REPLICA-AUTH","framework":"nist-800-53r5","control":"IA-2","relation":"supports","status":"proposed","basis":"strong authentication for administrative or service access","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-SECUREBOOT","framework":"nist-800-53r5","control":"SI-7","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-SERVER-CORE","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-SMB-SIGNING","framework":"nist-800-53r5","control":"SC-8","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-SMB1","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-SPOOLER","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-TPM","framework":"nist-800-53r5","control":"SI-7","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VBS-CREDGUARD","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VBS-HVCI","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VBS-HVCI","framework":"nist-800-53r5","control":"SI-7","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-CHECKPOINT-AGE","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"old snapshots hold stale data and weaken configuration control","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-CHECKPOINT-AGE","framework":"nist-800-53r5","control":"SI-12","relation":"supports","status":"proposed","basis":"old snapshots hold stale data and weaken configuration control","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-DDA","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-DHCPGUARD","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-DHCPGUARD","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-ENCRYPT-STATE","framework":"nist-800-53r5","control":"SC-8","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-GEN2","framework":"nist-800-53r5","control":"SI-7","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-GUESTSERVICE","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-MACSPOOF","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-MACSPOOF","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-MEDIA","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-PORTMIRROR","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"copies of traffic go only to authorized destinations","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-ROUTERGUARD","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-ROUTERGUARD","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-SECUREBOOT","framework":"nist-800-53r5","control":"SI-7","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-TRUNK","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-TRUNK","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-VTPM","framework":"nist-800-53r5","control":"SI-7","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VSWITCH-EXTENSIONS","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VSWITCH-MGMTOS","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VSWITCH-MGMTOS","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-FIREWALL","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-FIREWALL","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-LIBVIRT-GROUP","framework":"nist-800-53r5","control":"AC-2","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-LIBVIRT-GROUP","framework":"nist-800-53r5","control":"AC-3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-LIBVIRT-GROUP","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-LIBVIRT-TCP","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-NESTED","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-NET-OPEN","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-NET-OPEN","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-OS-LIFECYCLE","framework":"nist-800-53r5","control":"SA-22","relation":"supports","status":"proposed","basis":"vendor support ended: unsupported components","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-OS-LIFECYCLE","framework":"nist-800-53r5","control":"SI-2","relation":"supports","status":"proposed","basis":"vendor support ended: unsupported components","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-OS-PATCH-AGE","framework":"nist-800-53r5","control":"SI-2","relation":"supports","status":"proposed","basis":"current updates: flaw remediation","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-QEMU-USER","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"hypervisor process runs without root: least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-QEMU-USER","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor process runs without root: least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SECCOMP","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SECUREBOOT","framework":"nist-800-53r5","control":"SI-7","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SSH-PASSWORD","framework":"nist-800-53r5","control":"IA-2","relation":"supports","status":"proposed","basis":"strong authentication for administrative or service access","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SSH-PASSWORD","framework":"nist-800-53r5","control":"IA-5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SSH-ROOT","framework":"nist-800-53r5","control":"IA-2","relation":"supports","status":"proposed","basis":"strong authentication for administrative or service access","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SSH-ROOT","framework":"nist-800-53r5","control":"IA-5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SVIRT","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-CONSOLE-NET","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-GRAPHICS","framework":"nist-800-53r5","control":"AC-17","relation":"supports","status":"proposed","basis":"guest consoles are not open on the network","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-HOSTDEV","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-NWFILTER","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-NWFILTER","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-SECLABEL","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-SECUREBOOT","framework":"nist-800-53r5","control":"SI-7","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-SNAPSHOT-AGE","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"old snapshots hold stale data and weaken configuration control","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-SNAPSHOT-AGE","framework":"nist-800-53r5","control":"SI-12","relation":"supports","status":"proposed","basis":"old snapshots hold stale data and weaken configuration control","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-TPM","framework":"nist-800-53r5","control":"SI-7","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-USBREDIR","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VNC-TLS","framework":"nist-800-53r5","control":"AC-17","relation":"supports","status":"proposed","basis":"guest consoles are not open on the network","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VNC-TLS","framework":"nist-800-53r5","control":"SC-8","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-UPLINK-REDUNDANCY","framework":"nist-800-53r5","control":"SC-6","relation":"supports","status":"proposed","basis":"capacity and path redundancy keep resources available","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-DEFAULT-POLICY","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-DEFAULT-POLICY","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-FORGED","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-FORGED","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-HEALTHCHECK","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-MAC","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-MAC","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-MIRROR","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"copies of traffic go only to authorized destinations","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-NETFLOW","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"copies of traffic go only to authorized destinations","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-OVERRIDE-ALLOWED","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-OVERRIDE-ALLOWED","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-PORT-OVERRIDES","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-PORT-OVERRIDES","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-PROMISC","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-PROMISC","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VLAN-4095","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VLAN-4095","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VLAN-NATIVE","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VLAN-NATIVE","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VLAN-RESERVED","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VLAN-RESERVED","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VSS-DEFAULT-POLICY","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VSS-DEFAULT-POLICY","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VSS-FORGED","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VSS-FORGED","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VSS-MAC","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VSS-MAC","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VSS-PROMISC","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VSS-PROMISC","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-ANYANY","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-ANYANY","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-ANYSERVICE","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-ANYSERVICE","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-APPLIEDTO","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-APPLIEDTO","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DEFAULT","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DEFAULT","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DEFAULT-LOG","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DEFAULT-LOG","framework":"nist-800-53r5","control":"AU-12","relation":"supports","status":"proposed","basis":"security events are logged","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DEFAULT-LOG","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DEFAULT-LOG","framework":"nist-800-53r5","control":"SI-4","relation":"supports","status":"proposed","basis":"visibility of attacks and risky states: system monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DENY-LOG","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DENY-LOG","framework":"nist-800-53r5","control":"AU-12","relation":"supports","status":"proposed","basis":"security events are logged","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DENY-LOG","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DENY-LOG","framework":"nist-800-53r5","control":"SI-4","relation":"supports","status":"proposed","basis":"visibility of attacks and risky states: system monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DISABLED","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DISABLED","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-EMPTY-GROUP","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-EMPTY-GROUP","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-ENABLED","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-ENABLED","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-EXCLUDE","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-EXCLUDE","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-SHADOW","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-SHADOW","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-EFF-UNPROTECTED","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-EFF-UNPROTECTED","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-FEDERATION","framework":"nist-800-53r5","control":"CM-8","relation":"supports","status":"proposed","basis":"every management scope is known and assessed","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-GFW-DEFAULT","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-GFW-DEFAULT","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-IDS","framework":"nist-800-53r5","control":"SI-4","relation":"supports","status":"proposed","basis":"visibility of attacks and risky states: system monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-ADV","framework":"nist-800-53r5","control":"RA-5","relation":"supports","status":"proposed","basis":"known security advisories: flaw remediation and vulnerability monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-ADV","framework":"nist-800-53r5","control":"SI-2","relation":"supports","status":"proposed","basis":"known security advisories: flaw remediation and vulnerability monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-AUTH-LOCKOUT","framework":"nist-800-53r5","control":"AC-7","relation":"supports","status":"proposed","basis":"account lockout after failed logons","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-AUTH-LOCKOUT-PERIOD","framework":"nist-800-53r5","control":"AC-7","relation":"supports","status":"proposed","basis":"account lockout after failed logons","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-BACKUP","framework":"nist-800-53r5","control":"CP-9","relation":"supports","status":"proposed","basis":"backups exist and are protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-CERT-EXPIRY","framework":"nist-800-53r5","control":"IA-5","relation":"supports","status":"proposed","basis":"trusted, valid certificates","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-CERT-EXPIRY","framework":"nist-800-53r5","control":"SC-17","relation":"supports","status":"proposed","basis":"trusted, valid certificates","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-CLUSTER","framework":"nist-800-53r5","control":"CP-10","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-LIFECYCLE","framework":"nist-800-53r5","control":"SA-22","relation":"supports","status":"proposed","basis":"vendor support ended: unsupported components","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-LIFECYCLE","framework":"nist-800-53r5","control":"SI-2","relation":"supports","status":"proposed","basis":"vendor support ended: unsupported components","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-NTP","framework":"nist-800-53r5","control":"AU-8","relation":"supports","status":"proposed","basis":"synchronized time for audit records","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-PASSWORD","framework":"nist-800-53r5","control":"IA-5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-SYSLOG","framework":"nist-800-53r5","control":"AU-4","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-SYSLOG","framework":"nist-800-53r5","control":"AU-6","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-SYSLOG","framework":"nist-800-53r5","control":"AU-9","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-NAT-BYPASS","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-NAT-BYPASS","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-TN-STATE","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-TN-STATE","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-DMZ-BYPASS","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"IT to OT traffic passes a controlled zone boundary","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-DMZ-BYPASS","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"IT to OT traffic passes a controlled zone boundary","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-IT-ADMIN","framework":"nist-800-53r5","control":"AC-2","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-IT-ADMIN","framework":"nist-800-53r5","control":"AC-3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-IT-ADMIN","framework":"nist-800-53r5","control":"AC-5","relation":"supports","status":"proposed","basis":"one identity administers separate domains: separation of duties","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-IT-ADMIN","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-IT-PATH","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"IT to OT traffic passes a controlled zone boundary","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-IT-PATH","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"IT to OT traffic passes a controlled zone boundary","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-HOST","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-HOST","framework":"nist-800-53r5","control":"SC-32","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-HOST","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-MGMT","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-MGMT","framework":"nist-800-53r5","control":"SC-32","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-MGMT","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-VSWITCH","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-VSWITCH","framework":"nist-800-53r5","control":"SC-32","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-VSWITCH","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-COLOCATED","framework":"nist-800-53r5","control":"CP-10","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-COLOCATED","framework":"nist-800-53r5","control":"CP-9","relation":"supports","status":"proposed","basis":"backups exist and are protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-COLOCATED","framework":"nist-800-53r5","control":"SC-32","relation":"supports","status":"proposed","basis":"backups are isolated from the production attack surface","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-COLOCATED","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"backups are isolated from the production attack surface","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-REACHABLE","framework":"nist-800-53r5","control":"CP-9","relation":"supports","status":"proposed","basis":"backups exist and are protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-REACHABLE","framework":"nist-800-53r5","control":"SC-32","relation":"supports","status":"proposed","basis":"backups are isolated from the production attack surface","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-REACHABLE","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"backups are isolated from the production attack surface","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-SHARED-ADMIN","framework":"nist-800-53r5","control":"AC-2","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-SHARED-ADMIN","framework":"nist-800-53r5","control":"AC-3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-SHARED-ADMIN","framework":"nist-800-53r5","control":"AC-5","relation":"supports","status":"proposed","basis":"one identity administers separate domains: separation of duties","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-SHARED-ADMIN","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-SHARED-ADMIN","framework":"nist-800-53r5","control":"CP-10","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-SHARED-ADMIN","framework":"nist-800-53r5","control":"CP-9","relation":"supports","status":"proposed","basis":"backups exist and are protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-DATASTORE-ACCESSIBLE","framework":"nist-800-53r5","control":"CP-10","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-NFS-AUTH","framework":"nist-800-53r5","control":"IA-3","relation":"supports","status":"proposed","basis":"storage peers authenticate each other","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-NFS-AUTH","framework":"nist-800-53r5","control":"SC-8","relation":"supports","status":"proposed","basis":"storage peers authenticate each other","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-RECOVERY-EVIDENCE","framework":"nist-800-53r5","control":"CP-10","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-RECOVERY-EVIDENCE","framework":"nist-800-53r5","control":"CP-9","relation":"supports","status":"proposed","basis":"backups exist and are protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-SAN-SEGREGATION","framework":"nist-800-53r5","control":"AC-4","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-SAN-SEGREGATION","framework":"nist-800-53r5","control":"SC-7","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-VSAN-DIT","framework":"nist-800-53r5","control":"SC-8","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-VSAN-ENCRYPTION","framework":"nist-800-53r5","control":"SC-28","relation":"supports","status":"proposed","basis":"data at rest is encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-ADMIN-USERS","framework":"nist-800-53r5","control":"AC-2","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-ADMIN-USERS","framework":"nist-800-53r5","control":"AC-3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-ADMIN-USERS","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-APPLIANCE","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"appliance shell, SSH and firewall configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-APPLIANCE","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"appliance shell, SSH and firewall configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-APPLIANCE","framework":"nist-800-53r5","control":"CP-9","relation":"supports","status":"proposed","basis":"backups exist and are protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-EVENT-RETENTION","framework":"nist-800-53r5","control":"AU-11","relation":"supports","status":"proposed","basis":"log capacity and retention","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-EVENT-RETENTION","framework":"nist-800-53r5","control":"AU-4","relation":"supports","status":"proposed","basis":"log capacity and retention","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-KEY-PROVIDER","framework":"nist-800-53r5","control":"SC-12","relation":"supports","status":"proposed","basis":"encryption key provider is redundant and independent","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-LIFECYCLE","framework":"nist-800-53r5","control":"SA-22","relation":"supports","status":"proposed","basis":"vendor support ended: unsupported components","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-LIFECYCLE","framework":"nist-800-53r5","control":"SI-2","relation":"supports","status":"proposed","basis":"vendor support ended: unsupported components","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-PASSWORD-EXPIRY","framework":"nist-800-53r5","control":"IA-5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-PATCH-ADV","framework":"nist-800-53r5","control":"RA-5","relation":"supports","status":"proposed","basis":"known security advisories: flaw remediation and vulnerability monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-PATCH-ADV","framework":"nist-800-53r5","control":"SI-2","relation":"supports","status":"proposed","basis":"known security advisories: flaw remediation and vulnerability monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-PERMISSIONS-REVIEW","framework":"nist-800-53r5","control":"AC-2","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-PERMISSIONS-REVIEW","framework":"nist-800-53r5","control":"AC-3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-PERMISSIONS-REVIEW","framework":"nist-800-53r5","control":"AC-6","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-SSO-POLICY","framework":"nist-800-53r5","control":"AC-7","relation":"supports","status":"proposed","basis":"account lockout after failed logons","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-SSO-POLICY","framework":"nist-800-53r5","control":"IA-5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-3D","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-CDROM","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-CONSOLE-CONNECTIONS","framework":"nist-800-53r5","control":"AC-10","relation":"supports","status":"proposed","basis":"one console connection at a time: concurrent session control","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-COPY-DISABLE","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-COPY-DISABLE","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-COPY-DISABLE","framework":"nist-800-53r5","control":"SC-4","relation":"supports","status":"proposed","basis":"guest/host or guest/guest information leak through shared resources","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DEVICE-CONNECTABLE","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DEVICE-CONNECTABLE","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DISKSHRINK","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DISKSHRINK","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DISKWIPER","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DISKWIPER","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DND-DISABLE","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DND-DISABLE","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DND-DISABLE","framework":"nist-800-53r5","control":"SC-4","relation":"supports","status":"proposed","basis":"guest/host or guest/guest information leak through shared resources","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DVFILTER","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-ENCRYPTION","framework":"nist-800-53r5","control":"SC-28","relation":"supports","status":"proposed","basis":"data at rest is encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-FLOPPY","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-GUIOPTIONS","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-GUIOPTIONS","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-HOSTINFO","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-HOSTINFO","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-HOSTINFO","framework":"nist-800-53r5","control":"SC-4","relation":"supports","status":"proposed","basis":"guest/host or guest/guest information leak through shared resources","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-LOG-KEEPOLD","framework":"nist-800-53r5","control":"AU-11","relation":"supports","status":"proposed","basis":"log capacity and retention","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-LOG-KEEPOLD","framework":"nist-800-53r5","control":"AU-4","relation":"supports","status":"proposed","basis":"log capacity and retention","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-LOG-ROTATE","framework":"nist-800-53r5","control":"AU-11","relation":"supports","status":"proposed","basis":"log capacity and retention","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-LOG-ROTATE","framework":"nist-800-53r5","control":"AU-4","relation":"supports","status":"proposed","basis":"log capacity and retention","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-NONPERSISTENT","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-NONPERSISTENT","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-PARALLEL","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-PASSTHROUGH","framework":"nist-800-53r5","control":"SC-39","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-PASTE-DISABLE","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-PASTE-DISABLE","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-PASTE-DISABLE","framework":"nist-800-53r5","control":"SC-4","relation":"supports","status":"proposed","basis":"guest/host or guest/guest information leak through shared resources","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-SECUREBOOT","framework":"nist-800-53r5","control":"SI-7","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-SERIAL","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-SETINFO-LIMIT","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-SETINFO-LIMIT","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-SNAPSHOT-AGE","framework":"nist-800-53r5","control":"CM-6","relation":"supports","status":"proposed","basis":"old snapshots hold stale data and weaken configuration control","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-SNAPSHOT-AGE","framework":"nist-800-53r5","control":"SI-12","relation":"supports","status":"proposed","basis":"old snapshots hold stale data and weaken configuration control","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-TOOLS","framework":"nist-800-53r5","control":"SI-2","relation":"supports","status":"proposed","basis":"current updates: flaw remediation","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-USB","framework":"nist-800-53r5","control":"CM-7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-ACS-OVERRIDE","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-GPU-SHARED-NO-MIG","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-IOMMU-GROUP-SHARED","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-IOMMU-IR","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-IOMMU-OFF","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-K8S-CP-EXPOSED","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SHARE-PLAINTEXT","framework":"iec-62443-3-3","control":"SR 3.1","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SHARE-PLAINTEXT","framework":"iec-62443-3-3","control":"SR 4.1","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SHARE-SMB","framework":"iec-62443-3-3","control":"SR 2.1","relation":"supports","status":"proposed","basis":"model and dataset shares restrict who can read and write","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SHARE-SMB","framework":"iec-62443-3-3","control":"SR 3.1","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SHARE-SMB","framework":"iec-62443-3-3","control":"SR 4.1","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SHARE-WORLD","framework":"iec-62443-3-3","control":"SR 2.1","relation":"supports","status":"proposed","basis":"model and dataset shares restrict who can read and write","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-SRIOV-HOST","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"CL-DRS","framework":"iec-62443-3-3","control":"SR 7.1","relation":"supports","status":"proposed","basis":"capacity and path redundancy keep resources available","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"CL-DRS","framework":"iec-62443-3-3","control":"SR 7.2","relation":"supports","status":"proposed","basis":"capacity and path redundancy keep resources available","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"CL-HA","framework":"iec-62443-3-3","control":"SR 7.4","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"CL-HA-ADMISSION","framework":"iec-62443-3-3","control":"SR 7.4","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"CL-MULTIHOST","framework":"iec-62443-3-3","control":"SR 7.4","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-ACCEPTANCE","framework":"iec-62443-3-3","control":"SR 3.4","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-ACCOUNT-LOCK","framework":"iec-62443-3-3","control":"SR 1.11","relation":"supports","status":"proposed","basis":"account lockout after failed logons","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-ACCOUNT-UNLOCK","framework":"iec-62443-3-3","control":"SR 1.11","relation":"supports","status":"proposed","basis":"account lockout after failed logons","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-AD-ADMINS-AUTOADD","framework":"iec-62443-3-3","control":"SR 1.3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-AD-ADMINS-AUTOADD","framework":"iec-62443-3-3","control":"SR 2.1","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-AD-ADMINS-GROUP","framework":"iec-62443-3-3","control":"SR 1.3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-AD-ADMINS-GROUP","framework":"iec-62443-3-3","control":"SR 2.1","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-BPDU","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-CERT-EXPIRY","framework":"iec-62443-3-3","control":"SR 1.8","relation":"supports","status":"proposed","basis":"trusted, valid certificates","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-CERT-SELFSIGNED","framework":"iec-62443-3-3","control":"SR 1.8","relation":"supports","status":"proposed","basis":"trusted, valid certificates","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-COREDUMP","framework":"iec-62443-3-3","control":"SR 3.9","relation":"supports","status":"proposed","basis":"crash data collected centrally and protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-DCUI-ACCESS","framework":"iec-62443-3-3","control":"SR 1.3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-DCUI-ACCESS","framework":"iec-62443-3-3","control":"SR 2.1","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-DCUI-TIMEOUT","framework":"iec-62443-3-3","control":"SR 2.5","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-DCUI-TIMEOUT","framework":"iec-62443-3-3","control":"SR 2.6","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-DVFILTER","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-EXEC-INSTALLED-ONLY","framework":"iec-62443-3-3","control":"SR 3.4","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-FW-ALLIP","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-FW-ALLIP","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-FW-DEFAULT","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-FW-DEFAULT","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-HOSTCLIENT-TIMEOUT","framework":"iec-62443-3-3","control":"SR 2.5","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-HOSTCLIENT-TIMEOUT","framework":"iec-62443-3-3","control":"SR 2.6","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-ISCSI-CHAP","framework":"iec-62443-3-3","control":"SR 1.2","relation":"supports","status":"proposed","basis":"storage peers authenticate each other","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LOCAL-ACCOUNTS","framework":"iec-62443-3-3","control":"SR 1.3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LOCAL-ACCOUNTS","framework":"iec-62443-3-3","control":"SR 2.1","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LOCKDOWN","framework":"iec-62443-3-3","control":"SR 1.3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LOCKDOWN","framework":"iec-62443-3-3","control":"SR 2.1","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-LOG-LEVEL","framework":"iec-62443-3-3","control":"SR 2.8","relation":"supports","status":"proposed","basis":"security events are logged","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-MOB","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-NTP","framework":"iec-62443-3-3","control":"SR 2.11","relation":"supports","status":"proposed","basis":"synchronized time for audit records","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-PASS-HISTORY","framework":"iec-62443-3-3","control":"SR 1.5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-PASS-HISTORY","framework":"iec-62443-3-3","control":"SR 1.7","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-PASS-QUALITY","framework":"iec-62443-3-3","control":"SR 1.5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-PASS-QUALITY","framework":"iec-62443-3-3","control":"SR 1.7","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SHELL-IDLE","framework":"iec-62443-3-3","control":"SR 2.5","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SHELL-IDLE","framework":"iec-62443-3-3","control":"SR 2.6","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SHELL-TIMEOUT","framework":"iec-62443-3-3","control":"SR 2.5","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SHELL-TIMEOUT","framework":"iec-62443-3-3","control":"SR 2.6","relation":"supports","status":"proposed","basis":"idle sessions end automatically","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SHELL-WARNING","framework":"iec-62443-3-3","control":"SR 6.2","relation":"supports","status":"proposed","basis":"visibility of attacks and risky states: system monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SVC-CIM","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SVC-SHELL","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SVC-SLP","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SVC-SNMP","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SVC-SSH","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-PERSIST","framework":"iec-62443-3-3","control":"SR 2.8","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-PERSIST","framework":"iec-62443-3-3","control":"SR 2.9","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-PERSIST","framework":"iec-62443-3-3","control":"SR 3.9","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-PERSIST","framework":"iec-62443-3-3","control":"SR 6.1","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-REMOTE","framework":"iec-62443-3-3","control":"SR 2.8","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-REMOTE","framework":"iec-62443-3-3","control":"SR 2.9","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-REMOTE","framework":"iec-62443-3-3","control":"SR 3.9","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-SYSLOG-REMOTE","framework":"iec-62443-3-3","control":"SR 6.1","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-TPM-ATTEST","framework":"iec-62443-3-3","control":"SR 3.4","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ESXI-VMK-SEPARATION","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-ADMINS","framework":"iec-62443-3-3","control":"SR 1.3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-ADMINS","framework":"iec-62443-3-3","control":"SR 2.1","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-ENHANCED-SESSION","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-FIREWALL","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-FIREWALL","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-MIGRATION-AUTH","framework":"iec-62443-3-3","control":"SR 1.1","relation":"supports","status":"proposed","basis":"strong authentication for administrative or service access","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-MIGRATION-NETWORK","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-RDP-NLA","framework":"iec-62443-3-3","control":"SR 1.1","relation":"supports","status":"proposed","basis":"strong authentication for administrative or service access","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-REPLICA-AUTH","framework":"iec-62443-3-3","control":"SR 1.1","relation":"supports","status":"proposed","basis":"strong authentication for administrative or service access","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-SECUREBOOT","framework":"iec-62443-3-3","control":"SR 3.4","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-SERVER-CORE","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-SMB-SIGNING","framework":"iec-62443-3-3","control":"SR 3.1","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-SMB-SIGNING","framework":"iec-62443-3-3","control":"SR 4.1","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-SMB1","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-SPOOLER","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-TPM","framework":"iec-62443-3-3","control":"SR 3.4","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VBS-CREDGUARD","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VBS-HVCI","framework":"iec-62443-3-3","control":"SR 3.4","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VBS-HVCI","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-CHECKPOINT-AGE","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"old snapshots hold stale data and weaken configuration control","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-DDA","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-DHCPGUARD","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-ENCRYPT-STATE","framework":"iec-62443-3-3","control":"SR 3.1","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-ENCRYPT-STATE","framework":"iec-62443-3-3","control":"SR 4.1","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-GEN2","framework":"iec-62443-3-3","control":"SR 3.4","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-GUESTSERVICE","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-MACSPOOF","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-MEDIA","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-PORTMIRROR","framework":"iec-62443-3-3","control":"SR 4.1","relation":"supports","status":"proposed","basis":"copies of traffic go only to authorized destinations","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-ROUTERGUARD","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-SECUREBOOT","framework":"iec-62443-3-3","control":"SR 3.4","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-TRUNK","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VM-VTPM","framework":"iec-62443-3-3","control":"SR 3.4","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VSWITCH-EXTENSIONS","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"HV-VSWITCH-MGMTOS","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-FIREWALL","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-FIREWALL","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-LIBVIRT-GROUP","framework":"iec-62443-3-3","control":"SR 1.3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-LIBVIRT-GROUP","framework":"iec-62443-3-3","control":"SR 2.1","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-LIBVIRT-TCP","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-NESTED","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-NET-OPEN","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-QEMU-USER","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor process runs without root: least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SECCOMP","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SECUREBOOT","framework":"iec-62443-3-3","control":"SR 3.4","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SSH-PASSWORD","framework":"iec-62443-3-3","control":"SR 1.1","relation":"supports","status":"proposed","basis":"strong authentication for administrative or service access","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SSH-PASSWORD","framework":"iec-62443-3-3","control":"SR 1.5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SSH-PASSWORD","framework":"iec-62443-3-3","control":"SR 1.7","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SSH-ROOT","framework":"iec-62443-3-3","control":"SR 1.1","relation":"supports","status":"proposed","basis":"strong authentication for administrative or service access","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SSH-ROOT","framework":"iec-62443-3-3","control":"SR 1.5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SSH-ROOT","framework":"iec-62443-3-3","control":"SR 1.7","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-SVIRT","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-CONSOLE-NET","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-GRAPHICS","framework":"iec-62443-3-3","control":"SR 1.13","relation":"supports","status":"proposed","basis":"guest consoles are not open on the network","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-HOSTDEV","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-NWFILTER","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-SECLABEL","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-SECUREBOOT","framework":"iec-62443-3-3","control":"SR 3.4","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-SNAPSHOT-AGE","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"old snapshots hold stale data and weaken configuration control","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-TPM","framework":"iec-62443-3-3","control":"SR 3.4","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VM-USBREDIR","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VNC-TLS","framework":"iec-62443-3-3","control":"SR 1.13","relation":"supports","status":"proposed","basis":"guest consoles are not open on the network","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VNC-TLS","framework":"iec-62443-3-3","control":"SR 3.1","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"KVM-VNC-TLS","framework":"iec-62443-3-3","control":"SR 4.1","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-UPLINK-REDUNDANCY","framework":"iec-62443-3-3","control":"SR 7.1","relation":"supports","status":"proposed","basis":"capacity and path redundancy keep resources available","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-UPLINK-REDUNDANCY","framework":"iec-62443-3-3","control":"SR 7.2","relation":"supports","status":"proposed","basis":"capacity and path redundancy keep resources available","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-DEFAULT-POLICY","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-FORGED","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-HEALTHCHECK","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-MAC","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-MIRROR","framework":"iec-62443-3-3","control":"SR 4.1","relation":"supports","status":"proposed","basis":"copies of traffic go only to authorized destinations","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-NETFLOW","framework":"iec-62443-3-3","control":"SR 4.1","relation":"supports","status":"proposed","basis":"copies of traffic go only to authorized destinations","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-OVERRIDE-ALLOWED","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-PORT-OVERRIDES","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VDS-PROMISC","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VLAN-4095","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VLAN-NATIVE","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VLAN-RESERVED","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VSS-DEFAULT-POLICY","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VSS-FORGED","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VSS-MAC","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NET-VSS-PROMISC","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"layer-2 isolation between guests on a virtual switch","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-ANYANY","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-ANYANY","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-ANYSERVICE","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-ANYSERVICE","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-APPLIEDTO","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-APPLIEDTO","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DEFAULT","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DEFAULT","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DEFAULT-LOG","framework":"iec-62443-3-3","control":"SR 2.8","relation":"supports","status":"proposed","basis":"security events are logged","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DEFAULT-LOG","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DEFAULT-LOG","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DEFAULT-LOG","framework":"iec-62443-3-3","control":"SR 6.2","relation":"supports","status":"proposed","basis":"visibility of attacks and risky states: system monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DENY-LOG","framework":"iec-62443-3-3","control":"SR 2.8","relation":"supports","status":"proposed","basis":"security events are logged","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DENY-LOG","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DENY-LOG","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DENY-LOG","framework":"iec-62443-3-3","control":"SR 6.2","relation":"supports","status":"proposed","basis":"visibility of attacks and risky states: system monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DISABLED","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-DISABLED","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-EMPTY-GROUP","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-EMPTY-GROUP","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-ENABLED","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-ENABLED","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-EXCLUDE","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-EXCLUDE","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-SHADOW","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-DFW-SHADOW","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-EFF-UNPROTECTED","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-EFF-UNPROTECTED","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-FEDERATION","framework":"iec-62443-3-3","control":"SR 7.8","relation":"supports","status":"proposed","basis":"every management scope is known and assessed","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-GFW-DEFAULT","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-GFW-DEFAULT","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-IDS","framework":"iec-62443-3-3","control":"SR 6.2","relation":"supports","status":"proposed","basis":"visibility of attacks and risky states: system monitoring","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-AUTH-LOCKOUT","framework":"iec-62443-3-3","control":"SR 1.11","relation":"supports","status":"proposed","basis":"account lockout after failed logons","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-AUTH-LOCKOUT-PERIOD","framework":"iec-62443-3-3","control":"SR 1.11","relation":"supports","status":"proposed","basis":"account lockout after failed logons","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-BACKUP","framework":"iec-62443-3-3","control":"SR 7.3","relation":"supports","status":"proposed","basis":"backups exist and are protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-CERT-EXPIRY","framework":"iec-62443-3-3","control":"SR 1.8","relation":"supports","status":"proposed","basis":"trusted, valid certificates","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-CLUSTER","framework":"iec-62443-3-3","control":"SR 7.4","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-NTP","framework":"iec-62443-3-3","control":"SR 2.11","relation":"supports","status":"proposed","basis":"synchronized time for audit records","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-PASSWORD","framework":"iec-62443-3-3","control":"SR 1.5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-PASSWORD","framework":"iec-62443-3-3","control":"SR 1.7","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-SYSLOG","framework":"iec-62443-3-3","control":"SR 2.8","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-SYSLOG","framework":"iec-62443-3-3","control":"SR 2.9","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-SYSLOG","framework":"iec-62443-3-3","control":"SR 3.9","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-MGR-SYSLOG","framework":"iec-62443-3-3","control":"SR 6.1","relation":"supports","status":"proposed","basis":"logs kept off-host and persistent: audit storage and protection","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-NAT-BYPASS","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-NAT-BYPASS","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-TN-STATE","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"NSX-TN-STATE","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"firewall policy at host, segment or gateway boundaries","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-DMZ-BYPASS","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"IT to OT traffic passes a controlled zone boundary","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-DMZ-BYPASS","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"IT to OT traffic passes a controlled zone boundary","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-IT-ADMIN","framework":"iec-62443-3-3","control":"SR 1.3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-IT-ADMIN","framework":"iec-62443-3-3","control":"SR 2.1","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-IT-PATH","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"IT to OT traffic passes a controlled zone boundary","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-IT-PATH","framework":"iec-62443-3-3","control":"SR 5.2","relation":"supports","status":"proposed","basis":"IT to OT traffic passes a controlled zone boundary","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-HOST","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-HOST","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-MGMT","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-MGMT","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-VSWITCH","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"OT-SHARED-VSWITCH","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"OT and IT workloads do not share virtualization infrastructure","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-COLOCATED","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"backups are isolated from the production attack surface","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-COLOCATED","framework":"iec-62443-3-3","control":"SR 7.3","relation":"supports","status":"proposed","basis":"backups exist and are protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-COLOCATED","framework":"iec-62443-3-3","control":"SR 7.4","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-REACHABLE","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"backups are isolated from the production attack surface","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-REACHABLE","framework":"iec-62443-3-3","control":"SR 7.3","relation":"supports","status":"proposed","basis":"backups exist and are protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-SHARED-ADMIN","framework":"iec-62443-3-3","control":"SR 1.3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-SHARED-ADMIN","framework":"iec-62443-3-3","control":"SR 2.1","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-SHARED-ADMIN","framework":"iec-62443-3-3","control":"SR 7.3","relation":"supports","status":"proposed","basis":"backups exist and are protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"RW-BACKUP-SHARED-ADMIN","framework":"iec-62443-3-3","control":"SR 7.4","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-DATASTORE-ACCESSIBLE","framework":"iec-62443-3-3","control":"SR 7.4","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-NFS-AUTH","framework":"iec-62443-3-3","control":"SR 1.2","relation":"supports","status":"proposed","basis":"storage peers authenticate each other","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-RECOVERY-EVIDENCE","framework":"iec-62443-3-3","control":"SR 7.3","relation":"supports","status":"proposed","basis":"backups exist and are protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-RECOVERY-EVIDENCE","framework":"iec-62443-3-3","control":"SR 7.4","relation":"supports","status":"proposed","basis":"the service can be recovered after a failure or attack","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-SAN-SEGREGATION","framework":"iec-62443-3-3","control":"SR 5.1","relation":"supports","status":"proposed","basis":"network segmentation of management, storage and workload traffic","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-VSAN-DIT","framework":"iec-62443-3-3","control":"SR 3.1","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-VSAN-DIT","framework":"iec-62443-3-3","control":"SR 4.1","relation":"supports","status":"proposed","basis":"data in transit is signed or encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"ST-VSAN-ENCRYPTION","framework":"iec-62443-3-3","control":"SR 4.1","relation":"supports","status":"proposed","basis":"data at rest is encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-ADMIN-USERS","framework":"iec-62443-3-3","control":"SR 1.3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-ADMIN-USERS","framework":"iec-62443-3-3","control":"SR 2.1","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-APPLIANCE","framework":"iec-62443-3-3","control":"SR 7.3","relation":"supports","status":"proposed","basis":"backups exist and are protected","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-APPLIANCE","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"appliance shell, SSH and firewall configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-APPLIANCE","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"appliance shell, SSH and firewall configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-EVENT-RETENTION","framework":"iec-62443-3-3","control":"SR 2.9","relation":"supports","status":"proposed","basis":"log capacity and retention","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-KEY-PROVIDER","framework":"iec-62443-3-3","control":"SR 4.3","relation":"supports","status":"proposed","basis":"encryption key provider is redundant and independent","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-PASSWORD-EXPIRY","framework":"iec-62443-3-3","control":"SR 1.5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-PASSWORD-EXPIRY","framework":"iec-62443-3-3","control":"SR 1.7","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-PERMISSIONS-REVIEW","framework":"iec-62443-3-3","control":"SR 1.3","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-PERMISSIONS-REVIEW","framework":"iec-62443-3-3","control":"SR 2.1","relation":"supports","status":"proposed","basis":"administrative access and accounts: account management and least privilege","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-SSO-POLICY","framework":"iec-62443-3-3","control":"SR 1.11","relation":"supports","status":"proposed","basis":"account lockout after failed logons","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-SSO-POLICY","framework":"iec-62443-3-3","control":"SR 1.5","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VC-SSO-POLICY","framework":"iec-62443-3-3","control":"SR 1.7","relation":"supports","status":"proposed","basis":"password policy and credentials: authenticator management","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-3D","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-CDROM","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-CONSOLE-CONNECTIONS","framework":"iec-62443-3-3","control":"SR 2.7","relation":"supports","status":"proposed","basis":"one console connection at a time: concurrent session control","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-COPY-DISABLE","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-COPY-DISABLE","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DEVICE-CONNECTABLE","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DEVICE-CONNECTABLE","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DISKSHRINK","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DISKSHRINK","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DISKWIPER","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DISKWIPER","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DND-DISABLE","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DND-DISABLE","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-DVFILTER","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded service or interface disabled: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-ENCRYPTION","framework":"iec-62443-3-3","control":"SR 4.1","relation":"supports","status":"proposed","basis":"data at rest is encrypted","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-FLOPPY","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-GUIOPTIONS","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-GUIOPTIONS","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-HOSTINFO","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-HOSTINFO","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-LOG-KEEPOLD","framework":"iec-62443-3-3","control":"SR 2.9","relation":"supports","status":"proposed","basis":"log capacity and retention","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-LOG-ROTATE","framework":"iec-62443-3-3","control":"SR 2.9","relation":"supports","status":"proposed","basis":"log capacity and retention","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-NONPERSISTENT","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-NONPERSISTENT","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-PARALLEL","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-PASSTHROUGH","framework":"iec-62443-3-3","control":"SR 5.4","relation":"supports","status":"proposed","basis":"hypervisor-enforced isolation between guests, devices and the host","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-PASTE-DISABLE","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-PASTE-DISABLE","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-SECUREBOOT","framework":"iec-62443-3-3","control":"SR 3.4","relation":"supports","status":"proposed","basis":"boot chain and code integrity","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-SERIAL","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-SETINFO-LIMIT","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-SETINFO-LIMIT","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"VM isolation setting: secure configuration","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-SNAPSHOT-AGE","framework":"iec-62443-3-3","control":"SR 7.6","relation":"supports","status":"proposed","basis":"old snapshots hold stale data and weaken configuration control","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"VM-USB","framework":"iec-62443-3-3","control":"SR 7.7","relation":"supports","status":"proposed","basis":"unneeded virtual device removed: least functionality","sourceRef":"VSAT category table (build/New-CrosswalkSeed.ps1)"},
+    {"ruleId":"AI-ACS-OVERRIDE","framework":"mitre-attack-mitigations","control":"M1048","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"AI-GPU-SHARED-NO-MIG","framework":"mitre-attack-mitigations","control":"M1048","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"AI-IOMMU-GROUP-SHARED","framework":"mitre-attack-mitigations","control":"M1048","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"AI-IOMMU-IR","framework":"mitre-attack-mitigations","control":"M1048","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"AI-IOMMU-OFF","framework":"mitre-attack-mitigations","control":"M1048","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"AI-K8S-CP-EXPOSED","framework":"mitre-attack-mitigations","control":"M1035","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"AI-SHARE-PLAINTEXT","framework":"mitre-attack-mitigations","control":"M1041","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"AI-SHARE-SMB","framework":"mitre-attack-mitigations","control":"M1022","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"AI-SHARE-WORLD","framework":"mitre-attack-mitigations","control":"M1022","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"AI-SRIOV-HOST","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-ACCEPTANCE","framework":"mitre-attack-mitigations","control":"M1045","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-ACCOUNT-LOCK","framework":"mitre-attack-mitigations","control":"M1036","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-ACCOUNT-UNLOCK","framework":"mitre-attack-mitigations","control":"M1036","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-AD-ADMINS-AUTOADD","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-AD-ADMINS-GROUP","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-BPDU","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-CERT-EXPIRY","framework":"mitre-attack-mitigations","control":"M1041","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-CERT-SELFSIGNED","framework":"mitre-attack-mitigations","control":"M1041","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-DCUI-ACCESS","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-DCUI-TIMEOUT","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-EXEC-INSTALLED-ONLY","framework":"mitre-attack-mitigations","control":"M1038","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-FW-ALLIP","framework":"mitre-attack-mitigations","control":"M1035","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-FW-DEFAULT","framework":"mitre-attack-mitigations","control":"M1035","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-HOSTCLIENT-TIMEOUT","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-ISCSI-CHAP","framework":"mitre-attack-mitigations","control":"M1035","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-LIFECYCLE","framework":"mitre-attack-mitigations","control":"M1051","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-LOCAL-ACCOUNTS","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-LOCKDOWN","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-MOB","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-PASS-HISTORY","framework":"mitre-attack-mitigations","control":"M1027","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-PASS-QUALITY","framework":"mitre-attack-mitigations","control":"M1027","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-PATCH-ADV","framework":"mitre-attack-mitigations","control":"M1051","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-SHELL-IDLE","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-SHELL-TIMEOUT","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-SVC-CIM","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-SVC-SLP","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-SVC-SNMP","framework":"mitre-attack-mitigations","control":"M1041","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-SVC-SSH","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-SYSLOG-PERSIST","framework":"mitre-attack-mitigations","control":"M1029","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-SYSLOG-REMOTE","framework":"mitre-attack-mitigations","control":"M1029","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-TPM-ATTEST","framework":"mitre-attack-mitigations","control":"M1046","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-VMK-SEPARATION","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-ADMINS","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-FIREWALL","framework":"mitre-attack-mitigations","control":"M1035","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-MIGRATION-AUTH","framework":"mitre-attack-mitigations","control":"M1028","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-MIGRATION-NETWORK","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-OS-LIFECYCLE","framework":"mitre-attack-mitigations","control":"M1051","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-OS-PATCH-AGE","framework":"mitre-attack-mitigations","control":"M1051","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-RDP-NLA","framework":"mitre-attack-mitigations","control":"M1028","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-REPLICA-AUTH","framework":"mitre-attack-mitigations","control":"M1041","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-SECUREBOOT","framework":"mitre-attack-mitigations","control":"M1046","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-SERVER-CORE","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-SMB-SIGNING","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-SMB1","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-SPOOLER","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-TPM","framework":"mitre-attack-mitigations","control":"M1046","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VBS-CREDGUARD","framework":"mitre-attack-mitigations","control":"M1043","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VBS-HVCI","framework":"mitre-attack-mitigations","control":"M1050","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VM-DDA","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VM-DHCPGUARD","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VM-ENCRYPT-STATE","framework":"mitre-attack-mitigations","control":"M1041","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VM-GEN2","framework":"mitre-attack-mitigations","control":"M1046","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VM-MACSPOOF","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VM-MEDIA","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VM-ROUTERGUARD","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VM-SECUREBOOT","framework":"mitre-attack-mitigations","control":"M1046","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VM-TRUNK","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VM-VTPM","framework":"mitre-attack-mitigations","control":"M1046","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VSWITCH-EXTENSIONS","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"HV-VSWITCH-MGMTOS","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-FIREWALL","framework":"mitre-attack-mitigations","control":"M1035","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-LIBVIRT-GROUP","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-LIBVIRT-TCP","framework":"mitre-attack-mitigations","control":"M1035","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-NESTED","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-NET-OPEN","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-OS-LIFECYCLE","framework":"mitre-attack-mitigations","control":"M1051","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-OS-PATCH-AGE","framework":"mitre-attack-mitigations","control":"M1051","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-QEMU-USER","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-SECCOMP","framework":"mitre-attack-mitigations","control":"M1048","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-SECUREBOOT","framework":"mitre-attack-mitigations","control":"M1046","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-SSH-PASSWORD","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-SSH-ROOT","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-SVIRT","framework":"mitre-attack-mitigations","control":"M1048","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-VM-CONSOLE-NET","framework":"mitre-attack-mitigations","control":"M1035","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-VM-GRAPHICS","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-VM-HOSTDEV","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-VM-NWFILTER","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-VM-SECLABEL","framework":"mitre-attack-mitigations","control":"M1048","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-VM-SECUREBOOT","framework":"mitre-attack-mitigations","control":"M1046","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-VM-TPM","framework":"mitre-attack-mitigations","control":"M1046","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-VM-USBREDIR","framework":"mitre-attack-mitigations","control":"M1034","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"KVM-VNC-TLS","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NET-VDS-DEFAULT-POLICY","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NET-VDS-FORGED","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NET-VDS-MAC","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NET-VDS-OVERRIDE-ALLOWED","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NET-VDS-PORT-OVERRIDES","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NET-VDS-PROMISC","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NET-VLAN-4095","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NET-VLAN-NATIVE","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NET-VSS-DEFAULT-POLICY","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NET-VSS-FORGED","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NET-VSS-MAC","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NET-VSS-PROMISC","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-DFW-ANYANY","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-DFW-ANYSERVICE","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-DFW-APPLIEDTO","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-DFW-DEFAULT","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-DFW-EMPTY-GROUP","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-DFW-ENABLED","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-DFW-EXCLUDE","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-DFW-SHADOW","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-EFF-UNPROTECTED","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-GFW-DEFAULT","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-IDS","framework":"mitre-attack-mitigations","control":"M1031","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-MGR-ADV","framework":"mitre-attack-mitigations","control":"M1051","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-MGR-AUTH-LOCKOUT","framework":"mitre-attack-mitigations","control":"M1036","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-MGR-AUTH-LOCKOUT-PERIOD","framework":"mitre-attack-mitigations","control":"M1036","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-MGR-BACKUP","framework":"mitre-attack-mitigations","control":"M1053","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-MGR-CERT-EXPIRY","framework":"mitre-attack-mitigations","control":"M1041","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-MGR-LIFECYCLE","framework":"mitre-attack-mitigations","control":"M1051","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-MGR-PASSWORD","framework":"mitre-attack-mitigations","control":"M1027","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-MGR-SYSLOG","framework":"mitre-attack-mitigations","control":"M1029","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-NAT-BYPASS","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"NSX-TN-STATE","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"OT-DMZ-BYPASS","framework":"mitre-attack-mitigations","control":"M1037","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"OT-IT-ADMIN","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"OT-IT-PATH","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"OT-SHARED-HOST","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"OT-SHARED-MGMT","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"OT-SHARED-VSWITCH","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"RW-BACKUP-COLOCATED","framework":"mitre-attack-mitigations","control":"M1053","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"RW-BACKUP-REACHABLE","framework":"mitre-attack-mitigations","control":"M1053","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"RW-BACKUP-SHARED-ADMIN","framework":"mitre-attack-mitigations","control":"M1018","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ST-NFS-AUTH","framework":"mitre-attack-mitigations","control":"M1041","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ST-RECOVERY-EVIDENCE","framework":"mitre-attack-mitigations","control":"M1053","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ST-SAN-SEGREGATION","framework":"mitre-attack-mitigations","control":"M1030","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ST-VSAN-DIT","framework":"mitre-attack-mitigations","control":"M1041","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VC-ADMIN-USERS","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VC-APPLIANCE","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VC-LIFECYCLE","framework":"mitre-attack-mitigations","control":"M1051","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VC-PASSWORD-EXPIRY","framework":"mitre-attack-mitigations","control":"M1027","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VC-PATCH-ADV","framework":"mitre-attack-mitigations","control":"M1051","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VC-PERMISSIONS-REVIEW","framework":"mitre-attack-mitigations","control":"M1026","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VC-SSO-POLICY","framework":"mitre-attack-mitigations","control":"M1036","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VM-3D","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VM-CDROM","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VM-CONSOLE-CONNECTIONS","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VM-FLOPPY","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VM-PARALLEL","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VM-PASSTHROUGH","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VM-SECUREBOOT","framework":"mitre-attack-mitigations","control":"M1046","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VM-SERIAL","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VM-TOOLS","framework":"mitre-attack-mitigations","control":"M1051","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"VM-USB","framework":"mitre-attack-mitigations","control":"M1042","relation":"supports","status":"proposed","basis":"rule attack.mitigation","sourceRef":"rules attack.mitigation; ATT&CK v19.2"},
+    {"ruleId":"ESXI-ACCOUNT-LOCK","framework":"disa-stig-esxi-8","control":"ESXI-80-000005","relation":"supports","status":"proposed","basis":"setting 'Security.AccountLockFailures' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-ACCOUNT-UNLOCK","framework":"disa-stig-esxi-8","control":"ESXI-80-000111","relation":"supports","status":"proposed","basis":"setting 'Security.AccountUnlockTime' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-AD-ADMINS-GROUP","framework":"disa-stig-esxi-8","control":"ESXI-80-000241","relation":"supports","status":"proposed","basis":"setting 'Config.HostAgent.plugins.hostsvc.esxAdminsGroup' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-BPDU","framework":"disa-stig-esxi-8","control":"ESXI-80-000215","relation":"supports","status":"proposed","basis":"setting 'Net.BlockGuestBPDU' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-DCUI-ACCESS","framework":"disa-stig-esxi-8","control":"ESXI-80-000189","relation":"supports","status":"proposed","basis":"setting 'DCUI.Access' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-DCUI-TIMEOUT","framework":"disa-stig-esxi-8","control":"ESXI-80-000196","relation":"supports","status":"proposed","basis":"setting 'UserVars.DcuiTimeOut' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-DVFILTER","framework":"disa-stig-esxi-8","control":"ESXI-80-000219","relation":"supports","status":"proposed","basis":"setting 'Net.DVFilterBindIpAddress' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-HOSTCLIENT-TIMEOUT","framework":"disa-stig-esxi-8","control":"ESXI-80-000010","relation":"supports","status":"proposed","basis":"setting 'UserVars.HostClientSessionTimeout' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-LOG-LEVEL","framework":"disa-stig-esxi-8","control":"ESXI-80-000015","relation":"supports","status":"proposed","basis":"setting 'Config.HostAgent.log.level' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-MOB","framework":"disa-stig-esxi-8","control":"ESXI-80-000047","relation":"supports","status":"proposed","basis":"setting 'Config.HostAgent.plugins.solo.enableMob' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-PASS-HISTORY","framework":"disa-stig-esxi-8","control":"ESXI-80-000043","relation":"supports","status":"proposed","basis":"setting 'Security.PasswordHistory' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-SALT","framework":"disa-stig-esxi-8","control":"ESXI-80-000213","relation":"supports","status":"proposed","basis":"setting 'Mem.ShareForceSalting' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-SHELL-IDLE","framework":"disa-stig-esxi-8","control":"ESXI-80-000068","relation":"supports","status":"proposed","basis":"setting 'UserVars.ESXiShellInteractiveTimeOut' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-SHELL-TIMEOUT","framework":"disa-stig-esxi-8","control":"ESXI-80-000195","relation":"supports","status":"proposed","basis":"setting 'UserVars.ESXiShellTimeOut' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-SHELL-WARNING","framework":"disa-stig-esxi-8","control":"ESXI-80-000222","relation":"supports","status":"proposed","basis":"setting 'UserVars.SuppressShellWarning' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-SVC-SLP","framework":"disa-stig-esxi-8","control":"ESXI-80-000231","relation":"supports","status":"proposed","basis":"setting 'slpd' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"ESXI-SYSLOG-PERSIST","framework":"disa-stig-esxi-8","control":"ESXI-80-000243","relation":"supports","status":"proposed","basis":"setting 'Syslog.global.logDir' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 ESXi Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"VC-PASSWORD-EXPIRY","framework":"disa-stig-vcenter-8","control":"VCSA-80-000275","relation":"supports","status":"proposed","basis":"setting 'VirtualCenter.VimPasswordExpirationInDays' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 vCenter Security Technical Implementation Guide V2R4 (01 Jul 2026) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"VM-3D","framework":"disa-stig-vm-8","control":"VMCH-80-000202","relation":"supports","status":"proposed","basis":"setting 'mks.enable3d' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 Virtual Machine Security Technical Implementation Guide V2R1 (01 Aug 2024) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"VM-CONSOLE-CONNECTIONS","framework":"disa-stig-vm-8","control":"VMCH-80-000195","relation":"supports","status":"proposed","basis":"setting 'RemoteDisplay.maxConnections' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 Virtual Machine Security Technical Implementation Guide V2R1 (01 Aug 2024) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"VM-COPY-DISABLE","framework":"disa-stig-vm-8","control":"VMCH-80-000189","relation":"supports","status":"proposed","basis":"setting 'isolation.tools.copy.disable' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 Virtual Machine Security Technical Implementation Guide V2R1 (01 Aug 2024) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"VM-DEVICE-CONNECTABLE","framework":"disa-stig-vm-8","control":"VMCH-80-000197","relation":"supports","status":"proposed","basis":"setting 'isolation.device.connectable.disable' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 Virtual Machine Security Technical Implementation Guide V2R1 (01 Aug 2024) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"VM-DISKSHRINK","framework":"disa-stig-vm-8","control":"VMCH-80-000193","relation":"supports","status":"proposed","basis":"setting 'isolation.tools.diskShrink.disable' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 Virtual Machine Security Technical Implementation Guide V2R1 (01 Aug 2024) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"VM-DISKWIPER","framework":"disa-stig-vm-8","control":"VMCH-80-000194","relation":"supports","status":"proposed","basis":"setting 'isolation.tools.diskWiper.disable' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 Virtual Machine Security Technical Implementation Guide V2R1 (01 Aug 2024) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"VM-DND-DISABLE","framework":"disa-stig-vm-8","control":"VMCH-80-000191","relation":"supports","status":"proposed","basis":"setting 'isolation.tools.dnd.disable' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 Virtual Machine Security Technical Implementation Guide V2R1 (01 Aug 2024) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"VM-HOSTINFO","framework":"disa-stig-vm-8","control":"VMCH-80-000198","relation":"supports","status":"proposed","basis":"setting 'tools.guestlib.enableHostInfo' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 Virtual Machine Security Technical Implementation Guide V2R1 (01 Aug 2024) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"VM-LOG-KEEPOLD","framework":"disa-stig-vm-8","control":"VMCH-80-000206","relation":"supports","status":"proposed","basis":"setting 'log.keepOld' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 Virtual Machine Security Technical Implementation Guide V2R1 (01 Aug 2024) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"VM-LOG-ROTATE","framework":"disa-stig-vm-8","control":"VMCH-80-000205","relation":"supports","status":"proposed","basis":"setting 'log.rotateSize' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 Virtual Machine Security Technical Implementation Guide V2R1 (01 Aug 2024) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"VM-PASTE-DISABLE","framework":"disa-stig-vm-8","control":"VMCH-80-000192","relation":"supports","status":"proposed","basis":"setting 'isolation.tools.paste.disable' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 Virtual Machine Security Technical Implementation Guide V2R1 (01 Aug 2024) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"},
+    {"ruleId":"VM-SETINFO-LIMIT","framework":"disa-stig-vm-8","control":"VMCH-80-000196","relation":"supports","status":"proposed","basis":"setting 'tools.setInfo.sizeLimit' appears in STIG check text","sourceRef":"DISA VMware vSphere 8.0 Virtual Machine Security Technical Implementation Guide V2R1 (01 Aug 2024) (U_VMW_vSphere_8-0_Y26M07_STIG.zip sha256 4009353b08bd)"}
+  ]
+}
+'@
     'assets/report/report.html' = @'
 <!DOCTYPE html>
 <html lang="en">
@@ -11668,6 +12902,7 @@ $script:VsatEmbedded = [ordered]@{
   <a href="#ai" data-page="ai">AI infra</a>
   <a href="#changes" data-page="changes">Changes</a>
   <a href="#remediation" data-page="remediation">Remediation</a>
+  <a href="#compliance" data-page="compliance">Compliance</a>
   <a href="#exports" data-page="exports">Exports</a>
 </nav>
 <main id="main" tabindex="-1">
@@ -11744,6 +12979,7 @@ $script:VsatEmbedded = [ordered]@{
   <section id="page-ai" class="page" data-page="ai" aria-labelledby="h-ai" hidden></section>
   <section id="page-changes" class="page" data-page="changes" aria-labelledby="h-changes" hidden></section>
   <section id="page-remediation" class="page" data-page="remediation" aria-labelledby="h-remediation" hidden></section>
+  <section id="page-compliance" class="page" data-page="compliance" aria-labelledby="h-compliance" hidden></section>
   <section id="page-exports" class="page" data-page="exports" aria-labelledby="h-exports" hidden></section>
 </main>
 <aside id="panel" class="side-panel" aria-labelledby="panel-title" hidden>
@@ -12216,6 +13452,28 @@ dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .rw-groups > .card + .card, .rw-groups > details + .card, .rw-groups > .card + details, .rw-groups > details + details { margin-top: 12px; }
 .rw-groups h3 { margin: 0 0 8px; font-size: 1rem; }
 .rw-groups summary { cursor: pointer; }
+
+/* compliance: control matrix states (report Compliance page and audit-pack/control-matrix.html) */
+.cm-state { display: inline-block; font-weight: 700; font-size: .72rem; letter-spacing: .03em; padding: 1px 7px; border-radius: var(--radius-sm); border: 1px solid; white-space: nowrap; }
+.cm-st-satisfied { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+.cm-st-manual-signed-off { color: var(--ok); background: transparent; border-color: var(--ok); border-style: dashed; }
+.cm-st-not-satisfied { color: var(--bad); background: var(--bad-bg); border-color: var(--bad-border); }
+.cm-st-not-assessed { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); border-style: dashed; }
+.cm-st-manual-open { color: var(--res-manual); background: transparent; border-color: var(--res-manual); }
+.cm-st-partial { color: var(--warn); background: transparent; border-color: var(--warn-border); }
+.cm-st-excepted { color: var(--text-2); background: var(--surface-2); border-color: var(--border-strong); }
+.cm-b-satisfied { background: var(--res-pass); } .cm-b-manual-signed-off { background: var(--ok); opacity: .6; }
+.cm-b-not-satisfied { background: var(--res-fail); } .cm-b-not-assessed { background: var(--res-unknown); }
+.cm-b-manual-open { background: var(--res-manual); } .cm-b-partial { background: var(--warn-border); } .cm-b-excepted { background: var(--res-na); }
+.cm-bad { color: var(--res-fail); }
+.cm-sum .legend-inline { gap: 6px 12px; }
+.cm-import { display: inline-block; margin-left: 6px; font-size: .72rem; font-weight: 700; color: var(--warn); border: 1px dashed var(--warn-border); border-radius: 3px; padding: 0 5px; }
+td.cm-ctl { min-width: 190px; }
+/* Eleven tabs stay on one row down to 1024px. */
+@media (max-width: 1180px) { .tabs { padding: 0 12px; } .tabs a { padding: 12px 9px 10px; } }
+.cm-rules summary { cursor: pointer; white-space: nowrap; color: var(--accent); }
+.cm-rules[open] summary { margin-bottom: 4px; }
+@media (max-width: 1180px) { .cm-matrix th, .cm-matrix td { padding: 7px 6px; } td.cm-ctl { min-width: 150px; } }
 /* blast radius (shared by the report and the local UI; the build appends this file to each host
    stylesheet). Uses only the host tokens plus --attack, --attack-soft and --safe, which each host
    aliases to its own fail / pass tokens. Every selector is scoped under .br. */
@@ -13401,9 +14659,10 @@ var VsatBlastView = (function () {
     return h('ul', { class: 'fw-list' }, fw.map(function (x) {
       x = obj(x);
       const verified = x.mappingStatus === 'verified';
+      const label = verified ? 'verified' : (x.mappingStatus === 'proposed' || x.mappingStatus === 'derived' ? str(x.mappingStatus) + ' mapping' : 'unverified mapping');
       return h('li', null, h('strong', null, str(x.framework)), x.edition ? ' ' + str(x.edition) : '',
         x.control ? h('span', null, ' — control ', h('span', { class: 'mono' }, str(x.control))) : null,
-        h('span', { class: verified ? 'verified' : 'unverified', title: verified ? 'Mapping reviewed' : 'Mapping not verified; treat as indicative' }, verified ? 'verified' : 'unverified mapping'));
+        h('span', { class: verified ? 'verified' : 'unverified', title: verified ? 'Mapping reviewed' : 'Mapping not verified; treat as indicative' }, label));
     }));
   }
   function mitigationBlock(m) {
@@ -13561,7 +14820,7 @@ var VsatBlastView = (function () {
   // =====================================================================
   // Router
   // =====================================================================
-  const PAGES = ['overview', 'blast', 'ransomware', 'findings', 'topology', 'nsx', 'ai', 'changes', 'remediation', 'exports'];
+  const PAGES = ['overview', 'blast', 'ransomware', 'findings', 'topology', 'nsx', 'ai', 'changes', 'remediation', 'compliance', 'exports'];
   const rendered = {};
   const renderers = {};
   function ensureRendered(p) {
@@ -15122,6 +16381,131 @@ var VsatBlastView = (function () {
     });
     return toCsv(header, rows);
   }
+  // =====================================================================
+  // Compliance (control matrix; results.compliance, 2.7)
+  // =====================================================================
+  const CM_STATES = ['not-satisfied', 'not-assessed', 'manual-open', 'excepted', 'partial', 'manual-signed-off', 'satisfied'];
+  const CM_LABEL = { 'not-satisfied': 'Not satisfied', 'not-assessed': 'Not assessed', 'manual-open': 'Manual, open', excepted: 'Excepted', partial: 'Partial', 'manual-signed-off': 'Manual, signed off', satisfied: 'Satisfied' };
+  function cmState(s) { s = str(s); return h('span', { class: 'cm-state cm-st-' + (CM_STATES.indexOf(s) >= 0 ? s : 'not-assessed') }, CM_LABEL[s] || s || 'Not assessed'); }
+  renderers.compliance = function (el) {
+    const cmp = obj(D.compliance);
+    const fws = arr(cmp.frameworks).filter(function (f) { return f && typeof f === 'object'; });
+    el.appendChild(pageHead('h-compliance', 'Compliance', 'Control matrix across NIST SP 800-53, DISA STIG, MITRE ATT&CK mitigations and IEC 62443-3-3, with sign-offs and exceptions from the scope file.'));
+    if (!fws.length) {
+      el.appendChild(h('div', { class: 'card' }, h('h2', null, 'This report has no control matrix'),
+        h('p', null, 'It was produced by a VSAT version before 2.7. Replaying its evidence package with the current version adds the control matrix; run with -AuditPack to also write the audit-pack folder.')));
+      return;
+    }
+    const ruleTitle = new Map(); arr(D.rules).forEach(function (r) { if (r && r.id) ruleTitle.set(str(r.id), str(r.title)); });
+    el.appendChild(h('div', { class: 'notice notice-info', role: 'note' }, h('strong', null, 'Verified and unverified are counted apart'),
+      str(cmp.note) || 'Unverified rows are proposals for a reviewer, not certification.', ' A control is satisfied only when every mapped check passed or was signed off.'));
+    const sel = h('select', { id: 'cm-fw' }, fws.map(function (f, i) {
+      return h('option', { value: String(i) }, str(f.name) + (f.importRequired ? ' (import required)' : ' (' + fmtN(arr(f.controls).length) + ' controls)'));
+    }));
+    el.appendChild(h('div', { class: 'toolbar' }, h('label', { class: 'field', for: 'cm-fw' }, h('span', null, 'Framework'), sel)));
+    const body = h('div', null);
+    el.appendChild(body);
+    const table = new DataTable({
+      caption: 'Control matrix', sortKey: 'state', sortDir: 'asc', empty: 'No VSAT rule maps to this framework.',
+      columns: [
+        { key: 'control', label: 'Control', cls: 'cm-ctl', sort: function (c) { return str(c.control).replace(/\d+/g, function (d) { return d.padStart(6, '0'); }); }, render: function (c) { return [h('span', { class: 'mono' }, str(c.control)), c.paraphrase ? h('span', { class: 'sub' }, str(c.paraphrase)) : null]; } },
+        { key: 'state', label: 'State', sort: function (c) { const i = CM_STATES.indexOf(str(c.state)); return i < 0 ? 99 : i; }, render: function (c) { return cmState(c.state); } },
+        { key: 'mapping', label: 'Mapping', sort: function (c) { return str(c.mappingStatus); }, render: function (c) { return c.mappingStatus === 'verified' ? h('span', { class: 'verified' }, 'verified') : h('span', { class: 'unverified', title: 'Not reviewed; indicative only' }, arr(c.mappingStatuses).join(', ') || 'unverified'); } },
+        { key: 'rules', label: 'Rules', num: true, sort: function (c) { return arr(c.rules).length; }, render: function (c) { return fmtN(arr(c.rules).length); } },
+        { key: 'assets', label: 'Assets', num: true, sort: function (c) { return num(c.assets); }, render: function (c) { return fmtN(c.assets); } },
+        { key: 'pass', label: 'Pass', num: true, sort: function (c) { return num(obj(c.counts).PASS); }, render: function (c) { return fmtN(obj(c.counts).PASS); } },
+        { key: 'fail', label: 'Fail', num: true, defaultDir: 'desc', sort: function (c) { return num(obj(c.counts).FAIL); }, render: function (c) { const n = num(obj(c.counts).FAIL); return n ? h('strong', { class: 'cm-bad' }, fmtN(n)) : '0'; } },
+        { key: 'exc', label: 'Excepted', num: true, sort: function (c) { return num(obj(c.counts).EXCEPTED); }, render: function (c) { return fmtN(obj(c.counts).EXCEPTED); } },
+        { key: 'man', label: 'Manual / signed', num: true, cls: 'nowrap', sort: function (c) { return num(obj(c.counts).MANUAL); }, render: function (c) { const k = obj(c.counts); return num(k.MANUAL) ? h('span', { title: fmtN(k.MANUAL) + ' manual, ' + fmtN(k.SIGNED_OFF) + ' signed off' }, fmtN(k.MANUAL) + ' / ' + fmtN(k.SIGNED_OFF)) : '0'; } },
+        { key: 'unk', label: 'Unknown', num: true, sort: function (c) { return num(obj(c.counts).UNKNOWN) + num(obj(c.counts).ERROR); }, render: function (c) { return fmtN(num(obj(c.counts).UNKNOWN) + num(obj(c.counts).ERROR)); } }
+      ],
+      onRowClick: function (c) {
+        const fw = fws[Number(sel.value)] || {};
+        openPanel(str(c.control), h('div', null,
+          h('div', { class: 'badges' }, cmState(c.state), c.mappingStatus === 'verified' ? h('span', { class: 'verified' }, 'verified mapping') : h('span', { class: 'unverified' }, 'unverified mapping')),
+          h('h3', null, str(fw.name) + ' ' + str(c.control)),
+          c.paraphrase ? h('p', { class: 'muted' }, str(c.paraphrase)) : null,
+          section('VSAT rules mapped here', h('ul', { class: 'mini-list' }, arr(c.rules).map(function (id) {
+            const fs = findings.filter(function (f) { return str(f.ruleId) === str(id) && f.result !== 'NOT_APPLICABLE'; });
+            const worst = fs.slice().sort(function (a, b) { return (RESULT_RANK[b.result] || 0) - (RESULT_RANK[a.result] || 0); })[0];
+            return h('li', null, worst ? resBadge(worst.result) : h('span', { class: 'badge res-NOT_APPLICABLE' }, 'N/A'),
+              h('span', { class: 'grow' }, worst ? linkBtn(ruleTitle.get(str(id)) || str(id), function () { openFinding(worst); }) : h('span', null, ruleTitle.get(str(id)) || str(id)), h('span', { class: 'sub mono small' }, str(id) + ' · ' + fmtN(fs.length) + ' applicable finding' + (fs.length === 1 ? '' : 's'))));
+          }))),
+          section('Counts', kv(Object.keys(obj(c.counts)).map(function (k) { return [k.replace(/_/g, ' ').toLowerCase(), fmtN(c.counts[k])]; })))));
+      }
+    });
+    function stateBars(title, counts, total, sub) {
+      counts = obj(counts);
+      return h('div', { class: 'card cm-sum' }, h('div', { class: 'dim-title' }, h('h3', null, title), h('span', { class: 'muted' }, fmtN(total) + ' controls')),
+        total ? h('div', { class: 'bar', role: 'img', 'aria-label': title }, CM_STATES.filter(function (s) { return num(counts[s]); }).map(function (s) { return h('span', { class: 'cm-b-' + s, title: CM_LABEL[s] + ': ' + num(counts[s]), 'data-w': String(pct(num(counts[s]), total)) }); })) : null,
+        h('ul', { class: 'legend-inline' }, CM_STATES.filter(function (s) { return num(counts[s]); }).map(function (s) { return h('li', null, cmState(s), ' ' + fmtN(counts[s])); })),
+        !total ? h('p', { class: 'muted small' }, sub) : null);
+    }
+    function show() {
+      clear(body);
+      const fw = fws[Number(sel.value)] || fws[0];
+      const rows = arr(fw.controls);
+      const st = obj(fw.states);
+      const vN = rows.filter(function (c) { return c.mappingStatus === 'verified'; }).length;
+      const tile = function (v, l, s) { return h('div', { class: 'metric' }, h('div', { class: 'm-val' }, fmtN(v)), h('div', { class: 'm-lbl' }, l), s ? h('div', { class: 'small muted' }, s) : null); };
+      body.appendChild(h('div', { class: 'metric-row section' },
+        tile(fw.verifiedMappings, 'Verified mappings', 'reviewer, date, edition, source'), tile(fw.unverifiedMappings, 'Unverified mappings', 'proposed or derived'),
+        tile(rows.length, 'Controls', 'with at least one VSAT rule'), tile(fw.rulesMapped, 'Rules mapped', 'of ' + fmtN(arr(D.rules).length)),
+        tile(rows.filter(function (c) { return c.state === 'not-satisfied'; }).length, 'Not satisfied', 'verified and unverified')));
+      if (fw.importRequired) {
+        body.appendChild(h('div', { class: 'notice notice-warn section', role: 'note' }, h('strong', null, 'Import required'), str(fw.note) || 'VSAT ships no mappings for this framework.'));
+      }
+      else {
+        body.appendChild(h('div', { class: 'grid grid-2 section' },
+          stateBars('Verified mappings', st.verified, vN, 'No reviewed mapping yet: every row below is a proposal.'),
+          stateBars('Unverified mappings', st.unverified, rows.length - vN, 'None.')));
+        body.appendChild(h('p', { class: 'small muted section' }, str(fw.edition) + (fw.publisher ? ' · ' + str(fw.publisher) : '') + (fw.note ? ' · ' + str(fw.note) : ''),
+          fw.source && fw.source.sha256 ? h('span', null, ' Source ', h('span', { class: 'mono' }, str(fw.source.package)), ', SHA-256 ', h('span', { class: 'mono break' }, str(fw.source.sha256).slice(0, 16) + '…')) : null));
+        table.setRows(rows);
+        body.appendChild(h('div', { class: 'card section cm-matrix' }, h('h2', null, 'Control matrix (' + fmtN(rows.length) + ')'), table.el));
+      }
+      // Bars get their widths after insertion (no inline style attribute, CSP-safe).
+      body.querySelectorAll('[data-w]').forEach(function (s) { s.style.width = s.getAttribute('data-w') + '%'; });
+    }
+    on(sel, 'change', show);
+    show();
+    const signoffs = arr(cmp.signoffs), excs = arr(cmp.exceptions);
+    const sgt = new DataTable({
+      caption: 'Sign-offs', sortKey: 'state', sortDir: 'asc', empty: 'No sign-offs in the scope file.',
+      columns: [
+        { key: 'state', label: 'State', sort: function (s) { return str(s.state); }, render: function (s) { return h('span', { class: 'state state-' + (s.state === 'valid' ? 'ok' : (s.state === 'conflict' ? 'bad' : 'warn')) }, str(s.state)); } },
+        { key: 'rule', label: 'Rule', sort: function (s) { return str(s.ruleId); }, render: function (s) { return h('span', { class: 'mono small' }, str(s.ruleId)); } },
+        { key: 'asset', label: 'Asset', sort: function (s) { return str(s.assetName || s.asset); }, render: function (s) { return h('span', { class: 'break' }, str(s.assetName || s.asset)); } },
+        { key: 'reviewer', label: 'Reviewer', sort: function (s) { return str(s.reviewer); }, render: function (s) { return h('span', { class: 'break' }, str(s.reviewer)); } },
+        { key: 'decision', label: 'Decision', sort: function (s) { return str(s.decision); }, render: function (s) { return str(s.decision); } },
+        { key: 'ref', label: 'Evidence', sort: function (s) { return str(s.evidenceRef); }, render: function (s) { return h('span', { class: 'break small' }, str(s.evidenceRef)); } },
+        { key: 'date', label: 'Date', sort: function (s) { return str(s.dateUtc); }, render: function (s) { return h('span', { class: 'nowrap' }, str(s.dateUtc) + (s.expires ? ' → ' + str(s.expires) : '')); } },
+        { key: 'flags', label: 'Flags', sort: function (s) { return arr(s.flags).join(','); }, render: function (s) { return h('span', { class: 'small muted' }, arr(s.flags).join(', ')); } }
+      ]
+    });
+    sgt.setRows(signoffs);
+    const ext = new DataTable({
+      caption: 'Exceptions', sortKey: 'rule', sortDir: 'asc', empty: 'No exceptions in the scope file.',
+      columns: [
+        { key: 'rule', label: 'Rule', sort: function (x) { return str(x.ruleId); }, render: function (x) { return h('span', { class: 'mono small' }, str(x.ruleId)); } },
+        { key: 'asset', label: 'Asset', sort: function (x) { return str(x.asset); }, render: function (x) { return h('span', { class: 'break' }, str(x.asset)); } },
+        { key: 'owner', label: 'Owner', sort: function (x) { return str(x.owner); }, render: function (x) { return h('span', { class: 'break' }, str(x.owner)); } },
+        { key: 'approver', label: 'Approver', sort: function (x) { return str(x.approver); }, render: function (x) { return x.approver ? h('span', { class: 'break' }, str(x.approver)) : h('span', { class: 'state state-warn' }, 'unapproved'); } },
+        { key: 'comp', label: 'Compensating control', sort: function (x) { return str(x.compensatingControl); }, render: function (x) { return h('span', { class: 'break small' }, str(x.compensatingControl)); } },
+        { key: 'ticket', label: 'Ticket', sort: function (x) { return str(x.ticket); }, render: function (x) { return h('span', { class: 'mono small' }, str(x.ticket)); } },
+        { key: 'expires', label: 'Expires', sort: function (x) { return str(x.expires); }, render: function (x) { return h('span', { class: 'nowrap' }, str(x.expires) || '-'); } },
+        { key: 'findings', label: 'Findings', num: true, sort: function (x) { return num(x.findings); }, render: function (x) { return fmtN(x.findings); } },
+        { key: 'flags', label: 'Flags', sort: function (x) { return arr(x.flags).join(','); }, render: function (x) { return h('span', { class: 'small muted' }, arr(x.flags).join(', ')); } }
+      ]
+    });
+    ext.setRows(excs);
+    el.appendChild(h('div', { class: 'card section' }, h('h2', null, 'Sign-offs (' + fmtN(signoffs.length) + ')'), sgt.el));
+    el.appendChild(h('div', { class: 'card section' }, h('h2', null, 'Exceptions (' + fmtN(excs.length) + ')'), ext.el));
+    el.appendChild(h('div', { class: 'card section ai-hint' }, h('h2', null, 'Record sign-offs and exceptions'),
+      h('p', { class: 'small' }, 'Manual checks are signed off, and failing checks excepted, in the scope file; replay the package with it and -AuditPack to write the audit-pack folder. An exception without an approver never counts as excepted.'),
+      h('pre', { class: 'mono small' }, '"signoffs": [\n  { "ruleId": "VC-SSO-POLICY", "asset": "name:vc01*", "reviewer": "auditor", "decision": "satisfied", "evidenceRef": "EVD-12", "dateUtc": "2026-10-01" }\n],\n"exceptions": [\n  { "ruleId": "ESXI-SVC-SSH", "asset": "esx03*", "owner": "infra", "approver": "CISO", "compensatingControl": "jump host only", "ticket": "CHG-7", "expires": "2027-01-31", "rationale": "vendor support" }\n]')));
+  };
+
   renderers.exports = function (el) {
     const base = 'vsat-' + safeFilePart(run.id);
     el.appendChild(pageHead('h-exports', 'Exports', 'All exports are generated locally in your browser. Nothing is uploaded.'));
@@ -25478,7 +26862,7 @@ if (-not $LibraryMode) {
         Cli = [bool]$Cli; Doctor = [bool]$Doctor; Replay = $Replay; Baseline = $Baseline; Redact = [bool]$Redact
         TrustedThumbprint = $TrustedThumbprint; Port = $Port; NoBrowser = [bool]$NoBrowser; Demo = [bool]$Demo; Version = [bool]$Version
     }
-    foreach ($vsatOpt in 'HyperVServer', 'HyperVCredential', 'HyperVEvidence', 'ExportCollector', 'KvmServer', 'KvmUser', 'KvmEvidence', 'EngagementStart', 'CollectOnly', 'Receipt') {
+    foreach ($vsatOpt in 'HyperVServer', 'HyperVCredential', 'HyperVEvidence', 'ExportCollector', 'KvmServer', 'KvmUser', 'KvmEvidence', 'EngagementStart', 'CollectOnly', 'Receipt', 'AuditPack') {
         $vsatVar = Get-Variable -Name $vsatOpt -Scope Script -ErrorAction SilentlyContinue
         if ($vsatVar) { $vsatArgs[$vsatOpt] = $vsatVar.Value }
     }

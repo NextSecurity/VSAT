@@ -20,11 +20,13 @@ function Get-VsatRulePack {
     foreach ($r in $rules) {
         if ($ids.ContainsKey($r.id)) { throw "Duplicate rule id $($r.id)" }
         $ids[$r.id] = $true
-        # Expand compact framework references into explicit, honestly-labelled mappings.
+        # Expand compact framework references into explicit, honestly-labelled mappings: the 1.x
+        # legacy ids first (never verified), then the crosswalk rows (data/frameworks, 84-Compliance.ps1).
         $fw = [System.Collections.Generic.List[object]]::new()
-        if ($r.Contains('cis')) { $fw.Add([ordered]@{ framework = 'CIS VMware ESXi Benchmark'; edition = 'VSAT 1.x legacy mapping (ESXi 7.0 edition not recorded)'; control = [string]$r.cis; mappingStatus = 'unverified' }) }
-        if ($r.Contains('scg')) { $fw.Add([ordered]@{ framework = 'Broadcom vSphere/NSX Security Configuration Guide'; edition = 'edition to be confirmed'; control = [string]$r.scg; mappingStatus = 'unverified' }) }
-        if ($r.Contains('vsat') -or $fw.Count -eq 0) { $fw.Add([ordered]@{ framework = 'VSAT'; edition = $meta.version; control = $r.id; mappingStatus = 'verified' }) }
+        if ($r.Contains('cis')) { $fw.Add([ordered]@{ framework = 'CIS VMware ESXi Benchmark'; frameworkId = 'cis-esxi-legacy'; edition = 'VSAT 1.x legacy mapping (ESXi 7.0 edition not recorded)'; control = [string]$r.cis; relation = 'supports'; mappingStatus = 'legacy-unverified'; sourceRef = $null }) }
+        if ($r.Contains('scg')) { $fw.Add([ordered]@{ framework = 'Broadcom vSphere/NSX Security Configuration Guide'; frameworkId = 'scg'; edition = 'edition to be confirmed'; control = [string]$r.scg; relation = 'supports'; mappingStatus = 'legacy-unverified'; sourceRef = $null }) }
+        if ($r.Contains('vsat') -or $fw.Count -eq 0) { $fw.Add([ordered]@{ framework = 'VSAT'; frameworkId = 'vsat'; edition = $meta.version; control = $r.id; relation = 'equivalent'; mappingStatus = 'verified'; sourceRef = 'rules/' }) }
+        foreach ($x in @(Get-VsatRuleCrosswalkRefs -RuleId $r.id)) { $fw.Add($x) }
         $r.frameworks = @($fw)
         $m = if ($r.Contains('mitigation')) { $r.mitigation } else { [ordered]@{} }
         $wp = $wps[[string](Get-VsatProp $m 'workPackage' '')]

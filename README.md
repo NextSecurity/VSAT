@@ -71,11 +71,11 @@ The `Unblock-File` step clears Windows' Mark-of-the-Web on the download; `-EA 0`
 Use these instead of the lines above when you want a specific release rather than always the newest:
 
 ```powershell
-$v='2.6.0';$u="https://github.com/NextSecurity/VSAT/releases/download/v$v";iwr "$u/vsat.ps1" -OutFile vsat.ps1;iwr "$u/SHA256SUMS.txt" -OutFile SHA256SUMS.txt;$h=((gc SHA256SUMS.txt|?{$_ -match '\svsat\.ps1$'}) -split '\s+')[0];if((Get-FileHash vsat.ps1).Hash -ne $h){throw 'checksum mismatch - do not run'};Unblock-File vsat.ps1 -EA 0;./vsat.ps1 -Demo
+$v='2.7.0';$u="https://github.com/NextSecurity/VSAT/releases/download/v$v";iwr "$u/vsat.ps1" -OutFile vsat.ps1;iwr "$u/SHA256SUMS.txt" -OutFile SHA256SUMS.txt;$h=((gc SHA256SUMS.txt|?{$_ -match '\svsat\.ps1$'}) -split '\s+')[0];if((Get-FileHash vsat.ps1).Hash -ne $h){throw 'checksum mismatch - do not run'};Unblock-File vsat.ps1 -EA 0;./vsat.ps1 -Demo
 ```
 
 ```bash
-v=2.6.0; u=https://github.com/NextSecurity/VSAT/releases/download/v$v; curl -fsSLO $u/vsat.ps1 -O $u/SHA256SUMS.txt && grep ' vsat.ps1$' SHA256SUMS.txt | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -) && pwsh ./vsat.ps1 -Demo
+v=2.7.0; u=https://github.com/NextSecurity/VSAT/releases/download/v$v; curl -fsSLO $u/vsat.ps1 -O $u/SHA256SUMS.txt && grep ' vsat.ps1$' SHA256SUMS.txt | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -) && pwsh ./vsat.ps1 -Demo
 ```
 
 VSAT is also published on the PowerShell Gallery as the script `VSAT`: `Install-PSResource VSAT -Repository PSGallery; vsat.ps1 -Demo`. The checksum one-liner above stays the documented default because it works without Gallery access.
@@ -154,13 +154,14 @@ Each result is one of `PASS`, `FAIL`, `MANUAL`, `NOT_APPLICABLE`, `UNKNOWN` or `
 2. **OT segmentation lens:** give scope zones a Purdue level and six `OT-*` rules check that OT and IT workloads do not share hosts, virtual switches, management planes, admin accounts or network paths.
 3. **Ransomware readiness:** "could one stolen account encrypt every hypervisor and the backups?" Declare your backup systems and VSAT checks whether an attacker path reaches them, whether they run alongside production, and whether production admins also control them. A card shows how many hypervisors each account controls, worst first.
 4. **AI & GPU isolation:** GPU passthrough, vGPU and MIG sharing, IOMMU and interrupt remapping, ACS overrides, SR-IOV next to management traffic, model and dataset storage exposure, and Kubernetes control planes reachable from other workloads. VMs with accelerators are found automatically; declare roles with `aiWorkloads`.
-5. **MITRE ATT&CK mapping:** each attack-path hop and rule is mapped to ATT&CK techniques, and every run writes `attack-layer.json` for the ATT&CK Navigator.
-6. **Drift:** `-Baseline <previous .vsat.zip>` shows new, resolved, changed and unassessed items. Evidence that has disappeared is not treated as a resolved finding.
-7. **Explainable attack paths:** inferred from configuration. Each path lists the firewall rules and prerequisites involved, plus its uncertainty. These paths are not proof of exploitability.
-8. **Failure-impact explorer:** pick a host, uplink, datastore or Edge and see which workloads could be affected. This is a configuration model. VSAT injects no failures.
-9. **Remediation work packages:** findings grouped by corrective action and team, with impact, maintenance window, rollback and validation steps. VSAT writes guidance and never applies changes.
-10. **Audit integrity:** when the customer runs VSAT for you, the report shows what changed during the engagement (from vCenter events, NSX, Windows event logs and KVM host history), earlier runs by the same account, and a warning when log history is too short. `-CollectOnly` shows no findings, and a receipt code (`VSAT-XXXX-XXXX-XXXX-XXXX`) read aloud at the end of the session proves later that the package you received is the one from that session: `-Replay assessment.vsat.zip -Receipt <code>`.
-11. **Collect once, replay, share safely:** `-Replay` re-evaluates saved evidence offline. `-Redact` writes a separate sharing copy that uses consistent pseudonyms.
+5. **Audit pack:** `-AuditPack` writes one control matrix across NIST SP 800-53 Rev. 5, IEC 62443-3-3, DISA STIG (vSphere 8) and MITRE ATT&CK mitigations, with your sign-offs for manual checks and your exception register, plus the evidence package and its receipt. CIS works with your own licensed benchmark through the included importer. Every mapping shows its review status (`proposed` or `verified`).
+6. **MITRE ATT&CK mapping:** each attack-path hop and rule is mapped to ATT&CK techniques, and every run writes `attack-layer.json` for the ATT&CK Navigator.
+7. **Drift:** `-Baseline <previous .vsat.zip>` shows new, resolved, changed and unassessed items. Evidence that has disappeared is not treated as a resolved finding.
+8. **Explainable attack paths:** inferred from configuration. Each path lists the firewall rules and prerequisites involved, plus its uncertainty. These paths are not proof of exploitability.
+9. **Failure-impact explorer:** pick a host, uplink, datastore or Edge and see which workloads could be affected. This is a configuration model. VSAT injects no failures.
+10. **Remediation work packages:** findings grouped by corrective action and team, with impact, maintenance window, rollback and validation steps. VSAT writes guidance and never applies changes.
+11. **Audit integrity:** when the customer runs VSAT for you, the report shows what changed during the engagement (from vCenter events, NSX, Windows event logs and KVM host history), earlier runs by the same account, and a warning when log history is too short. `-CollectOnly` shows no findings, and a receipt code (`VSAT-XXXX-XXXX-XXXX-XXXX`) read aloud at the end of the session proves later that the package you received is the one from that session: `-Replay assessment.vsat.zip -Receipt <code>`.
+12. **Collect once, replay, share safely:** `-Replay` re-evaluates saved evidence offline. `-Redact` writes a separate sharing copy that uses consistent pseudonyms.
 
 ## Sample report and topology
 
@@ -174,6 +175,7 @@ Every run writes these files to the output folder:
 | `results.json` / `evidence.json` | Machine-readable results and normalized evidence ([data model](docs/architecture/data-model.md)) |
 | `findings.csv` / `worklist.csv` | Findings and the remediation worklist, protected against spreadsheet formula injection |
 | `changes.csv` | The engagement change timeline: who changed what, when, and which checks it touched |
+| `audit-pack/` | With `-AuditPack`: control matrix (CSV and HTML), sign-off and exception registers, evidence package and manifest |
 | `attack-layer.json` | A MITRE ATT&CK Navigator layer (format 4.5) scored by open attack paths and failing controls |
 | `collection.log` | Collection log with secrets redacted |
 | `manifest.json` | SHA-256 hashes of all outputs |
@@ -230,6 +232,7 @@ The complete list is in [docs/limitations.md](docs/limitations.md).
 |---|---|
 | Usage and parameters | [docs/usage.md](docs/usage.md) |
 | Security review of `vsat.ps1` | [docs/security-review.md](docs/security-review.md) |
+| Framework mappings | [docs/compliance-mapping.md](docs/compliance-mapping.md) |
 | Offline package | [docs/offline-package.md](docs/offline-package.md) |
 | Migrating from 1.x | [docs/migration-from-1x.md](docs/migration-from-1x.md) |
 | Least privileges | [docs/privileges.md](docs/privileges.md) |

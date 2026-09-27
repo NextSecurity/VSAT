@@ -113,8 +113,10 @@ function Set-VsatExceptions {
             if ($f.ruleId -notlike [string]$ex.ruleId) { continue }
             $pat = if ($ex.asset) { [string]$ex.asset } else { '*' }
             if ($f.assetName -notlike $pat -and $f.assetId -notlike $pat) { continue }
-            # Exceptions stay visible and never turn a FAIL into a PASS.
-            $f.exception = [ordered]@{ owner = $ex.owner; rationale = $ex.rationale; expires = $ex.expires; active = $active }
+            # Exceptions stay visible and never turn a FAIL into a PASS. approver, compensatingControl and
+            # ticket (2.7, optional) feed the exception register; without an approver the control matrix
+            # does not treat the FAIL as excepted.
+            $f.exception = [ordered]@{ owner = $ex.owner; rationale = $ex.rationale; expires = $ex.expires; active = $active; approver = (Get-VsatProp $ex 'approver'); compensatingControl = (Get-VsatProp $ex 'compensatingControl'); ticket = (Get-VsatProp $ex 'ticket') }
         }
     }
 }

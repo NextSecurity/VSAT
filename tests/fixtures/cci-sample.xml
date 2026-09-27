@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic CCI list fixture (same shape as DISA's U_CCI_List.xml) for the STIG importer test. -->
+<cci_list xmlns="http://iase.disa.mil/cci">
+  <metadata><version>2025-01-23</version><publishdate>2025-01-23</publishdate></metadata>
+  <cci_items>
+    <cci_item id="CCI-000382"><status>draft</status><type>technical</type><references>
+      <reference creator="NIST" title="NIST SP 800-53 Revision 4" version="4" index="CM-7 b" />
+      <reference creator="NIST" title="NIST SP 800-53 Revision 5" version="5" index="CM-7 b" />
+    </references></cci_item>
+    <cci_item id="CCI-001133"><status>draft</status><type>technical</type><references>
+      <reference creator="NIST" title="NIST SP 800-53 Revision 5" version="5" index="SC-10" />
+    </references></cci_item>
+    <cci_item id="CCI-000366"><status>draft</status><type>technical</type><references>
+      <reference creator="NIST" title="NIST SP 800-53 Revision 5" version="5" index="CM-6 b" />
+    </references></cci_item>
+  </cci_items>
+</cci_list>

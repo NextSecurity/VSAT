@@ -84,7 +84,7 @@ exit /b %ERRORLEVEL%
 
 # 5. Documentation and notices
 foreach ($f in 'README.md', 'LICENSE', 'CHANGELOG.md', 'SECURITY.md') { if (Test-Path (Join-Path $root $f)) { Copy-Item (Join-Path $root $f) $pkg } }
-foreach ($f in 'usage.md', 'offline-package.md', 'privileges.md', 'limitations.md', 'coverage.md', 'threat-model.md') { if (Test-Path (Join-Path $root "docs/$f")) { Copy-Item (Join-Path $root "docs/$f") (Join-Path $pkg 'docs') } }
+foreach ($f in 'usage.md', 'offline-package.md', 'privileges.md', 'limitations.md', 'coverage.md', 'threat-model.md', 'security-review.md', 'compliance-mapping.md') { if (Test-Path (Join-Path $root "docs/$f")) { Copy-Item (Join-Path $root "docs/$f") (Join-Path $pkg 'docs') } }
 @"
 Third-party components in this package (obtained by the package builder from vendor sources):
 - PowerShell $($lock.powershell.version) - MIT License - $($lock.powershell.url)

@@ -345,9 +345,10 @@
     return h('ul', { class: 'fw-list' }, fw.map(function (x) {
       x = obj(x);
       const verified = x.mappingStatus === 'verified';
+      const label = verified ? 'verified' : (x.mappingStatus === 'proposed' || x.mappingStatus === 'derived' ? str(x.mappingStatus) + ' mapping' : 'unverified mapping');
       return h('li', null, h('strong', null, str(x.framework)), x.edition ? ' ' + str(x.edition) : '',
         x.control ? h('span', null, ' — control ', h('span', { class: 'mono' }, str(x.control))) : null,
-        h('span', { class: verified ? 'verified' : 'unverified', title: verified ? 'Mapping reviewed' : 'Mapping not verified; treat as indicative' }, verified ? 'verified' : 'unverified mapping'));
+        h('span', { class: verified ? 'verified' : 'unverified', title: verified ? 'Mapping reviewed' : 'Mapping not verified; treat as indicative' }, label));
     }));
   }
   function mitigationBlock(m) {
@@ -505,7 +506,7 @@
   // =====================================================================
   // Router
   // =====================================================================
-  const PAGES = ['overview', 'blast', 'ransomware', 'findings', 'topology', 'nsx', 'ai', 'changes', 'remediation', 'exports'];
+  const PAGES = ['overview', 'blast', 'ransomware', 'findings', 'topology', 'nsx', 'ai', 'changes', 'remediation', 'compliance', 'exports'];
   const rendered = {};
   const renderers = {};
   function ensureRendered(p) {
@@ -2066,6 +2067,131 @@
     });
     return toCsv(header, rows);
   }
+  // =====================================================================
+  // Compliance (control matrix; results.compliance, 2.7)
+  // =====================================================================
+  const CM_STATES = ['not-satisfied', 'not-assessed', 'manual-open', 'excepted', 'partial', 'manual-signed-off', 'satisfied'];
+  const CM_LABEL = { 'not-satisfied': 'Not satisfied', 'not-assessed': 'Not assessed', 'manual-open': 'Manual, open', excepted: 'Excepted', partial: 'Partial', 'manual-signed-off': 'Manual, signed off', satisfied: 'Satisfied' };
+  function cmState(s) { s = str(s); return h('span', { class: 'cm-state cm-st-' + (CM_STATES.indexOf(s) >= 0 ? s : 'not-assessed') }, CM_LABEL[s] || s || 'Not assessed'); }
+  renderers.compliance = function (el) {
+    const cmp = obj(D.compliance);
+    const fws = arr(cmp.frameworks).filter(function (f) { return f && typeof f === 'object'; });
+    el.appendChild(pageHead('h-compliance', 'Compliance', 'Control matrix across NIST SP 800-53, DISA STIG, MITRE ATT&CK mitigations and IEC 62443-3-3, with sign-offs and exceptions from the scope file.'));
+    if (!fws.length) {
+      el.appendChild(h('div', { class: 'card' }, h('h2', null, 'This report has no control matrix'),
+        h('p', null, 'It was produced by a VSAT version before 2.7. Replaying its evidence package with the current version adds the control matrix; run with -AuditPack to also write the audit-pack folder.')));
+      return;
+    }
+    const ruleTitle = new Map(); arr(D.rules).forEach(function (r) { if (r && r.id) ruleTitle.set(str(r.id), str(r.title)); });
+    el.appendChild(h('div', { class: 'notice notice-info', role: 'note' }, h('strong', null, 'Verified and unverified are counted apart'),
+      str(cmp.note) || 'Unverified rows are proposals for a reviewer, not certification.', ' A control is satisfied only when every mapped check passed or was signed off.'));
+    const sel = h('select', { id: 'cm-fw' }, fws.map(function (f, i) {
+      return h('option', { value: String(i) }, str(f.name) + (f.importRequired ? ' (import required)' : ' (' + fmtN(arr(f.controls).length) + ' controls)'));
+    }));
+    el.appendChild(h('div', { class: 'toolbar' }, h('label', { class: 'field', for: 'cm-fw' }, h('span', null, 'Framework'), sel)));
+    const body = h('div', null);
+    el.appendChild(body);
+    const table = new DataTable({
+      caption: 'Control matrix', sortKey: 'state', sortDir: 'asc', empty: 'No VSAT rule maps to this framework.',
+      columns: [
+        { key: 'control', label: 'Control', cls: 'cm-ctl', sort: function (c) { return str(c.control).replace(/\d+/g, function (d) { return d.padStart(6, '0'); }); }, render: function (c) { return [h('span', { class: 'mono' }, str(c.control)), c.paraphrase ? h('span', { class: 'sub' }, str(c.paraphrase)) : null]; } },
+        { key: 'state', label: 'State', sort: function (c) { const i = CM_STATES.indexOf(str(c.state)); return i < 0 ? 99 : i; }, render: function (c) { return cmState(c.state); } },
+        { key: 'mapping', label: 'Mapping', sort: function (c) { return str(c.mappingStatus); }, render: function (c) { return c.mappingStatus === 'verified' ? h('span', { class: 'verified' }, 'verified') : h('span', { class: 'unverified', title: 'Not reviewed; indicative only' }, arr(c.mappingStatuses).join(', ') || 'unverified'); } },
+        { key: 'rules', label: 'Rules', num: true, sort: function (c) { return arr(c.rules).length; }, render: function (c) { return fmtN(arr(c.rules).length); } },
+        { key: 'assets', label: 'Assets', num: true, sort: function (c) { return num(c.assets); }, render: function (c) { return fmtN(c.assets); } },
+        { key: 'pass', label: 'Pass', num: true, sort: function (c) { return num(obj(c.counts).PASS); }, render: function (c) { return fmtN(obj(c.counts).PASS); } },
+        { key: 'fail', label: 'Fail', num: true, defaultDir: 'desc', sort: function (c) { return num(obj(c.counts).FAIL); }, render: function (c) { const n = num(obj(c.counts).FAIL); return n ? h('strong', { class: 'cm-bad' }, fmtN(n)) : '0'; } },
+        { key: 'exc', label: 'Excepted', num: true, sort: function (c) { return num(obj(c.counts).EXCEPTED); }, render: function (c) { return fmtN(obj(c.counts).EXCEPTED); } },
+        { key: 'man', label: 'Manual / signed', num: true, cls: 'nowrap', sort: function (c) { return num(obj(c.counts).MANUAL); }, render: function (c) { const k = obj(c.counts); return num(k.MANUAL) ? h('span', { title: fmtN(k.MANUAL) + ' manual, ' + fmtN(k.SIGNED_OFF) + ' signed off' }, fmtN(k.MANUAL) + ' / ' + fmtN(k.SIGNED_OFF)) : '0'; } },
+        { key: 'unk', label: 'Unknown', num: true, sort: function (c) { return num(obj(c.counts).UNKNOWN) + num(obj(c.counts).ERROR); }, render: function (c) { return fmtN(num(obj(c.counts).UNKNOWN) + num(obj(c.counts).ERROR)); } }
+      ],
+      onRowClick: function (c) {
+        const fw = fws[Number(sel.value)] || {};
+        openPanel(str(c.control), h('div', null,
+          h('div', { class: 'badges' }, cmState(c.state), c.mappingStatus === 'verified' ? h('span', { class: 'verified' }, 'verified mapping') : h('span', { class: 'unverified' }, 'unverified mapping')),
+          h('h3', null, str(fw.name) + ' ' + str(c.control)),
+          c.paraphrase ? h('p', { class: 'muted' }, str(c.paraphrase)) : null,
+          section('VSAT rules mapped here', h('ul', { class: 'mini-list' }, arr(c.rules).map(function (id) {
+            const fs = findings.filter(function (f) { return str(f.ruleId) === str(id) && f.result !== 'NOT_APPLICABLE'; });
+            const worst = fs.slice().sort(function (a, b) { return (RESULT_RANK[b.result] || 0) - (RESULT_RANK[a.result] || 0); })[0];
+            return h('li', null, worst ? resBadge(worst.result) : h('span', { class: 'badge res-NOT_APPLICABLE' }, 'N/A'),
+              h('span', { class: 'grow' }, worst ? linkBtn(ruleTitle.get(str(id)) || str(id), function () { openFinding(worst); }) : h('span', null, ruleTitle.get(str(id)) || str(id)), h('span', { class: 'sub mono small' }, str(id) + ' · ' + fmtN(fs.length) + ' applicable finding' + (fs.length === 1 ? '' : 's'))));
+          }))),
+          section('Counts', kv(Object.keys(obj(c.counts)).map(function (k) { return [k.replace(/_/g, ' ').toLowerCase(), fmtN(c.counts[k])]; })))));
+      }
+    });
+    function stateBars(title, counts, total, sub) {
+      counts = obj(counts);
+      return h('div', { class: 'card cm-sum' }, h('div', { class: 'dim-title' }, h('h3', null, title), h('span', { class: 'muted' }, fmtN(total) + ' controls')),
+        total ? h('div', { class: 'bar', role: 'img', 'aria-label': title }, CM_STATES.filter(function (s) { return num(counts[s]); }).map(function (s) { return h('span', { class: 'cm-b-' + s, title: CM_LABEL[s] + ': ' + num(counts[s]), 'data-w': String(pct(num(counts[s]), total)) }); })) : null,
+        h('ul', { class: 'legend-inline' }, CM_STATES.filter(function (s) { return num(counts[s]); }).map(function (s) { return h('li', null, cmState(s), ' ' + fmtN(counts[s])); })),
+        !total ? h('p', { class: 'muted small' }, sub) : null);
+    }
+    function show() {
+      clear(body);
+      const fw = fws[Number(sel.value)] || fws[0];
+      const rows = arr(fw.controls);
+      const st = obj(fw.states);
+      const vN = rows.filter(function (c) { return c.mappingStatus === 'verified'; }).length;
+      const tile = function (v, l, s) { return h('div', { class: 'metric' }, h('div', { class: 'm-val' }, fmtN(v)), h('div', { class: 'm-lbl' }, l), s ? h('div', { class: 'small muted' }, s) : null); };
+      body.appendChild(h('div', { class: 'metric-row section' },
+        tile(fw.verifiedMappings, 'Verified mappings', 'reviewer, date, edition, source'), tile(fw.unverifiedMappings, 'Unverified mappings', 'proposed or derived'),
+        tile(rows.length, 'Controls', 'with at least one VSAT rule'), tile(fw.rulesMapped, 'Rules mapped', 'of ' + fmtN(arr(D.rules).length)),
+        tile(rows.filter(function (c) { return c.state === 'not-satisfied'; }).length, 'Not satisfied', 'verified and unverified')));
+      if (fw.importRequired) {
+        body.appendChild(h('div', { class: 'notice notice-warn section', role: 'note' }, h('strong', null, 'Import required'), str(fw.note) || 'VSAT ships no mappings for this framework.'));
+      }
+      else {
+        body.appendChild(h('div', { class: 'grid grid-2 section' },
+          stateBars('Verified mappings', st.verified, vN, 'No reviewed mapping yet: every row below is a proposal.'),
+          stateBars('Unverified mappings', st.unverified, rows.length - vN, 'None.')));
+        body.appendChild(h('p', { class: 'small muted section' }, str(fw.edition) + (fw.publisher ? ' · ' + str(fw.publisher) : '') + (fw.note ? ' · ' + str(fw.note) : ''),
+          fw.source && fw.source.sha256 ? h('span', null, ' Source ', h('span', { class: 'mono' }, str(fw.source.package)), ', SHA-256 ', h('span', { class: 'mono break' }, str(fw.source.sha256).slice(0, 16) + '…')) : null));
+        table.setRows(rows);
+        body.appendChild(h('div', { class: 'card section cm-matrix' }, h('h2', null, 'Control matrix (' + fmtN(rows.length) + ')'), table.el));
+      }
+      // Bars get their widths after insertion (no inline style attribute, CSP-safe).
+      body.querySelectorAll('[data-w]').forEach(function (s) { s.style.width = s.getAttribute('data-w') + '%'; });
+    }
+    on(sel, 'change', show);
+    show();
+    const signoffs = arr(cmp.signoffs), excs = arr(cmp.exceptions);
+    const sgt = new DataTable({
+      caption: 'Sign-offs', sortKey: 'state', sortDir: 'asc', empty: 'No sign-offs in the scope file.',
+      columns: [
+        { key: 'state', label: 'State', sort: function (s) { return str(s.state); }, render: function (s) { return h('span', { class: 'state state-' + (s.state === 'valid' ? 'ok' : (s.state === 'conflict' ? 'bad' : 'warn')) }, str(s.state)); } },
+        { key: 'rule', label: 'Rule', sort: function (s) { return str(s.ruleId); }, render: function (s) { return h('span', { class: 'mono small' }, str(s.ruleId)); } },
+        { key: 'asset', label: 'Asset', sort: function (s) { return str(s.assetName || s.asset); }, render: function (s) { return h('span', { class: 'break' }, str(s.assetName || s.asset)); } },
+        { key: 'reviewer', label: 'Reviewer', sort: function (s) { return str(s.reviewer); }, render: function (s) { return h('span', { class: 'break' }, str(s.reviewer)); } },
+        { key: 'decision', label: 'Decision', sort: function (s) { return str(s.decision); }, render: function (s) { return str(s.decision); } },
+        { key: 'ref', label: 'Evidence', sort: function (s) { return str(s.evidenceRef); }, render: function (s) { return h('span', { class: 'break small' }, str(s.evidenceRef)); } },
+        { key: 'date', label: 'Date', sort: function (s) { return str(s.dateUtc); }, render: function (s) { return h('span', { class: 'nowrap' }, str(s.dateUtc) + (s.expires ? ' → ' + str(s.expires) : '')); } },
+        { key: 'flags', label: 'Flags', sort: function (s) { return arr(s.flags).join(','); }, render: function (s) { return h('span', { class: 'small muted' }, arr(s.flags).join(', ')); } }
+      ]
+    });
+    sgt.setRows(signoffs);
+    const ext = new DataTable({
+      caption: 'Exceptions', sortKey: 'rule', sortDir: 'asc', empty: 'No exceptions in the scope file.',
+      columns: [
+        { key: 'rule', label: 'Rule', sort: function (x) { return str(x.ruleId); }, render: function (x) { return h('span', { class: 'mono small' }, str(x.ruleId)); } },
+        { key: 'asset', label: 'Asset', sort: function (x) { return str(x.asset); }, render: function (x) { return h('span', { class: 'break' }, str(x.asset)); } },
+        { key: 'owner', label: 'Owner', sort: function (x) { return str(x.owner); }, render: function (x) { return h('span', { class: 'break' }, str(x.owner)); } },
+        { key: 'approver', label: 'Approver', sort: function (x) { return str(x.approver); }, render: function (x) { return x.approver ? h('span', { class: 'break' }, str(x.approver)) : h('span', { class: 'state state-warn' }, 'unapproved'); } },
+        { key: 'comp', label: 'Compensating control', sort: function (x) { return str(x.compensatingControl); }, render: function (x) { return h('span', { class: 'break small' }, str(x.compensatingControl)); } },
+        { key: 'ticket', label: 'Ticket', sort: function (x) { return str(x.ticket); }, render: function (x) { return h('span', { class: 'mono small' }, str(x.ticket)); } },
+        { key: 'expires', label: 'Expires', sort: function (x) { return str(x.expires); }, render: function (x) { return h('span', { class: 'nowrap' }, str(x.expires) || '-'); } },
+        { key: 'findings', label: 'Findings', num: true, sort: function (x) { return num(x.findings); }, render: function (x) { return fmtN(x.findings); } },
+        { key: 'flags', label: 'Flags', sort: function (x) { return arr(x.flags).join(','); }, render: function (x) { return h('span', { class: 'small muted' }, arr(x.flags).join(', ')); } }
+      ]
+    });
+    ext.setRows(excs);
+    el.appendChild(h('div', { class: 'card section' }, h('h2', null, 'Sign-offs (' + fmtN(signoffs.length) + ')'), sgt.el));
+    el.appendChild(h('div', { class: 'card section' }, h('h2', null, 'Exceptions (' + fmtN(excs.length) + ')'), ext.el));
+    el.appendChild(h('div', { class: 'card section ai-hint' }, h('h2', null, 'Record sign-offs and exceptions'),
+      h('p', { class: 'small' }, 'Manual checks are signed off, and failing checks excepted, in the scope file; replay the package with it and -AuditPack to write the audit-pack folder. An exception without an approver never counts as excepted.'),
+      h('pre', { class: 'mono small' }, '"signoffs": [\n  { "ruleId": "VC-SSO-POLICY", "asset": "name:vc01*", "reviewer": "auditor", "decision": "satisfied", "evidenceRef": "EVD-12", "dateUtc": "2026-10-01" }\n],\n"exceptions": [\n  { "ruleId": "ESXI-SVC-SSH", "asset": "esx03*", "owner": "infra", "approver": "CISO", "compensatingControl": "jump host only", "ticket": "CHG-7", "expires": "2027-01-31", "rationale": "vendor support" }\n]')));
+  };
+
   renderers.exports = function (el) {
     const base = 'vsat-' + safeFilePart(run.id);
     el.appendChild(pageHead('h-exports', 'Exports', 'All exports are generated locally in your browser. Nothing is uploaded.'));

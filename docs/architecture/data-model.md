@@ -246,6 +246,35 @@ itself is never changed by it. `manifest.json` next to the package carries `pack
 `receipt` code (`VSAT-XXXX-XXXX-XXXX-XXXX`, the first 80 bits of the package SHA-256 in Crockford base32); a replay
 with `-Receipt` records `receiptVerification { expected, actual, match }` in the results.
 
+`results.compliance` (2.7) holds the control matrix built from the crosswalk in `data/frameworks`
+(`catalogs.json`: framework, edition, license, control IDs with VSAT paraphrases; `crosswalk.json`: `{ ruleId, framework,
+control, relation: equivalent|subset|supports, status: verified|proposed|derived, basis, sourceRef, reviewer?, reviewedUtc? }`):
+
+```jsonc
+"compliance": {
+  "states": ["not-satisfied","not-assessed","manual-open","excepted","partial","manual-signed-off","satisfied"],
+  "note": "…",
+  "frameworks": [ { "id": "nist-800-53r5", "name": "NIST SP 800-53 Rev. 5", "edition": "Revision 5", "publisher", "license", "note",
+                    "importRequired": false, "verifiedMappings": 0, "unverifiedMappings": 349,
+                    "mappingStatuses": { "verified": 0, "proposed": 349, "derived": 0 }, "rulesMapped": 201,
+                    "source": { "package", "sha256" },                       // pinned source (DISA STIG only)
+                    "states": { "verified": { "<state>": 0 }, "unverified": { "<state>": 33 } },
+                    "controls": [ { "control": "AC-2", "paraphrase": "…", "rules": ["VC-ADMIN-USERS"], "assets": 27, "state": "not-satisfied",
+                                    "mappingStatus": "verified|unverified", "mappingStatuses": ["proposed"],
+                                    "counts": { "PASS":0,"FAIL":0,"MANUAL":0,"UNKNOWN":0,"ERROR":0,"NOT_APPLICABLE":0,
+                                                "EXCEPTED":0,"SIGNED_OFF":0,"SIGNED_NOT_SATISFIED":0 } } ] } ],
+  "signoffs":   [ { "findingKey", "ruleId", "asset", "assetName", "result", "reviewer", "decision", "evidenceRef", "dateUtc", "expires",
+                    "state": "valid|expired|incomplete|orphan|conflict", "flags": [] } ],
+  "exceptions": [ { "ruleId", "asset", "owner", "approver", "rationale", "compensatingControl", "ticket", "expires", "active",
+                    "findings": 1, "failing": 1, "flags": ["unapproved|expired|no-expiry|orphan"] } ]
+}
+```
+
+`rule.frameworks` / `finding.frameworks` entries now carry `frameworkId`, `relation` and `sourceRef`, and the crosswalk
+rows; `mappingStatus` is `verified`, `proposed`, `derived` or `legacy-unverified` (1.x CIS and SCG ids). `finding.exception`
+also carries `approver`, `compensatingControl` and `ticket`. Scope files may add `signoffs` and the extended exception
+fields. Results from earlier versions have no `compliance`; replaying their evidence adds it.
+
 ## 3. Result semantics
 
 | Result | Meaning |

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic XCCDF 1.2 fixture for tests/Compliance.Tests.ps1 (STIG importer). Written for the test;
+     it is not DISA content. The STIG IDs follow the DISA format; check text is VSAT-written. -->
+<Benchmark xmlns="http://checklists.nist.gov/xccdf/1.2" id="xccdf_mil.disa.stig_benchmark_VSAT_TEST_STIG" xml:lang="en">
+  <status date="2026-07-01">accepted</status>
+  <title>VSAT test benchmark</title>
+  <plain-text id="release-info">Release: 4 Benchmark Date: 01 Jul 2026</plain-text>
+  <version>2</version>
+  <Group id="xccdf_mil.disa.stig_group_V-1">
+    <title>SRG-TEST-1</title>
+    <Rule id="xccdf_mil.disa.stig_rule_SV-1r1_rule" severity="medium">
+      <version>ESXI-80-000193</version>
+      <title>Test rule one</title>
+      <ident system="http://cyber.mil/cci">CCI-000382</ident>
+      <check system="C-1">
+        <check-content>Check that the SSH service is stopped. Get-VMHost | Get-VMHostService | Where {$_.Label -eq "SSH"}. The key is TSM-SSH and its policy must be off.</check-content>
+      </check>
+    </Rule>
+  </Group>
+  <Group id="xccdf_mil.disa.stig_group_V-2">
+    <title>SRG-TEST-2</title>
+    <Rule id="xccdf_mil.disa.stig_rule_SV-2r1_rule" severity="medium">
+      <version>ESXI-80-000008</version>
+      <title>Test rule two</title>
+      <ident system="http://cyber.mil/cci">CCI-001133</ident>
+      <check system="C-2">
+        <check-content>Get-VMHost | Get-AdvancedSetting -Name UserVars.DcuiTimeOut. The value must be 600 or less.</check-content>
+      </check>
+    </Rule>
+  </Group>
+  <Group id="xccdf_mil.disa.stig_group_V-3">
+    <title>SRG-TEST-3</title>
+    <Rule id="xccdf_mil.disa.stig_rule_SV-3r1_rule" severity="low">
+      <version>ESXI-80-000999</version>
+      <title>Test rule three</title>
+      <ident system="http://cyber.mil/cci">CCI-000366</ident>
+      <check system="C-3">
+        <check-content>Verify the organization documents a procedure. Nothing here names a VSAT setting.</check-content>
+      </check>
+    </Rule>
+  </Group>
+</Benchmark>

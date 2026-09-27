@@ -54,6 +54,13 @@ jobs:
           if ($LASTEXITCODE -ne 1) { throw "Unexpected exit code $LASTEXITCODE (synthetic lab has findings => 1)" }
           ./vsat.ps1 -Replay ./demo-out/assessment.vsat.zip -Cli -OutputPath ./replay-out
           if ($LASTEXITCODE -ne 1) { throw "Replay exit code $LASTEXITCODE" }
+          # Audit pack: demo with -AuditPack, then the receipt-verified replay with baseline and -AuditPack.
+          ./vsat.ps1 -Demo -Cli -AuditPack -OutputPath ./audit-demo
+          if ($LASTEXITCODE -ne 1) { throw "Audit pack demo exit code $LASTEXITCODE" }
+          $code = (Get-Content -Raw ./audit-demo/manifest.json | ConvertFrom-Json).receipt
+          ./vsat.ps1 -Replay ./audit-demo/assessment.vsat.zip -Receipt $code -Baseline ./audit-demo/assessment.vsat.zip -AuditPack -Cli -OutputPath ./audit-replay
+          if ($LASTEXITCODE -ne 1) { throw "Audit pack replay exit code $LASTEXITCODE" }
+          if (-not (Test-Path ./audit-replay/audit-pack/control-matrix.csv)) { throw 'audit-pack/control-matrix.csv missing' }
           exit 0
       - uses: actions/upload-artifact@v4
         if: always()

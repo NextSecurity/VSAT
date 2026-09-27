@@ -135,6 +135,7 @@ Sources, all read-only: vCenter and ESXi events (`Get-VIEvent`, window start, at
 | `-EngagementStart <yyyy-MM-dd>` | Start of the change window for the engagement timeline. Default: 30 days before the run. At most 180 days back. Stored in the evidence, so a replay shows the same window. |
 | `-CollectOnly` | Write only `assessment.vsat.zip`, `collection.log` and `manifest.json`, then show the receipt code. No findings, no report. Exit `0` on success, `3` when nothing could be collected. |
 | `-Receipt <code>` | With `-Replay`: verify the package against the receipt code read out when it was collected. Match: report banner "Receipt verified". Mismatch: message and exit `3`. |
+| `-AuditPack` | Also write `audit-pack/`: the control matrix as CSV and offline HTML, the sign-off and exception registers, a copy of `assessment.vsat.zip` and a manifest with hashes and the receipt code. Works on live runs, `-Demo` and `-Replay`. See [Audit pack](#audit-pack). |
 | `-HyperVServer`, `-HyperVCredential`, `-HyperVEvidence` | Hyper-V hosts over PowerShell remoting, or import of offline collector output |
 | `-KvmServer`, `-KvmUser`, `-KvmEvidence` | KVM/libvirt hosts over SSH, or import of offline collector output |
 | `-ExportCollector hyperv\|kvm` | Write the read-only offline collector script and exit |
@@ -164,7 +165,12 @@ The scope file is JSON and must never contain credentials. All fields are option
   "aiWorkloads":      [ { "match": "name:k8s-cp*", "role": "k8s-control-plane" } ],
   "exceptions": [
     { "ruleId": "ESXI-SVC-SSH", "asset": "esx03.example.local", "owner": "infra-team",
-      "rationale": "Vendor support session", "expires": "2026-12-31" }
+      "rationale": "Vendor support session", "expires": "2026-12-31",
+      "approver": "CISO", "compensatingControl": "Jump host only", "ticket": "CHG-1234" }
+  ],
+  "signoffs": [
+    { "ruleId": "VC-SSO-POLICY", "asset": "name:vc01*", "reviewer": "auditor1", "decision": "satisfied",
+      "evidenceRef": "EVD-12", "dateUtc": "2026-10-01" }
   ]
 }
 ```
@@ -197,6 +203,7 @@ An incomplete or fatal status takes precedence over a clean finding count. A "co
 | `collection.log` | Collection log, secrets redacted |
 | `manifest.json` | Versions, timestamps and SHA-256 of every output, plus the package hash and receipt code |
 | `assessment.vsat.zip` | Evidence package for `-Replay` and `-Baseline` |
+| `audit-pack/` | With `-AuditPack`: control matrix, registers, package copy and manifest (see [Audit pack](#audit-pack)) |
 | `assessment.redacted.vsat.zip`, `report.redacted.html` | With `-Redact`: sharing copies with consistent pseudonyms |
 
 **These outputs describe your infrastructure in detail. Handle them as sensitive.** Share the redacted copies, not the originals.
@@ -286,6 +293,50 @@ VMs with a GPU, vGPU, passthrough device or SR-IOV function are found automatica
 | `AI-K8S-CP-EXPOSED` | A declared Kubernetes control plane is reachable over the network from a modeled entry point |
 
 The report's **AI infra** page lists every AI workload with its role, accelerators, failing findings and blast-radius paths, and names the workloads each host or storage finding affects. `ai-infra` is `NOT_APPLICABLE` only when every VM and host reported zero accelerators and no workload is declared. If the accelerator inventory was denied or not collected (for example when replaying evidence from an earlier VSAT version), it is `UNKNOWN` with the reason.
+
+## Audit pack
+
+`-AuditPack` turns one run (or the replay of its package) into the files an auditor files away. It maps every VSAT rule to framework controls and adds the sign-offs and exceptions recorded in the scope file. It changes no finding.
+
+```powershell
+.\vsat.ps1 -Replay .\assessment.vsat.zip -Receipt VSAT-7Q2M-XK4D-9HNB-3TRE -ScopeFile .\scope.json -AuditPack
+```
+
+| Framework | What VSAT ships | Mapping status |
+|---|---|---|
+| NIST SP 800-53 Rev. 5 | Every rule mapped by rule category, with a short VSAT paraphrase per control | `proposed` |
+| IEC 62443-3-3 (system requirements) | SR identifiers and VSAT paraphrases only, no IEC text | `proposed` |
+| MITRE ATT&CK mitigations | Each rule's mitigation, checked against the pinned ATT&CK catalog | `proposed` |
+| DISA STIG (VMware vSphere 8.0 ESXi, vCenter, Virtual Machine) | STIG IDs proposed by `build/Import-StigXccdf.ps1` from the DISA package, pinned by SHA-256 | `proposed` |
+| CIS Benchmarks | Nothing: bring your license and import a reviewed mapping with `build/Import-CisMapping.ps1` | import required |
+
+A mapping is `verified` only when it carries a reviewer, a review date, a confirmed framework edition and a source reference; anything else is shown as unverified and never counts toward a verified result. [compliance-mapping.md](compliance-mapping.md) describes the review workflow. ISO/IEC 27001 is not included: VSAT would ship it only as rows derived from a pinned public NIST mapping.
+
+**Control states.** Each control collects the findings of the rules mapped to it. The worst state wins:
+
+| State | Meaning |
+|---|---|
+| `not-satisfied` | A mapped check failed (with no approved, active exception), or a manual sign-off says not satisfied |
+| `not-assessed` | Evidence is missing (`UNKNOWN` or `ERROR`), or nothing but `NOT_APPLICABLE` results. Missing evidence is never satisfied. |
+| `manual-open` | Manual checks without a valid sign-off |
+| `excepted` | Failures covered by an approved, active exception |
+| `partial` | Passing checks mixed with open manual checks or exceptions |
+| `manual-signed-off` | Only manual checks, all signed off |
+| `satisfied` | Every mapped check passed (signed-off manual checks included) |
+
+**Sign-offs** (`signoffs` in the scope file) close `MANUAL` findings: `ruleId`, `asset` (`name:`, `type:`, `tag:`, `id:`, `zone:` or a name pattern), `reviewer`, `decision` (`satisfied`, `not-satisfied`, `not-applicable`), `evidenceRef`, `dateUtc` and optionally `expires`. The register shows each as `valid`, `expired`, `incomplete` (no reviewer, date or known decision), `orphan` (no matching manual finding) or `conflict` (satisfied on an automated `FAIL`, or two valid sign-offs that disagree).
+
+**Exceptions** gain optional `approver`, `compensatingControl` and `ticket`. The register flags `unapproved`, `expired`, `no-expiry` and `orphan`. Only an approved, active exception makes a control `excepted`; the finding stays `FAIL` either way.
+
+| File in `audit-pack/` | Contents |
+|---|---|
+| `control-matrix.csv` | One row per framework control: state, mapping status, mapped rules, assets and result counts |
+| `control-matrix.html` | The same matrix plus both registers as a standalone page (no script, works from `file://`) |
+| `signoffs.csv`, `exceptions.csv` | The sign-off and exception registers |
+| `assessment.vsat.zip` | Copy of the evidence package |
+| `manifest.json` | SHA-256 of every file above and the package's receipt code |
+
+CSV cells beginning with `=`, `+`, `-` or `@` are prefixed with a quote. The report's **Compliance** page shows the same matrix with a framework selector.
 
 ## Result and coverage states
 
